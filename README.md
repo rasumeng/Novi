@@ -1,126 +1,116 @@
 # Cozmo — Open-Source Local AI Assistant
 
-Cozmo is a fully local, privacy-first AI assistant platform. Three modes with distinct personalities:
-
-- **Chat** — Fast conversational AI. Talk to your local model. No overhead.
-- **Agent** — Jarvis-style autonomous assistant. Plans, remembers, uses tools.
-- **Code** — Dedicated coding agent with file ops, terminal, diff review.
-
-Powered by [Ollama](https://ollama.ai). No cloud dependency.
+Cozmo is a fully local, privacy-first AI assistant. Task-based intelligent system — determines intent, selects tools, routes to optimal model automatically. No mode selection, no cloud dependency.
 
 ```bash
-pip install cozmo
 cozmo webui     # → http://127.0.0.1:8765
 ```
+
+---
+
+## Core Philosophy
+
+- **One intelligent assistant** — No chat/agent/code mode switching. Every request is a Task; system handles classification.
+- **Local-first** — Everything runs via Ollama. No data leaves your machine.
+- **Model agnostic** — Provider abstraction (Ollama/OpenAI). Model-per-role routing.
+- **Extensible** — 20+ built-in tools, MCP server support, custom capabilities.
+- **Event driven** — Streaming events, pub/sub event bus, tool call/results, planning.
+- **Privacy focused** — Telemetry optional, no user tracking, local vector store.
 
 ---
 
 ## Architecture
 
 ```
-User → Router → ─── Chat  → ChatHandler  → LLM
-                 ├── Agent → AgentRuntime → Planner → Tools → Memory
-                 └── Code  → CodeRuntime  → FileOps → Terminal
+User Input → IntentDetector → ComplexityEstimator → Orchestrator.plan()
+                                                         ↓
+                                               ExecutionPlan
+                                                         ↓
+                                              CozmoRuntime.run_stream()
+                                                    ↓
+                                        Engine (ReAct loop) → Tool calls
+                                                    ↓
+                                            Final response
 ```
 
-### Chat
-Lightweight conversational mode. No planning, no tools, no memory queries. Just model + conversation history.
+### Runtime (`cozmo/runtime/`)
+- `CozmoRuntime` — production execution loop
+- `Engine` — stateless ReAct loop with checkpoint support
+- `ModelRouter` — capability-based model selection with resource awareness
+- `PermissionResolver` — pattern-based allow/ask/deny gating
+- `EventBus` — typed event pub/sub (tool calls, results, plan steps)
+- `LessonStore` — persistent tool success/failure patterns
+- `MCPHost` — MCP stdio client sessions
 
-### Agent
-Cognitive assistant with persistent state, structured planning, tool execution, memory, and reflection.
+### Orchestrator (`cozmo/orchestrator/`)
+- `IntentDetector` — classifies user input (conversation/research/coding/planning/vision)
+- `ComplexityEstimator` — scores task complexity for model routing
+- `Orchestrator` — intent → plan → execution pipeline
 
-### Code
-Engineering workspace with file system access, terminal commands, diff review, and testing.
+### Job System (`cozmo/jobs/`)
+- `JobManager` — submit/pause/resume/cancel/retry lifecycle
+- `JobStore` — JSON persistence
+- `Job` — dataclass with status, events, checkpoint support
+
+### Capabilities (`cozmo/capabilities/`)
+- `CapabilityRegistry` — declarable units of functionality with tool lists
+- Builtin capabilities: conversation, research, coding, planning, vision
+
+### Memory (`cozmo/memory/`)
+- `LanceStore` — LanceDB vector store with hybrid search
+- `MemoryManager` — short-term buffer, LLM summarization, importance scoring
+- `KnowledgeIndex` — knowledge base indexing (OKF markdown with YAML frontmatter)
+
+### Providers (`cozmo/providers/`)
+- `LLMProvider`, `OllamaProvider`, `OpenAIProvider` — provider-agnostic model inference
+- `MCPManager` — persistent MCP server connections with health checks
+
+### Event Flow
+```
+Client (WebUI) ←WS→ WebUIServer ←→ CozmoRuntime ←→ Engine ←→ Tools/Memory/MCP
+                        ↓
+                  EventBus (pub/sub)
+                        ↓
+                 Jobs, Lessons, Logging
+```
 
 ---
 
 ## Features
 
-### Platform
-- **No cloud** — everything runs locally via Ollama
-- **3 interfaces** — WebUI (primary), Textual TUI, CLI
-- **Specialist model routing** — per-role model dispatch (chat/coder/research/vision)
-- **Configurable** — `~/.cozmo/config.toml`, WebUI settings modal, `cozmo config` CLI
-- **Streaming** — token-by-token with thinking indicators and tool call status
+### Implemented
+- Task-based single-assistant architecture (no mode selection)
+- Intent detection (conversation, research, coding, planning, vision)
+- Complexity-aware model routing
+- 20+ tools: calculator, file I/O, code ops, web search, git, desktop, knowledge CRUD, subagent spawning
+- MCP protocol support (stdio transport, multi-server, catalog)
+- LanceDB memory with hybrid search and importance scoring
+- Knowledge base indexing (OKF markdown with YAML frontmatter)
+- Permission system (allow/ask/deny, pattern matching, session allowlists)
+- Job system (lifecycle management, persistence, scheduler integration)
+- Lesson store (tool success/failure reflection)
+- WebUI (React/TypeScript) with streaming, permissions, projects, code/collab modes
+- Model presets editor, tool permission mode selectors
+- Conversation management (search, pin, rename, delete)
+- File/image attachments with vision routing
+- Project grouping with shared context injection
+- Code mode: inline trace, terminal/diff/timeline, directory picker
+- Collab mode: plan approval flow, project wizard
+- Speech-to-text (Chrome native + MediaRecorder fallback)
+- Provider abstraction (Ollama, OpenAI)
+- CLI: `cozmo webui`, `cozmo run`, `cozmo code`, `cozmo config`, `cozmo telegram`
 
-### Agent
-- **ReAct loop** — native tool-calling with text-JSON fallback
-- **Planning** — Plan generation with user approval flow (structured Planner in progress)
-- **20+ tools** — file ops, code ops, web search, git, calculator, desktop, image analysis, knowledge CRUD, Telegram
-- **MCP support** — connect external tool servers via Model Context Protocol (stdio)
-- **Memory** — ChromaDB-backed, auto-summarizes, persists across sessions
-- **Project index** — ChromaDB codebase index, respects `.gitignore`
-- **Skills system** — SKILL.md files on disk, `@skill` trigger, bundled skill-creator
-- **Permission system** — pattern-based allow/ask/deny, 5 permission modes
-- **Background tasks** — scheduled agent runs, task queue
-- **Subagent spawning** — `task()` tool with explore/scout/general types
+### In Progress
+- End-to-end test coverage
+- Context window management across long sessions
+- Streaming MCP notifications
+- Full desktop automation
 
-### Chat
-- Pure conversational — no tool overhead
-- Fast path: model + history only
-- File & image attachments
-- Speech-to-text (Chrome native + fallback)
-- Conversation persistence (Markdown files)
-
-### Code
-- Terminal panel with live tool output
-- Diff panel with unified diffs
-- File change cards with added/removed counts
-- Project directory picker
-- 5 permission modes (Manual, Plan, Accept edits, Auto, Bypass)
-
----
-
-## Interfaces
-
-| Interface | Command | Primary audience |
-|-----------|---------|-----------------|
-| **WebUI** | `cozmo webui` | General use — full GUI at localhost:8765 |
-| **TUI** | `cozmo tui` | Terminal users — Textual full-screen |
-| **CLI** | `cozmo run` / `cozmo code` | Quick queries, scripting |
-| **Telegram** | `cozmo telegram` | Mobile chat — bidirectional bot |
-
----
-
-## Memory
-
-- ChromaDB with `nomic-embed-text` embeddings
-- Short-term buffer (default 5 turns), auto-summarizes via LLM
-- Summary + metadata stored in ChromaDB, queried before each turn
-- Cross-session persistence in `~/.cozmo/memory/`
-- Memory types: conversation, preference, project, fact
-- Importance-scored retrieval (relevance × recency × frequency)
-- **Planned:** LanceDB migration, Sentence Transformers, OKF classification
-
----
-
-## Tool System
-
-| Category | Tools |
-|----------|-------|
-| **File** | `read_file`, `write_file`, `edit_file`, `list_directory` |
-| **Code** | `grep_search`, `run_command`, `execute_python`, `git_diff`, `git_log` |
-| **Web** | `web_search`, `web_search_pipeline`, `web_fetch`, `fetch_url` |
-| **Knowledge** | `read_knowledge`, `write_knowledge` (OKF frontmatter) |
-| **Desktop** | `screenshot`, `clipboard_read`, `analyze_image` |
-| **Math** | `calculator` (safe AST parser) |
-| **Comm** | `telegram_send` |
-| **Agent** | `task` (subagent spawner with explore/scout/general types) |
-
----
-
-## MCP Integration
-
-```toml
-[mcp.servers.filesystem]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "./data"]
-```
-
-- Stdio transport, client session management
-- Tool auto-discovery, multiple concurrent servers
-- MCP tools registered in `TOOL_REGISTRY` alongside built-in tools
-- WebUI connector manager with catalog, status, diagnostics
+### Planned
+- Plugins/extensions system
+- Codebase-aware context compaction
+- Multi-modal inline rendering (charts, diagrams)
+- Background agent scheduling with job monitoring UI
 
 ---
 
@@ -130,11 +120,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "./data"]
 git clone https://github.com/rasumeng/cozmo.git
 cd cozmo
 pip install -e .
-pip install -e .[telegram]  # optional
+pip install -e .[telegram]  # optional, for Telegram bot
 
 cozmo init                   # creates ~/.cozmo/config.toml
 cozmo webui                  # launch at http://127.0.0.1:8765
-cozmo tui                    # or Textual TUI
 cozmo run "hello"            # or CLI quick query
 ```
 
@@ -142,50 +131,164 @@ Requires Python >= 3.10 and [Ollama](https://ollama.ai) running locally with mod
 
 ---
 
+## Configuration
+
+Config lives at `~/.cozmo/config.toml`. Managed via WebUI Settings modal, `cozmo config` CLI, or direct editing.
+
+### Models (`[llm.roles]`)
+Per-role model dispatch. Each role specifies a model name — empty falls back to `default_model`.
+
+```toml
+[llm]
+default_model = "qwen3:8b"
+
+[llm.roles]
+chat = { model = "" }
+coder = { model = "" }
+vision = { model = "" }
+planner = { model = "" }
+classifier = { model = "" }
+router = { model = "" }
+orchestrator = { model = "" }
+```
+
+### Providers (`[providers]`)
+```toml
+[providers]
+default = "ollama"
+
+[providers.ollama]
+url = "http://localhost:11434"
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+```
+
+### Memory (`[memory]`)
+```toml
+[memory]
+max_turns_before_summary = 5
+max_short_term_pairs = 10
+```
+
+### Runtime (`[runtime]`)
+```toml
+[runtime]
+lightweight_mode = false
+max_history = 10
+max_steps = 8
+max_tool_output_chars = 8000
+
+[runtime.temperatures]
+chat = 0.6
+work = 0.0
+research = 0.2
+```
+
+### Permissions (`[permissions]`)
+```toml
+[permissions]
+write_file = "ask"
+edit_file = "ask"
+
+[permissions.run_command]
+"*" = "ask"
+"git *" = "allow"
+"dir *" = "allow"
+```
+
+### Environment Variables
+| Variable | Override |
+|----------|----------|
+| `COZMO_DEFAULT_MODEL` | Default LLM model |
+| `COZMO_MODEL_CHAT` | Chat role model |
+| `COZMO_MODEL_CODER` | Coder role model |
+| `COZMO_MODEL_VISION` | Vision role model |
+| `COZMO_MODEL_PLANNER` | Planner role model |
+| `COZMO_OLLAMA_URL` | Ollama server URL |
+| `COZMO_EMBED_MODEL` | Embedding model |
+| `COZMO_TELEGRAM_BOT_TOKEN` | Telegram bot token |
+
+---
+
+## Tool System
+
+Registered tools auto-discovered by the runtime. Tools not listed default to MEDIUM risk.
+
+| Category | Tools |
+|----------|-------|
+| **File** | `read_file`, `write_file`, `edit_file`, `list_directory`, `glob_search`, `read` |
+| **Code** | `grep_search`, `run_command`, `execute_python`, `git_diff`, `git_log` |
+| **Web** | `web_search`, `web_search_pipeline`, `web_fetch`, `fetch_url` |
+| **Knowledge** | `read_knowledge`, `write_knowledge`, `search_knowledge` |
+| **Desktop** | `screenshot`, `clipboard_read`, `analyze_image` |
+| **Math** | `calculator` (safe AST parser) |
+| **Comm** | `telegram_send` |
+| **Agent** | `task` (subagent spawner) |
+| **Scheduling** | `schedule_task`, `list_schedules`, `remove_schedule` |
+| **Diagnostics** | `diagnostics`, `sourcegraph` |
+
+---
+
 ## Package Structure
 
 ```
 cozmo/
-├── core/
-│   ├── chat/            # ChatHandler — lightweight conversational path
-│   ├── agent/           # AgentRuntime, Planner, AgentState, Reflector
-│   ├── runtime.py       # Orchestrator (coordinates chat/agent/code dispatch)
-│   ├── model_manager.py # Per-role model dispatch
-│   ├── llm.py           # Ollama model wrapper with per-temperature caching
-│   ├── router.py        # Mode router (chat/work/research/agent/vision)
-│   ├── permissions.py   # Pattern-based allow/ask/deny
-│   ├── tool_registry.py # Tool registration and LangChain wrapping
-│   ├── mcp_host.py      # MCP client host (stdio transport)
-│   └── providers/       # External provider integrations (MCP)
+├── runtime/            # Production execution loop, engine, model routing, permissions
+│   ├── providers/      # MCP provider (persistent connections)
+│   ├── engine.py       # Stateless ReAct loop with checkpoint support
+│   ├── runtime.py      # CozmoRuntime — unified pipeline
+│   ├── model_router.py # Capability-based model selection
+│   ├── event_bus.py    # Typed pub/sub event system
+│   ├── permissions.py  # Pattern-based allow/ask/deny
+│   ├── tool_registry.py# Tool registration and LangChain wrapping
+│   ├── tool_risk.py    # Risk classification for permission defaults
+│   ├── mcp_host.py     # MCP stdio client sessions
+│   ├── resources.py    # VRAM tracking, model ranking
+│   ├── lessons.py      # Tool success/failure store
+│   ├── context.py      # History trimming, token estimation
+│   └── prompts.py      # System prompt builder
 │
-├── tools/               # 20+ registered tools
-├── memory/              # ChromaDB store + memory manager
-├── webui/               # React/TypeScript frontend (Vite + Tailwind)
-├── webui_server.py      # FastAPI WebSocket + REST server
-├── tui/                 # Textual TUI (full-screen terminal UI)
-├── cli.py               # CLI entry point
-├── config.py            # TOML config loader/saver
-├── code_indexer.py      # ChromaDB project indexer
-├── telegram_bot.py      # Telegram bot integration
-├── default_skills/      # Bundled skills (skill-creator)
-└── docker/              # Sandbox Dockerfile for execute_python
+├── orchestrator/       # Intent detection, complexity, plan creation
+├── jobs/               # Job lifecycle management
+├── capabilities/       # Declarable capability definitions
+├── planner/            # Planning strategies (scaffolding)
+├── providers/          # Provider abstraction (Ollama, OpenAI)
+├── models/             # Model service, registry
+├── services/           # CozmoContext composition root, embedding
+├── memory/             # LanceDB store, memory manager, knowledge index
+├── tools/              # 20+ registered tools
+├── webui/              # React/TypeScript frontend (Vite + Tailwind)
+├── webui_server.py     # FastAPI WebSocket + REST server
+├── webui.py            # WebUI backend builder
+├── cli.py              # CLI entry point
+├── config.py           # TOML config loader/saver with migration
+├── config_cli.py       # cozmo config show|set|reset
+├── migrate.py          # v1-to-v2 data migration
+├── ollama.py           # Ollama process management
+├── scheduler.py        # Background agent scheduler
+├── task_queue.py       # Async task queue
+├── telegram_bot.py     # Telegram bot integration
+├── code_indexer.py     # ChromaDB project indexer
+├── searxng_util.py     # SearXNG search utility
+├── default_skills/     # Bundled skills
+└── docker/             # Sandbox Dockerfile for execute_python
 ```
 
 ---
 
 ## Status
 
-Cozmo is under active development. Current state:
-
 | Layer | Status | Notes |
 |-------|--------|-------|
-| **Chat** | Early | Core architecture extracted. Dedicated ChatHandler in progress. |
-| **Agent** | Alpha | ReAct loop + tools + basic memory works. Structured planning, state, reflection in progress. |
-| **Code** | Alpha | File/code tools + terminal + diff review works. Dedicated CodeRuntime in progress. |
-| **Memory** | Alpha | ChromaDB with basic importance scoring. LanceDB + ST + OKF pipeline planned. |
-| **MCP** | Beta | Stdio transport works. Streaming, notifications, sampling planned. |
-
-**Vision:** An open-source local AI assistant that can think, remember, use tools, and help users accomplish real-world goals.
+| **Runtime** | Beta | Unified ReAct loop, execution plans, checkpoint/resume |
+| **Orchestrator** | Beta | Intent detection, complexity estimation, plan creation |
+| **Memory** | Beta | LanceDB hybrid search, importance scoring, knowledge index |
+| **WebUI** | Beta | Streaming, permissions, projects, code/collab, STT |
+| **MCP** | Beta | Stdio transport, catalog, multi-server, health checks |
+| **Cognition** | Alpha | Memory ranking, complexity-aware routing, lessons |
+| **Job System** | Beta | Lifecycle, persistence, scheduler integration |
+| **CLI** | Deprecated | `webui` is primary; `run`/`code` maintained |
 
 ---
 
