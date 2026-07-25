@@ -1,4 +1,4 @@
-"""Provider abstractions for tool sources."""
+"""Provider abstractions for tool sources (MCP)."""
 
 from abc import ABC, abstractmethod
 from ..tool_registry import ToolRegistry
