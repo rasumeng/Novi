@@ -1,314 +1,400 @@
-# Cozmo — Open-Source Local AI Assistant
+# Cozmo — Open-Source Local AI Agent Platform
 
-Cozmo is a fully local, privacy-first AI assistant. Task-based intelligent system — determines intent, selects tools, routes to optimal model automatically. No mode selection, no cloud dependency.
+Cozmo is a privacy-first, fully local AI agent platform designed to autonomously understand requests, select appropriate tools, route tasks to specialized models, and execute multi-step workflows without requiring cloud AI services.
+
+Unlike traditional chat assistants that rely on manual mode selection, Cozmo uses an intelligent orchestration layer that analyzes every request, determines the required capabilities, and dynamically coordinates models, tools, memory, and retrieval systems.
+
+Built with Python, FastAPI, React, Ollama, and modern LLM engineering practices, Cozmo explores the future of personal AI assistants through agent orchestration, retrieval grounding, local inference, and extensible tool execution.
 
 ```bash
-cozmo webui     # → http://127.0.0.1:8765
+cozmo webui
 ```
 
 ---
 
-## Core Philosophy
+# Overview
 
-- **One intelligent assistant** — No chat/agent/code mode switching. Every request is a Task; system handles classification.
-- **Local-first** — Everything runs via Ollama. No data leaves your machine.
-- **Model agnostic** — Provider abstraction (Ollama/OpenAI). Model-per-role routing.
-- **Extensible** — 20+ built-in tools, MCP server support, custom capabilities.
-- **Event driven** — Streaming events, pub/sub event bus, tool call/results, planning.
-- **Privacy focused** — Telemetry optional, no user tracking, local vector store.
+Modern AI assistants often depend on external APIs, require users to select specific modes, and provide limited transparency into how responses are generated.
 
----
+Cozmo takes a different approach:
 
-## Architecture
-
-```
-User Input
-    ↓
-Orchestrator.analyze()
-├── IntentDetector          (classifies task type)
-├── EvidenceDetector        (detects info signals)
-├── ComplexityEstimator     (scores task complexity)
-├── Grounding Decision      (should we retrieve?)
-└── RetrievalPolicy         (where should we retrieve?)
-    ↓
-Orchestrator.plan() → ExecutionPlan
-    ↓
-CozmoRuntime.run_stream()
-├── RetrievalCoordinator    (executes with budget/dedup)
-├── EvidenceCollector       (search → rank → fetch → merge)
-├── Recovery System         (pre-loop + mid-loop recovery)
-├── Trace System            (user events + debug traces)
-└── Agent Execution Loop    (ReAct with tool calling)
-    ↓
-Final response
-```
-
-### Runtime (`cozmo/runtime/`)
-- `CozmoRuntime` — unified execution loop with retrieval, recovery, tracing
-- `retrieval_policy.py` — `RetrievalPolicy`, `RetrievalStrategy`, `RetrievalPlan`
-- `retrieval_coordinator.py` — `RetrievalCoordinator`, budget enforcement, duplicate prevention
-- `evidence.py` — `EvidenceCollector`, `EvidenceBundle`, `RetrievalQuality`
-- `trace.py` — `ExecutionTrace`, `TraceEvent`, `DebugTraceEvent`, `TraceAction`
-- `execution_context.py` — `ExecutionContext`, unified run state
-- `ModelRouter` — capability-based model selection with resource awareness
-- `PermissionResolver` — pattern-based allow/ask/deny gating
-- `EventBus` — typed event pub/sub (tool calls, results, plan steps)
-- `LessonStore` — persistent tool success/failure patterns
-
-### Orchestrator (`cozmo/orchestrator/`)
-- `IntentDetector` — classifies user input (conversation/research/coding/planning/vision)
-- `EvidenceDetector` — detects external information signals (temporal, dynamic, comparative)
-- `ComplexityEstimator` — scores task complexity for model routing
-- `Orchestrator` — owns analysis pipeline: intent + evidence + complexity + grounding + retrieval policy
-
-### Job System (`cozmo/jobs/`)
-- `JobManager` — submit/pause/resume/cancel/retry lifecycle
-- `JobStore` — JSON persistence
-- `Job` — dataclass with status, events, checkpoint support
-
-### Capabilities (`cozmo/capabilities/`)
-- `CapabilityRegistry` — declarable units of functionality with tool lists
-- Builtin capabilities: conversation, research, coding, planning, vision
-
-### Memory (`cozmo/memory/`)
-- `LanceStore` — LanceDB vector store with hybrid search
-- `MemoryManager` — short-term buffer, LLM summarization, importance scoring
-- `KnowledgeIndex` — knowledge base indexing (OKF markdown with YAML frontmatter)
-
-### Providers (`cozmo/providers/`)
-- `LLMProvider`, `OllamaProvider`, `OpenAIProvider` — provider-agnostic model inference
-- `MCPManager` — persistent MCP server connections with health checks
-
-### Event Flow
-```
-Client (WebUI) ←WS→ WebUIServer ←→ CozmoRuntime ←→ Engine ←→ Tools/Memory/MCP
-                        ↓
-                  EventBus (pub/sub)
-                        ↓
-                 Jobs, Lessons, Logging
-```
+* **One intelligent assistant** — every interaction is treated as a task, with the system deciding how to respond.
+* **Local-first architecture** — AI inference, memory, and data processing can run entirely on user hardware.
+* **Model-agnostic design** — supports multiple providers and role-based model routing.
+* **Transparent execution** — exposes planning, retrieval, tool execution, and reasoning traces.
+* **Extensible capabilities** — supports custom tools, MCP servers, and specialized workflows.
 
 ---
 
-## Features
+# Engineering Highlights
 
-### Implemented
-- Task-based single-assistant architecture (no mode selection)
-- Intent detection (conversation, research, coding, planning, vision)
-- Complexity-aware model routing
-- 20+ tools: calculator, file I/O, code ops, web search, git, desktop, knowledge CRUD, subagent spawning
-- MCP protocol support (stdio transport, multi-server, catalog)
-- LanceDB memory with hybrid search and importance scoring
-- Knowledge base indexing (OKF markdown with YAML frontmatter)
-- Permission system (allow/ask/deny, pattern matching, session allowlists)
-- Job system (lifecycle management, persistence, scheduler integration)
-- Lesson store (tool success/failure reflection)
-- WebUI (React/TypeScript) with streaming, permissions, projects, code/collab modes
-- Model presets editor, tool permission mode selectors
-- Conversation management (search, pin, rename, delete)
-- File/image attachments with vision routing
-- Project grouping with shared context injection
-- Code mode: inline trace, terminal/diff/timeline, directory picker
-- Collab mode: plan approval flow, project wizard
-- Speech-to-text (Chrome native + MediaRecorder fallback)
-- Provider abstraction (Ollama, OpenAI)
-- CLI: `cozmo webui`, `cozmo run`, `cozmo code`, `cozmo config`, `cozmo telegram`
+## AI Agent Orchestration
 
-### In Progress
-- Evidence Processing Layer (structured evidence → model reasoning)
-- End-to-end test coverage
-- Context window management across long sessions
+Built an intent-driven agent architecture that:
 
-### Planned
-- Plugins/extensions system
-- Codebase-aware context compaction
-- Multi-modal inline rendering (charts, diagrams)
-- Background agent scheduling with job monitoring UI
+* Classifies user requests
+* Determines required capabilities
+* Creates execution plans
+* Selects appropriate tools
+* Routes tasks to specialized models
+* Executes multi-step workflows
+
+## LLM Infrastructure
+
+Implemented a provider-agnostic AI layer supporting:
+
+* Local Ollama inference
+* Cloud model providers
+* Role-based model selection
+* Capability-aware model routing
+* Resource-aware model management
+
+## Retrieval & Grounding
+
+Developed a reliability-focused retrieval pipeline including:
+
+* Evidence detection
+* Retrieval policy decisions
+* Source ranking
+* Context injection
+* Retrieval quality evaluation
+
+Designed to reduce hallucinations by determining when external information is required before generation.
+
+## Memory Systems
+
+Built persistent AI memory using:
+
+* LanceDB vector storage
+* Hybrid semantic search
+* Importance scoring
+* Conversation summarization
+* Knowledge indexing
+
+## Full-Stack AI Application
+
+Developed a complete AI application stack:
+
+* React + TypeScript frontend
+* FastAPI backend
+* WebSocket streaming
+* Real-time execution traces
+* Permission management
+* Interactive agent controls
 
 ---
 
-## Quick Start
+# Architecture
+
+```
+                         User Input
+                              |
+                              v
+                    Orchestrator Analysis
+                              |
+        +---------------------+----------------------+
+        |                     |                      |
+        v                     v                      v
+ Intent Detection     Evidence Detection     Complexity Analysis
+        |                     |                      |
+        +---------------------+----------------------+
+                              |
+                              v
+                    Grounding & Retrieval Policy
+                              |
+                              v
+                       Execution Plan
+                              |
+                              v
+                       Cozmo Runtime
+                              |
+        +---------------------+----------------------+
+        |                     |                      |
+        v                     v                      v
+ Retrieval System       Tool Execution        Agent Loop
+        |                     |                      |
+        v                     v                      v
+ Evidence Bundle       Tool Results          Final Response
+```
+
+---
+
+# Core Components
+
+## Runtime (`cozmo/runtime/`)
+
+The execution engine responsible for coordinating AI workflows.
+
+Features:
+
+* Unified execution pipeline
+* Retrieval coordination
+* Tool execution
+* Recovery handling
+* Event streaming
+* Execution tracing
+* Permission enforcement
+
+Key components:
+
+* `CozmoRuntime`
+* `RetrievalCoordinator`
+* `EvidenceCollector`
+* `ExecutionTrace`
+* `EventBus`
+* `PermissionResolver`
+
+---
+
+## Orchestrator (`cozmo/orchestrator/`)
+
+The decision-making layer responsible for understanding tasks.
+
+Components:
+
+### Intent Detection
+
+Classifies requests into:
+
+* Conversation
+* Research
+* Coding
+* Planning
+* Vision
+
+### Evidence Detection
+
+Determines whether a task requires external information using signals such as:
+
+* Time sensitivity
+* Dynamic information
+* Comparisons
+* External facts
+* Project context
+
+### Complexity Estimation
+
+Evaluates task difficulty to optimize:
+
+* Model selection
+* Resource usage
+* Execution strategy
+
+---
+
+## Memory (`cozmo/memory/`)
+
+Persistent memory architecture powered by LanceDB.
+
+Capabilities:
+
+* Vector-based retrieval
+* Hybrid search
+* Short-term conversation buffers
+* Long-term semantic memory
+* Knowledge base indexing
+* Automated summarization
+
+---
+
+## Providers (`cozmo/providers/`)
+
+Provider abstraction layer supporting:
+
+* Ollama
+* OpenAI-compatible providers
+
+Features:
+
+* Model role assignment
+* Provider switching
+* Configuration-based routing
+* Local inference support
+
+---
+
+## Tools & Capabilities
+
+Cozmo includes 20+ built-in tools:
+
+| Category      | Examples                                       |
+| ------------- | ---------------------------------------------- |
+| Files         | Read, write, edit, search                      |
+| Code          | Execute Python, Git operations, terminal tools |
+| Web           | Search, fetch, retrieval pipelines             |
+| Knowledge     | Create, update, query knowledge bases          |
+| Desktop       | Screenshots, clipboard, image analysis         |
+| Agents        | Subagent spawning                              |
+| Scheduling    | Background task execution                      |
+| Communication | Telegram integration                           |
+
+---
+
+# Features
+
+## Implemented
+
+### AI Core
+
+* Intelligent task routing
+* Multi-model support
+* Local LLM inference
+* AI agent execution loops
+* Tool calling
+* Planning workflows
+
+### Retrieval
+
+* Evidence detection
+* Retrieval policies
+* Source ranking
+* Context injection
+* Knowledge indexing
+
+### Memory
+
+* LanceDB vector database
+* Hybrid retrieval
+* Importance scoring
+* Conversation summarization
+
+### Developer Experience
+
+* CLI interface
+* WebUI
+* Streaming responses
+* Debug traces
+* Model configuration
+* Permission controls
+
+### Integrations
+
+* MCP server support
+* Telegram bot
+* File/image processing
+* Git tooling
+
+---
+
+# Web Interface
+
+Cozmo includes a React-based WebUI providing:
+
+* Streaming conversations
+* Agent execution traces
+* Permission controls
+* Project organization
+* Model configuration
+* File/image attachments
+* Code workflows
+
+Launch:
+
+```bash
+cozmo webui
+```
+
+---
+
+# Quick Start
+
+## Requirements
+
+* Python >= 3.10
+* Ollama installed
+* Local AI models available
+
+## Installation
 
 ```bash
 git clone https://github.com/rasumeng/cozmo.git
+
 cd cozmo
+
 pip install -e .
-pip install -e .[telegram]  # optional, for Telegram bot
 
-cozmo init                   # creates ~/.cozmo/config.toml
-cozmo webui                  # launch at http://127.0.0.1:8765
-cozmo run "hello"            # or CLI quick query
+cozmo init
+
+cozmo webui
 ```
-
-Requires Python >= 3.10 and [Ollama](https://ollama.ai) running locally with models pulled.
 
 ---
 
-## Configuration
+# Configuration
 
-Config lives at `~/.cozmo/config.toml`. Managed via WebUI Settings modal, `cozmo config` CLI, or direct editing.
+Configuration is managed through:
 
-### Models (`[llm.roles]`)
-Per-role model dispatch. Each role specifies a model name — empty falls back to `default_model`.
+```
+~/.cozmo/config.toml
+```
+
+Example:
 
 ```toml
 [llm]
 default_model = "qwen3:8b"
 
-[llm.roles]
-chat = { model = "" }
-coder = { model = "" }
-vision = { model = "" }
-planner = { model = "" }
-classifier = { model = "" }
-router = { model = "" }
-orchestrator = { model = "" }
-```
-
-### Providers (`[providers]`)
-```toml
 [providers]
 default = "ollama"
 
 [providers.ollama]
 url = "http://localhost:11434"
-
-[providers.openai]
-api_key_env = "OPENAI_API_KEY"
-```
-
-### Memory (`[memory]`)
-```toml
-[memory]
-max_turns_before_summary = 5
-max_short_term_pairs = 10
-```
-
-### Runtime (`[runtime]`)
-```toml
-[runtime]
-lightweight_mode = false
-max_history = 10
-max_steps = 8
-max_tool_output_chars = 8000
-
-[runtime.temperatures]
-chat = 0.6
-work = 0.0
-research = 0.2
-```
-
-### Permissions (`[permissions]`)
-```toml
-[permissions]
-write_file = "ask"
-edit_file = "ask"
-
-[permissions.run_command]
-"*" = "ask"
-"git *" = "allow"
-"dir *" = "allow"
-```
-
-### Environment Variables
-| Variable | Override |
-|----------|----------|
-| `COZMO_DEFAULT_MODEL` | Default LLM model |
-| `COZMO_MODEL_CHAT` | Chat role model |
-| `COZMO_MODEL_CODER` | Coder role model |
-| `COZMO_MODEL_VISION` | Vision role model |
-| `COZMO_MODEL_PLANNER` | Planner role model |
-| `COZMO_OLLAMA_URL` | Ollama server URL |
-| `COZMO_EMBED_MODEL` | Embedding model |
-| `COZMO_TELEGRAM_BOT_TOKEN` | Telegram bot token |
-
----
-
-## Tool System
-
-Registered tools auto-discovered by the runtime. Tools not listed default to MEDIUM risk.
-
-| Category | Tools |
-|----------|-------|
-| **File** | `read_file`, `write_file`, `edit_file`, `list_directory`, `glob_search`, `read` |
-| **Code** | `grep_search`, `run_command`, `execute_python`, `git_diff`, `git_log` |
-| **Web** | `web_search`, `web_search_pipeline`, `web_fetch`, `fetch_url` |
-| **Knowledge** | `read_knowledge`, `write_knowledge`, `search_knowledge` |
-| **Desktop** | `screenshot`, `clipboard_read`, `analyze_image` |
-| **Math** | `calculator` (safe AST parser) |
-| **Comm** | `telegram_send` |
-| **Agent** | `task` (subagent spawner) |
-| **Scheduling** | `schedule_task`, `list_schedules`, `remove_schedule` |
-| **Diagnostics** | `diagnostics`, `sourcegraph` |
-
----
-
-## Package Structure
-
-```
-cozmo/
-├── runtime/            # Production execution loop, retrieval, tracing, recovery
-│   ├── runtime.py      # CozmoRuntime — unified pipeline
-│   ├── retrieval_policy.py     # Retrieval source/strategy decision
-│   ├── retrieval_coordinator.py# Budget enforcement, duplicate prevention
-│   ├── evidence.py     # EvidenceCollector, EvidenceBundle, RetrievalQuality
-│   ├── trace.py        # ExecutionTrace, TraceEvent, DebugTraceEvent
-│   ├── execution_context.py    # Unified run state
-│   ├── model_router.py # Capability-based model selection
-│   ├── event_bus.py    # Typed pub/sub event system
-│   ├── permissions.py  # Pattern-based allow/ask/deny
-│   ├── tool_registry.py# Tool registration and LangChain wrapping
-│   ├── tool_risk.py    # Risk classification for permission defaults
-│   ├── resources.py    # VRAM tracking, model ranking
-│   ├── lessons.py      # Tool success/failure store
-│   └── prompts.py      # System prompt builder
-│
-├── orchestrator/       # Intent detection, evidence, complexity, grounding
-├── jobs/               # Job lifecycle management
-├── capabilities/       # Declarable capability definitions
-├── planner/            # Planning strategies (scaffolding)
-├── providers/          # Provider abstraction (Ollama, OpenAI)
-├── models/             # Model service, registry
-├── services/           # CozmoContext composition root, embedding
-├── memory/             # LanceDB store, memory manager, knowledge index
-├── tools/              # 20+ registered tools
-├── webui/              # React/TypeScript frontend (Vite + Tailwind)
-├── webui_server.py     # FastAPI WebSocket + REST server
-├── webui.py            # WebUI backend builder
-├── cli.py              # CLI entry point
-├── config.py           # TOML config loader/saver with migration
-├── config_cli.py       # cozmo config show|set|reset
-├── migrate.py          # v1-to-v2 data migration
-├── ollama.py           # Ollama process management
-├── scheduler.py        # Background agent scheduler
-├── task_queue.py       # Async task queue
-├── telegram_bot.py     # Telegram bot integration
-├── code_indexer.py     # ChromaDB project indexer
-├── searxng_util.py     # SearXNG search utility
-├── default_skills/     # Bundled skills
-└── docker/             # Sandbox Dockerfile for execute_python
 ```
 
 ---
 
-## Status
+# Testing
 
-| Layer | Status | Notes |
-|-------|--------|-------|
-| **Runtime** | Beta | Retrieval pipeline, recovery system, trace architecture |
-| **Orchestrator** | Beta | Intent detection, evidence detection, grounding decision, retrieval policy |
-| **Retrieval** | Beta | RetrievalPolicy, RetrievalCoordinator, budget/dedup, KB→web escalation |
-| **Tracing** | Beta | TraceEvent/DebugTraceEvent separation, TraceAction, ExecutionTrace |
-| **Evidence** | Beta | EvidenceCollector, EvidenceBundle, RetrievalQuality, search pipeline |
-| **Memory** | Beta | LanceDB hybrid search, importance scoring, knowledge index |
-| **WebUI** | Beta | Streaming, permissions, projects, code/collab, STT |
-| **MCP** | Beta | Stdio transport, catalog, multi-server, health checks |
-| **Cognition** | Alpha | Memory ranking, complexity-aware routing, lessons, recovery |
-| **Job System** | Beta | Lifecycle, persistence, scheduler integration |
-| **CLI** | Deprecated | `webui` is primary; `run`/`code` maintained |
+Cozmo includes automated tests covering:
+
+* Agent orchestration
+* Retrieval pipelines
+* Evidence detection
+* Configuration handling
+* Runtime execution
+* Tool systems
+
+Current status:
+
+```
+200+ tests passing
+```
 
 ---
 
-## License
+# Roadmap
 
-MIT
+## In Progress
+
+* Advanced evidence processing
+* Long-context optimization
+* Expanded test coverage
+
+## Planned
+
+* Plugin ecosystem
+* Background autonomous agents
+* Codebase-aware memory
+* Multimodal generation
+* Additional model providers
+
+---
+
+# Technology Stack
+
+| Area           | Technologies        |
+| -------------- | ------------------- |
+| Language       | Python, TypeScript  |
+| Backend        | FastAPI             |
+| Frontend       | React, Tailwind CSS |
+| AI Runtime     | Ollama, LLM APIs    |
+| Memory         | LanceDB             |
+| Communication  | WebSockets          |
+| Infrastructure | Docker, Linux       |
+| Development    | Git, GitHub Actions |
+
+---
+
+# License
+
+MIT License
