@@ -1,307 +1,334 @@
-# Cozmo Devlog
+# Cozmo Devlog — Architecture Evolution
 
-_Chronological development notes — what changed, why, and impact._
+## Grounding Architecture Refactor
 
----
+### Problem
+Original grounding was ad-hoc: `TaskProfile.needs_grounding` boolean, no source tracking, no structured reasoning. The orchestrator had no dedicated grounding decision layer.
 
-### 2026-06-29 — Project inception
+### Solution
+Introduced `GroundingDecision` — a structured dataclass that captures the complete grounding decision:
 
-**Context**: Build fully local AI agent as alternative to paid agentic AI services (Claude Code, Cursor). Windows 11, Ollama backend, limited GPU — model efficiency critical.
+```python
+@dataclass
+class GroundingDecision:
+    needs_grounding: bool
+    confidence: float
+    reason: str
+    source: str  # "keyword" | "heuristic" | "llm" | "none"
+```
 
-**Existing codebase**: Basic ReAct agent (`main.py`) with calculator tool + RAG pipeline (`rag_local.py`). Both had several bugs.
+### Separation of Responsibilities
 
-**Decisions**:
-- LangChain for quick wins, decouple later
-- TOML config (`tomllib` stdlib)
-- Telegram for messaging (simpler than Discord)
-- Desktop control read-only initially
+| Component | Responsibility |
+|-----------|---------------|
+| `IntentDetector` | Classifies task category (conversation, research, coding, planning, vision) |
+| `EvidenceDetector` | Detects external information signals only (temporal, dynamic, comparative, project, memory) |
+| `GroundingReasoner` | LLM-based reasoner for ambiguous cases (medium confidence, conflicting signals) |
+| `Orchestrator` | Owns grounding decisions — four-tier: keyword → heuristic → LLM → none |
 
----
-
-### 2026-06-29 — Phase 1: Package refactor + Tool system
-
-**Changes**:
-- `pyproject.toml` with `cozmo` CLI entry point
-- Flat scripts → `cozmo/` package structure
-- `config.py` — TOML loader/saver for `~/.cozmo/config.toml`
-- `tools/__init__.py` — `TOOL_REGISTRY` + `@register_tool()` decorator
-- `cli.py` — argparse: `cozmo init` + `cozmo run [query]`
-- Calculator tool with `eval()` → safe AST parser
-
-**Fixed**: 15+ bugs across config, CLI, tool registration, agent loop.
-
----
-
-### 2026-06-29 — Phase 2: Orchestrator + model routing
-
-**Changes**:
-- `core/orchestrator.py` — Hybrid classifier (heuristic + LLM), model router
-- Three tiers: fast (phi4-mini), balanced (qwen3:8b), heavy (qwen2.5-coder:14b)
-- CLI uses Orchestrator instead of direct Agent
-
-**Fixed**: Silent string concatenation bug in Python, typos in model names, missing config keys.
+### Changes
+- `TaskProfile.needs_grounding` removed
+- `GroundingDecision` moved into `TaskAnalysis` as `.grounding`
+- Grounding decisions are now structured with `source` (how decided), `confidence` (how sure), `reason` (why)
+- Orchestrator's `_resolve_grounding()` implements the four-tier decision pipeline
+- Evidence pipeline detects signals → feeds grounding → runtime executes retrieval
 
 ---
 
-### 2026-06-29 — Phase 3: Memory, web search, desktop, Telegram
+## Trace Architecture Rewrite
 
-**Changes**:
-- `memory/chroma_store.py` — ChromaDB with `nomic-embed-text`
-- `memory/manager.py` — Short-term buffer (5 turns), auto-summarize, cross-session recall
-- `tools/web_search.py` — DuckDuckGo via `ddgs`
-- `tools/desktop.py` — Screenshot + clipboard (gated by config)
-- `cozmo/telegram_bot.py` — Async Telegram bot
+### Problem
+Previous trace system leaked internal state directly to users. Raw confidence values, heuristic names, and routing details were exposed. The UI had to interpret internal concepts it shouldn't know about.
 
-**Fixed**: 22 bugs across 8 files (typos, API mismatches, console encoding).
+### Solution
+Three-layer trace architecture:
 
----
+```
+Internal State
+    ↓
+Trace Event Layer    (action + category + summary)
+    ↓
+Trace Formatter      (maps to user-readable labels + icons)
+    ↓
+User UI
+```
 
-### 2026-06-29 — Specialist model routing refactor
+### TraceAction Enum
+```python
+class TraceAction(str, Enum):
+    UNDERSTANDING = "understanding"   # Analyzing request
+    RETRIEVING    = "retrieving"      # Finding information
+    PLANNING      = "planning"        # Building execution plan
+    EXECUTING     = "executing"       # Using tools
+    RESPONDING    = "responding"      # Preparing answer
+```
 
-**Changes**:
-- `fast/balanced/heavy` tiers → task-specific specialists: `chat`, `coder`, `vision`, `research`
-- `config.py` — New model keys; `core/orchestrator.py` — task→model mapping
-- `core/agent.py` — `SPECIALIST_PROMPTS` per task type
-- `tools/desktop.py` — Auto-analyze screenshots via vision model
+Each action maps to a user-visible label and icon via `TraceActionMetadata`.
 
-**Impact**: Single agent can switch expertise per query without user mode selection.
+### Dual Trace Streams
 
----
+**TraceEvent** (user-facing):
+- `action` — one of 5 user-understandable actions
+- `category` — broad topic (reasoning, information_retrieval, knowledge, planning, tool_use)
+- `summary` — one-line explanation
 
-### 2026-06-30 — Cozmo Code
+**DebugTraceEvent** (debug-only):
+- `category` — internal phase name
+- `data` — raw dict with implementation details
 
-**Changes**:
-- `tools/code_ops.py` — 6 code tools: `write_file`, `edit_file`, `grep_search`, `run_command`, `git_diff`, `git_log`
-- `code_indexer.py` — ChromaDB project index (respects `.gitignore`)
-- `core/code_agent.py` — Code-aware agent with project context, command gating
-- Tool format: `<tool>` JSON blocks (replaced regex `TOOL:` parsing)
+Stored separately: `trace.user_events` vs `trace.debug_events`.
 
-**Fixed**: 12+ bugs in tool registration (decorator parens), encoding, API mismatches.
+### Design principles
+- Trace events intentionally avoid leaking: confidence values, signal types, heuristic names, internal routing logic
+- Debug traces only emitted when `debug_trace=True`
+- The UI never sees `GroundingDecision`, `EvidenceAnalysis`, or `TaskProfile` internals
 
----
-
-### 2026-06-30 — CLI UX improvements
-
-**Changes**:
-- `config_cli.py` — `cozmo config show|set|reset`
-- `cli.py`: `!cmd` passthrough, `/commands`, `@file` autocomplete, status bar
-- `prompt_toolkit` integration (FileHistory, fuzzy file completer)
-- `core/code_agent.py` — `compact()` method for history summarization
-
----
-
-### 2026-06-30 — Multi-agent system
-
-**Changes**:
-- `core/agent_registry.py` — Agent registry (TOML + `.cozmo/agents/*.md`)
-- `core/plan_agent.py` — Read-only plan agent (blocks write/edit/run_command)
-- F2 keybinding cycles agents in CLI; `/agent`, `/agents` commands
-- Custom markdown agents with frontmatter auto-discovery
-
----
-
-### 2026-06-30 — Permission system
-
-**Changes**:
-- `core/permissions.py` — `PermissionResolver` with `fnmatch` pattern matching
-- Unified allow/ask/deny gating at agent level (not in tool functions)
-- Session allowlist; `--auto` flag for non-interactive mode
-- `code.allow_commands` removed; `[permissions]` config section
+### ExecutionTrace
+Single structured object emitted at end of every `run_stream()`:
+- request_id, user_input, timing
+- intent + confidence
+- memory query results
+- grounding quality + source count
+- recovery attempts
+- model selected + reason
+- step-by-step tool calls
+- final response metadata
 
 ---
 
-### 2026-07-01 — Textual TUI (Phase 8)
+## Retrieval Architecture
 
-**Changes**:
-- `tui/app.py` — `CozmoApp(Textual.App)` minimal shell
-- `tui/sprite.py` — ANSI half-block art from PNG
-- `tui/widgets/header.py` — Sprite + title badge
+### Problem
+Previously, retrieval was a single `_grounding_search()` call triggered by `needs_grounding` boolean. No separation between "should I retrieve?" and "where should I retrieve from?" No source selection, no fallback chains, no strategy awareness.
 
-**Decision**: Step-by-step TUI build caught Windows rendering issues early.
+### Solution
+Three-layer retrieval pipeline:
 
----
+```
+User Query
+    ↓
+Grounding Decision     (should we retrieve?)
+    ↓
+Retrieval Policy       (where should we retrieve?)
+    ↓
+Retrieval Coordinator  (execute retrieval with budget)
+    ↓
+Evidence Bundle        (structured search results)
+    ↓
+Runtime Reasoning      (LLM synthesizes answer)
+```
 
-### 2026-07-01 — CozmoTUI standalone → merged
+### RetrievalPolicy
+Pure decision logic. No runtime dependencies, no keyword matching.
 
-**Built standalone** `rasumeng/CozmoTUI` repo (no Cozmo deps):
-- Three-panel design (Chat/Collab/Code), sidebar, settings modal
-- Full UI shell with sprite, themes, keyboard navigation
+```python
+class RetrievalSource(str, Enum):
+    KNOWLEDGE = "knowledge"  # Local knowledge base
+    WEB = "web"              # Web search
 
-**Merged back** into `cozmo/tui/` as main TUI implementation, replacing partial Phase 8.
+class RetrievalStrategy(str, Enum):
+    NONE              = "none"               # No retrieval needed
+    KNOWLEDGE_ONLY    = "knowledge_only"     # Local KB only
+    WEB_ONLY          = "web_only"           # Web search only
+    KNOWLEDGE_THEN_WEB = "knowledge_then_web" # KB first, escalate to web
 
----
+@dataclass
+class RetrievalPlan:
+    sources: list[RetrievalSource]
+    strategy: RetrievalStrategy
+    reason: str
+```
 
-### 2026-07-03 — Model selector + Agent harness
+The policy uses existing structured signals only:
+- `GroundingDecision.needs_grounding`
+- Evidence signal types and strengths (temporal, dynamic, comparative)
+- Intent type
 
-**Changes**:
-- `tui/screens/model_selector.py` — Queries Ollama `/api/tags`
-- `core/chat_agent.py` — ChatAgent (minimal tools, 3-turn loop)
-- `core/collab_agent.py` — CollabAgent (Observe-Plan-Act-Reflect, 7-turn)
-- `tui/screens/permission.py` — Permission modal with threading bridge
-- Streaming format: `(kind, text)` tuples across all agents
-- All three panels wired with specialized agents
+### RetrievalCoordinator
+Execution control layer. Intercepts `web_search`/`web_fetch` tool calls during the ReAct loop to enforce rules:
 
----
+- **Budget tracking**: max 1 web search + 1 web fetch per execution
+- **Duplicate prevention**: exact match + semantic term overlap (>= 50% overlap with >= 2 common terms)
+- **Cache seeding**: pre-populated with pre-loop retrieval results
+- **Strategy-aware limits**: KNOWLEDGE_ONLY gets 0 search/fetch budget
+- **Phase guidance**: temporary system message when retrieval is active
 
-### 2026-07-03 — Comprehensive audit + fixes
+No global tool removal — the coordinator returns guidance messages when budget is exhausted or duplicates are detected.
 
-**Critical fixes**:
-- `q` → `Ctrl+Q` exit (both `app.py` and `main.py` had conflicting bindings)
-- Permission modal Escape → signals `False` immediately
-- Sidebar typo "Sessoions" → "Sessions"
+### Pre-loop Retrieval Execution
+`_execute_retrieval_plan()` in runtime:
+- WEB_ONLY: runs `_grounding_search()` (web via EvidenceCollector)
+- KNOWLEDGE_ONLY: runs `_retrieve_knowledge()` (local KB)
+- KNOWLEDGE_THEN_WEB: KB first, escalates to web if empty
+- NONE: traces "no retrieval needed"
 
-**Security fixes**:
-- `eval(expression)` → safe AST parser (no code execution)
-- `subprocess.run(shell=True)` → `shlex.split()` + blocked command list
-- File path traversal via `realpath()` check
-
-**Architecture cleanup**:
-- `core/base_agent.py` — Shared utilities (parse_tool_call, build_tool_schema)
-- All agents extend BaseAgent; chat_mixin.py eliminates panel duplication
-- agent.py kept as legacy for Orchestrator path
-
----
-
-### 2026-07-03 — Phase 2: Orchestrator integration + Markdown
-
-**Changes**:
-- Classification display in TUI thinking area
-- Memory context injected into all agent prompts
-- Context compaction (triggers at 6+ turns)
-- Markdown rendering via `textual.widgets.Markdown`
-- File picker (`tui/screens/file_picker.py`)
-- `Ctrl+L` clear, `Ctrl+Q` exit
-- Token count in footer
-
----
-
-### 2026-07-03 — Phase 3: Toggle mode + CLI deprecation
-
-**Changes**:
-- CodeInput Build/Plan toggle actually wired to agent swap
-- Context window % display in footer
-- CLI `run`/`code` commands marked `[DEPRECATED: use 'tui']`
+### Files
+- `cozmo/runtime/retrieval_policy.py` — RetrievalSource, RetrievalStrategy, RetrievalPlan, RetrievalPolicy
+- `cozmo/runtime/retrieval_coordinator.py` — RetrievalBudget, RetrievalCoordinator
 
 ---
 
-### 2026-07-03 — Web search fix
+## Knowledge Assessment / Runtime Recovery
 
-**Changes**:
-- ChatAgent system prompt forces `web_search` for time-sensitive info
-- `web_fetch` consolidated into `web_search.py`
+### Problem
+Previously, the system had no feedback on whether retrieved evidence was sufficient. The model decided whether it "knew enough" — leading to confident but wrong answers when retrieval failed silently.
 
----
+### Solution
+Introduced `RetrievalQuality` — structured quality assessment for every retrieval attempt:
 
-### 2026-07-08 — CozmoBrain integration
+```python
+class RetrievalQuality(enum.Enum):
+    SUFFICIENT = "sufficient"  # Good results, model can answer
+    WEAK       = "weak"       # Partial results, low relevance
+    EMPTY      = "empty"      # No results found
+    FAILED     = "failed"     # Search API error
+```
 
-**Merged** standalone CozmoBrain repo:
-- `core/mcp_host.py` — MCP stdio client sessions
-- `core/router.py` — ToolRouter (keyword + domain priority + LLM fallback)
-- `core/context.py` — History trimming, token estimation, compaction
-- `core/prompts.py` — Date-aware system prompt builder
-- `docker/sandbox.Dockerfile` — Sandboxed Python execution
-- `execute_python` tool with Docker → subprocess fallback
-- `fetch_url`, date-stamped web search, knowledge CRUD (OKF frontmatter)
+### Recovery System
+Two-phase recovery when retrieval quality is insufficient:
 
-**Design**: Brain's `pydantic_ai` → Cozmo's `OllamaModel` via `StatelessLLM` wrapper.
+**Phase 2 (pre-loop)**: Before the ReAct loop, if retrieval quality is not SUFFICIENT, upgrade capabilities to include web search tools. This ensures the model has the right tools before it starts reasoning.
 
----
+**Phase 3 (mid-loop)**: During the ReAct loop, if:
+1. Retrieval was attempted (quality recorded)
+2. Quality is not SUFFICIENT
+3. Model chose to answer without calling any tool
+4. Below recovery attempt limit (max 1)
 
-### 2026-07-09 — WebUI: Color scheme, sidebar, search, settings
+Then: add web search tools, rebind the runnable, inject a system message telling the model web search is available, continue the loop.
 
-**Progressive WebUI development**:
-- Purple theme matching TUI; Cozmo pixel-art sprite
-- Conversation pin/rename/delete in sidebar
-- Full-text search across conversations
-- Settings modal (6 sections: Models, Tools, Memory, Skills, Connectors, General)
-- Model presets editor (add/delete custom presets)
-- Tool permission mode selectors (Allow/Ask/Deny)
-- Microphone STT (Chrome native + MediaRecorder fallback)
+### Escalation Paths
+- **KB empty, pre-loop**: KNOWLEDGE_THEN_WEB auto-escalates to web search before the ReAct loop starts
+- **KB empty, in-loop**: Post-tool recovery detects `search_knowledge` returning empty → adds web tools, injects system message
+- **Model answers without tools**: Phase 3 recovery upgrades capabilities and retries
 
----
-
-### 2026-07-10 — File/image attachments, vision routing, projects
-
-**Changes**:
-- Attachment upload/serve/delete endpoints (`~/.cozmo/attachments/`)
-- Vision model routing (images force `qwen2.5vl:7b` bypassing classifier)
-- Project CRUD with shared context injection
-- Project wizard UI (create, import from chats, select)
+### Quality Tracing
+`RetrievalQuality` tracked on both `ExecutionContext` (runtime state) and `ExecutionTrace` (observability):
+- `grounding_quality` — the quality grade
+- `grounding_source_count` — number of sources returned
+- `grounding_relevance_score` — term relevance evaluation
+- `recovery_attempts` — count of recovery activations
+- `recovery_action` — what recovery did
 
 ---
 
-### 2026-07-12 — Code Mode UI + Collab mode
+## Evidence / Search Improvements
 
-**Changes**:
-- Code Mode: tool events, terminal/diff/trace panels, inline diffs
-- Directory picker, permission mode selector (5 modes)
-- Collab mode: plan approval flow (plan → approve/reject)
-- Collab Project Management: create, import, select with wizard UI
+### EvidenceCollector
+Structured evidence acquisition pipeline replacing flat-string grounding:
 
----
+```
+query → search → rank/filter → fetch → merge → EvidenceBundle
+                                     ↓
+                                sufficient? → yes → return
+                                     ↓ no
+                                reformulate → retry
+```
 
-### 2026-07-21 — v2 Architecture migration (mode-based → task-based)
+### EvidenceBundle
+```python
+@dataclass
+class EvidenceBundle:
+    query: str
+    results: list
+    merged_text: str
+    source_count: int
+    error: str | None
+    quality: RetrievalQuality | None
+```
 
-**Complete rewrite** of internal architecture. Replaced mode-based multi-assistant (Chat/Agent/Code/Collab) with task-based single intelligent system.
+### SearXNG Fixes
+- Time range mapping: `d/w/m/y` → `day/week/month/year` (native SearXNG params)
+- Search failure propagation: errors surface correctly through the pipeline
+- Relevance evaluation: results filtered by term overlap ratio
+- Reformulation: low-relevance results trigger query reformulation and retry
 
-**New architecture**:
-- `runtime/` — Unified `CozmoRuntime.run_stream()` production loop
-- `orchestrator/` — Intent detection, complexity estimation, plan creation
-- `jobs/` — Long-running job lifecycle (submit/pause/resume/cancel)
-- `capabilities/` — Resolvable capability definitions with tool lists
-- `planner/` — Step-by-step execution plan generation
+### Source Ranking
+- Text results prioritized over video/image
+- Relevance scoring via key term overlap
+- Content fetching for top results
+- Merged into single evidence string for model consumption
 
-**Changes**:
-- IntentDetector replaces `core/router.py` mode routing
-- `run_stream()` unified across all intent types
-- `jobs/manager.py` — Thread-safe job lifecycle
-- `orchestrator/policy.py` — Relaxed/normal/strict modes
-- `runtime/resources.py` — VRAM tracking, LRU eviction
-- `runtime/model_router.py` — Capability-based model selection
-- Frontend: removed `WorkspaceMode`, deleted mode-specific components
-- `core/` entirely removed (webui_server.py imports migrated)
-- `cozmo migrate v1-to-v2` CLI command strips `mode` from persisted conversations
-
-**Test results**: 27 integration tests passing.
-
----
-
-### 2026-07-22 — Engine activation + Cognitive Layer
-
-**Execution layer**:
-- `runtime/engine.py` — Real ReAct loop with checkpoint support
-- Duplicate call detection, checkpoint emission/resume
-- `CozmoRuntime.run_stream()` accepts `execution_plan` parameter
-
-**Cognitive layer**:
-- Intent-based memory type filtering + recency/frequency/distance ranking
-- Complexity-aware ModelRouter (upgrades capability when score >= 4)
-- `runtime/lessons.py` — LessonStore: tool success/failure patterns
-- Scheduler wired via Job system
-
-**Test results**: 64 tests, 0 failures (42 v2 pipeline + 15 execution + 22 cognitive).
+### File
+- `cozmo/runtime/evidence.py` — EvidenceBundle, EvidenceCollector, RetrievalQuality
+- `cozmo/tools/search_pipeline.py` — SearchConfig, SearchResult, search/fetch/rerank
 
 ---
 
-### Current Status
+## Retrieval Optimization
 
-| Layer | Status | Notes |
-|-------|--------|-------|
-| **Runtime** | Beta | Unified ReAct loop, execution plans, checkpoint/resume |
-| **Orchestrator** | Beta | Intent detection, complexity estimation, plan creation |
-| **Cognition** | Alpha | Memory ranking, complexity-aware routing, lesson store |
-| **WebUI** | Beta | Full-featured: streaming, permissions, projects, code/collab modes |
-| **CLI** | Deprecated | `webui` is primary; `run`/`code` maintained for backward compat |
-| **TUI** | Removed | Was split to standalone, then removed in v2 migration |
-| **Memory** | Beta | LanceDB + Sentence Transformers (ChromaDB legacy removed) |
-| **MCP** | Beta | Stdio transport, catalog, multi-server support |
-| **Job System** | Beta | Lifecycle management, persistence, scheduler integration |
-| **Capabilities** | Alpha | Declarable capability definitions, builtin registry |
+### Goal
+Prevent wasteful search patterns:
+```
+search → search → search → fetch → timeout (17+ steps)
+```
 
-**Remaining gaps**:
-- `planner/` module is scaffolded but inactive (plan generation happens in orchestrator)
-- `runtime/session.py` removed — session state handled by webui_server.py directly
-- `runtime/workspace.py` removed — workspace tracking deferred
-- `orchestrator/policy.py`/`continuation.py` removed — policy/continuation deferred
-- `runtime/reflection.py` removed — reflection handled by LessonStore
-- End-to-end test coverage needs expansion
+Promote efficient retrieval:
+```
+retrieve → understand → answer (5-8 steps)
+```
+
+### Implementation
+`RetrievalCoordinator` enforces:
+- **Max 1 web search** per execution (blocks duplicates and budget-exceeded calls)
+- **Max 1 web fetch** per execution
+- **Duplicate detection** via exact match + semantic term overlap
+- **Cache seeding** with pre-loop results so first in-loop web search is caught as duplicate
+- **Strategy-aware budgets**: KNOWLEDGE_ONLY gets 0 search/fetch; WEB_ONLY gets 1/1
+
+### Trace Metrics (debug-only)
+- `retrieval_search_count` — actual searches performed
+- `retrieval_fetch_count` — actual fetches performed
+- `retrieval_budget_exhausted` — whether budget was fully consumed
+
+Excluded from user-facing `to_dict()`.
+
+---
+
+## Current Architecture State
+
+```
+User Input
+    ↓
+Orchestrator
+├── IntentDetector          (classifies task type)
+├── EvidenceDetector        (detects info signals)
+├── ComplexityEstimator     (scores task complexity)
+├── Grounding Decision      (should we retrieve?)
+└── RetrievalPolicy         (where should we retrieve?)
+    ↓
+Runtime
+├── RetrievalCoordinator    (executes with budget/dedup)
+├── EvidenceCollector       (search → rank → fetch → merge)
+├── Recovery System         (Phase 2 pre-loop + Phase 3 mid-loop)
+├── Trace System            (user events + debug traces)
+└── Agent Execution Loop    (ReAct with tool calling)
+    ↓
+Response
+```
+
+### Test Suite
+- 262 total tests
+- All passing
+- New test files: `test_trace_boundary.py`, `test_evidence.py`, `test_grounding.py`, `test_retrieval_coordinator.py`, `test_search_pipeline.py`, `test_execution_context.py`, `test_regression.py`
+
+### Key Files
+
+```
+cozmo/
+├── runtime/
+│   ├── retrieval_policy.py      # RetrievalSource, RetrievalStrategy, RetrievalPolicy
+│   ├── retrieval_coordinator.py # RetrievalBudget, RetrievalCoordinator
+│   ├── evidence.py              # EvidenceBundle, EvidenceCollector, RetrievalQuality
+│   ├── trace.py                 # ExecutionTrace, TraceEvent, DebugTraceEvent
+│   ├── execution_context.py     # ExecutionContext — unified run state
+│   ├── runtime.py               # CozmoRuntime — unified execution loop
+├── orchestrator/
+│   ├── evidence.py              # EvidenceDetector, EvidenceSignal
+│   ├── task_types.py            # TaskAnalysis, GroundingDecision, EvidenceAnalysis
+│   ├── orchestrator.py          # Orchestrator — analysis pipeline
+│   ├── intent.py                # IntentDetector, classify_intent
+```
+
+### Current Focus
+**Evidence Processing Layer** — not yet implemented. Next milestone.

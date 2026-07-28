@@ -10,6 +10,14 @@ from . import register_tool
 log = logging.getLogger("cozmo.search")
 
 
+_SEARXNG_TIME_MAP = {
+    "d": "day",
+    "w": "week",
+    "m": "month",
+    "y": "year",
+}
+
+
 def _search_searxng(query: str, max_results: int = 5, timelimit: str = None) -> list[dict]:
     if not query or not query.strip():
         return []
@@ -28,7 +36,8 @@ def _search_searxng(query: str, max_results: int = 5, timelimit: str = None) -> 
         "language": "en",
     })
     if timelimit:
-        params += f"&time_range={timelimit}"
+        time_val = _SEARXNG_TIME_MAP.get(timelimit, timelimit)
+        params += f"&time_range={time_val}"
 
     url = f"{searxng_url}/search?{params}"
     try:

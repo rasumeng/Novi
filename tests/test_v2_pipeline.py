@@ -157,7 +157,7 @@ class TestRuntimeStream:
         events = list(runtime.run_stream("say hello"))
         kinds = [e[0] for e in events]
         assert "status" in kinds
-        assert "thinking" in kinds
+        assert "thinking" in kinds or "trace" in kinds
         assert "token" in kinds
 
     def test_stream_ends_with_token(self, runtime):

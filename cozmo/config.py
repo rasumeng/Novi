@@ -79,6 +79,45 @@ DEFAULT_CONFIG = {
         },
         "force_capability": "",
         "force_model": "",
+        "tools": {
+            "fallbacks": {
+                "web_search": ["web_search_pipeline"],
+                "web_fetch": ["web_search_pipeline"],
+            },
+        },
+        "planning": {
+            "auto_threshold": 1,
+        },
+        "routing": {
+            "intent_capabilities": {
+                "conversation": ["conversation"],
+                "research": ["research", "conversation"],
+                "coding": ["coding", "filesystem", "terminal"],
+                "planning": ["planning", "conversation"],
+                "vision": ["vision", "conversation"],
+            },
+            "intent_roles": {
+                "conversation": "chat",
+                "research": "planner",
+                "coding": "coder",
+                "planning": "planner",
+                "vision": "vision",
+            },
+            "capability_roles": {
+                "coding": "coder",
+                "planning": "planner",
+                "research": "planner",
+                "conversation": "chat",
+                "vision": "vision",
+            },
+            "capability_preferences": {
+                "coding": ["coding", "planning", "research", "conversation"],
+                "planning": ["planning", "research", "coding", "conversation"],
+                "research": ["research", "conversation", "coding"],
+                "conversation": ["conversation", "research"],
+                "vision": ["vision", "conversation"],
+            },
+        },
     },
     "agents": {
         "primary": ["build", "plan"],

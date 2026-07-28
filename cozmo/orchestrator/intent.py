@@ -29,12 +29,18 @@ _RESEARCH_KEYWORDS = [
 
 _CODING_KEYWORDS = [
     "read_file", "write_file", "edit_file",
-    " implement ", " refactor ", " debug ",
+    "implement", "refactor", "debug",
     ".py", ".js", ".ts", ".rs", ".go", ".java", ".cpp",
     "run_command", "execute_python",
-    "npm ", "pip ", "cargo ", "git ",
-    "import ", "def ", "class ", "function ",
-    "fix the bug", "add feature", "write test",
+    "npm", "pip", "cargo", "git",
+    "import", "def", "class", "function",
+]
+
+# Multi-word coding patterns — regex with flexible word separation
+_CODING_PATTERNS = [
+    r"\bfix\s+(the\s+)?(bug|issue|problem)\b",
+    r"\badd\s+(.+\s+)?(feature|functionality|test)\b",
+    r"\bwrite\s+(.+\s+)?(test|function|class|script)\b",
 ]
 
 _ROUTE_PROMPT = """Classify the user's latest request as exactly one word:
@@ -92,10 +98,13 @@ def classify_intent(user_input: str,
 
     query_lower = user_input.lower()
     for kw in _RESEARCH_KEYWORDS:
-        if kw in query_lower:
+        if re.search(r'\b' + re.escape(kw) + r'\b', query_lower):
             return IntentType.RESEARCH
     for kw in _CODING_KEYWORDS:
-        if kw in query_lower:
+        if re.search(r'\b' + re.escape(kw) + r'\b', query_lower):
+            return IntentType.CODING
+    for pattern in _CODING_PATTERNS:
+        if re.search(pattern, query_lower):
             return IntentType.CODING
 
     if router_llm is None:

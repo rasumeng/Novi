@@ -22,6 +22,16 @@ def register_builtin_capabilities(registry: CapabilityRegistry):
     ))
 
     registry.register(Capability(
+        id="search",
+        description="Lightweight web search for current information",
+        tools=["web_search", "web_fetch"],
+        optional_tools=["fetch_url"],
+        preferred_model_capability="chat",
+        planner_strategy="none",
+        risk="low",
+    ))
+
+    registry.register(Capability(
         id="research",
         description="Web research and information gathering",
         tools=["web_search", "web_search_pipeline", "web_fetch", "calculator", "search_knowledge"],

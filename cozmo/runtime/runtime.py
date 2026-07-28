@@ -21,6 +21,9 @@ import base64
 import logging
 import re
 import threading
+import time
+from dataclasses import dataclass, field
+from enum import Enum
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +38,11 @@ from langchain_core.tools import StructuredTool
 
 from ..orchestrator.intent import classify_intent, IntentType
 from .model_router import ModelRequirement
+from .trace import DebugTraceEvent, ExecutionTrace, StepTrace, ToolCallTrace, TraceAction, TraceEvent
+from .execution_context import ExecutionContext
+from .evidence import EvidenceBundle, EvidenceCollector, RetrievalQuality
+from .retrieval_policy import RetrievalPlan, RetrievalSource, RetrievalStrategy
+from .retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
 from ..capabilities import CapabilityRegistry
 from ..capabilities.builtin import register_builtin_capabilities
 from .model_router import ModelRouter
@@ -52,6 +60,15 @@ _INTENT_TO_ROLE = {
     "research": "planner",
     "coding": "coder",
     "planning": "planner",
+    "vision": "vision",
+}
+
+# Capability → model role mapping (used when orchestrator analysis available)
+_CAPABILITY_TO_ROLE = {
+    "coding": "coder",
+    "planning": "planner",
+    "research": "planner",
+    "conversation": "chat",
     "vision": "vision",
 }
 
@@ -158,6 +175,7 @@ from .tool_registry import ToolRegistry
 from .event_bus import EventBus, EventType
 from .lessons import LessonStore
 from ..tools import TOOL_REGISTRY
+from ..memory.knowledge_index import get_knowledge_index
 from ..models import ModelUnavailableError
 
 
@@ -208,6 +226,8 @@ _IDENTITY = (
     "- When the task is complete, respond with a normal message and NO tool call. "
     "That message is shown to the user as the final answer.\n"
     "- Be concise and direct. No hedging ('as of my last update'), no filler.\n"
+    "- When provided with search results, use them as your primary source.\n"
+    "- Your internal knowledge supplements, not replaces, current evidence.\n"
 )
 
 _COLLAB_PLAN_PROMPT = """You are planning a multi-step task. Review the context and generate a clear, numbered plan.
@@ -237,10 +257,16 @@ Context note:"""
 # text-fallback: models that don't emit native tool_calls sometimes emit JSON.
 _TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-# Plain web_search first: grounding needs fast raw results. The full
-# pipeline (rewrite LLM + page fetches + synthesis LLM) is too slow to
-# run synchronously before every research answer.
-_SEARCH_TOOL_PREFERENCE = ("web_search", "web_search_pipeline")
+
+class RecoveryAction(str, Enum):
+    NONE = "none"
+    UPGRADE_SEARCH = "upgrade_search"
+
+
+@dataclass
+class RecoveryDecision:
+    action: RecoveryAction = RecoveryAction.NONE
+    reason: str = ""
 
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
@@ -259,6 +285,8 @@ class CozmoRuntime:
         router_llm: object | None = None,
         skills: dict | None = None,
         event_bus=None,
+        orchestrator=None,
+        debug_trace: bool = False,
     ):
         self.model_manager = model_manager
         self.model_service = model_service
@@ -268,6 +296,7 @@ class CozmoRuntime:
         self.project_index = project_index
         self.cfg = cfg or {}
         self.event_bus = event_bus
+        self._orchestrator = orchestrator
         self.history: list[tuple[str, str]] = []
         self._summary: str = ""  # compacted old history
 
@@ -295,6 +324,8 @@ class CozmoRuntime:
         ) if self._skills else "(none installed)"
         self.stop_event: threading.Event | None = None
         self._agent_system_extra: str = ""
+        self.debug_trace = debug_trace
+        self._active_coordinator: RetrievalCoordinator | None = None
         self.lesson_store = LessonStore()
 
         # Phase 4: capability-based tool resolution
@@ -303,7 +334,13 @@ class CozmoRuntime:
 
         llm_cfg = self.cfg.get("llm", {})
         default_model = llm_cfg.get("default_model") or "qwen3:8b"
-        self._model_router = ModelRouter(default_model=default_model, resource_manager=None)
+        routing = rt.get("routing", {})
+        cap_prefs = routing.get("capability_preferences")
+        self._model_router = ModelRouter(
+            default_model=default_model,
+            resource_manager=None,
+            capability_preferences=cap_prefs,
+        )
         if self.model_service:
             self._model_router.populate_from_service(self.model_service, self.cfg)
 
@@ -313,6 +350,20 @@ class CozmoRuntime:
             log.info("force_capability set to %s (debug override)", self.force_capability)
         if self.force_model:
             log.info("force_model set to %s (debug override)", self.force_model)
+
+        # Config-driven routing (Phase 5C)
+        routing = rt.get("routing", {})
+        self._intent_cap_ids = routing.get("intent_capabilities", _INTENT_TO_CAP_IDS)
+        self._intent_roles = routing.get("intent_roles", _INTENT_TO_ROLE)
+        self._capability_roles = routing.get("capability_roles", _CAPABILITY_TO_ROLE)
+
+        # Tool fallback chains (Phase 5E.2)
+        tools_cfg = rt.get("tools", {})
+        self._tool_fallbacks: dict[str, list[str]] = tools_cfg.get("fallbacks", {})
+
+        # Planning threshold (Phase 5F): plan_level >= this triggers planning
+        planning_cfg = rt.get("planning", {})
+        self._planning_threshold = planning_cfg.get("auto_threshold", 1)
 
     def _check_stop(self):
         """Stop the generator early if stop_event was set."""
@@ -360,9 +411,11 @@ class CozmoRuntime:
             msgs.append(AIMessage(content=assistant))
         return msgs
 
-    def _query_memory(self, user_input: str, intent: str = "conversation") -> str:
+    def _query_memory(self, user_input: str, intent: str = "conversation",
+                      trace=None) -> str:
         if not self.memory:
             return ""
+        t0 = time.time()
         try:
             type_filter = self._memory_types_for_intent(intent)
             results = self.memory.query(
@@ -371,9 +424,14 @@ class CozmoRuntime:
                 distance_threshold=self.memory_distance_threshold,
                 memory_types=type_filter,
             )
+            if trace is not None:
+                trace.memory_queried = True
             if not results:
                 return ""
             results = self._rank_memories(results)[:self.max_memory_results]
+            if trace is not None:
+                trace.memory_result_count = len(results)
+                trace.memory_latency_ms = round((time.time() - t0) * 1000, 2)
             sections = []
             type_labels = set()
             for r in results:
@@ -427,10 +485,13 @@ class CozmoRuntime:
 
     def _system_prompt(self, user_input: str, intent: str = "conversation",
                        grounding: str = "",
+                       grounding_error: str | None = None,
                        attachments: list[dict] | None = None,
                        activated_skills: list[dict] | None = None,
                        profile=None,
-                       allowed_tools: list[str] | None = None) -> str:
+                       allowed_tools: list[str] | None = None,
+                       analysis=None,
+                       trace=None) -> str:
         parts = [_IDENTITY.format(date=datetime.now().strftime("%A, %B %d, %Y"))]
 
         if profile and hasattr(profile, 'system_prompt_extra') and profile.system_prompt_extra:
@@ -467,7 +528,13 @@ class CozmoRuntime:
         if self._summary:
             parts.append(f"\nContext from earlier in this session:\n{self._summary}")
 
-        memory = self._query_memory(user_input, intent)
+        # Evidence-gated memory retrieval (Phase 5D)
+        should_query = False
+        if analysis is not None:
+            should_query = analysis.evidence.needs_memory
+        else:
+            should_query = intent in ("conversation", "planning")
+        memory = self._query_memory(user_input, intent, trace=trace) if should_query else ""
         if memory:
             parts.append(f"\nRelevant memory from past sessions:{memory}")
 
@@ -486,10 +553,45 @@ class CozmoRuntime:
         if grounding:
             parts.append(
                 "\nSearch results for the user's question (use these as your "
-                f"primary source):\n{grounding}"
+                "primary source — they reflect current information):\n"
+                f"{grounding}\n\n"
+                "IMPORTANT: Prioritize the search results above over your "
+                "internal knowledge. Use your internal knowledge only to "
+                "supplement or explain. If the search results are incomplete "
+                "or inconclusive, say so."
+            )
+        elif grounding_error:
+            parts.append(
+                "\nThe web search service encountered an error while looking "
+                "up current information. You may need to rely on your internal "
+                "knowledge, or suggest the user try again later. Do NOT "
+                "pretend no information exists — explain that retrieval failed."
             )
 
         return "\n\n".join(parts)
+
+    # ── trace event helper ──────────────────────────────────────────────
+
+    def _trace_event(self, action: TraceAction, category: str, summary: str,
+                     trace=None,
+                     debug_category: str | None = None,
+                     debug_data: dict | None = None) -> TraceEvent:
+        """Build and yield a TraceEvent to both the stream and event bus.
+
+        Translates internal decisions into user-facing explanations.
+        Does NOT expose internal objects (GroundingDecision, EvidenceAnalysis).
+
+        When debug_trace=True and trace is provided, also records a
+        DebugTraceEvent with raw internal state in trace.debug_events.
+        """
+        event = TraceEvent(action=action, category=category, summary=summary)
+        if trace is not None:
+            trace.user_events.append(event)
+        self._emit_bus("trace_event", trace_event=event.to_dict())
+        if self.debug_trace and trace is not None and debug_category:
+            dbg = DebugTraceEvent(category=debug_category, data=debug_data)
+            trace.debug_events.append(dbg)
+        return event
 
     # ── skills ────────────────────────────────────────────────────────────
 
@@ -532,40 +634,256 @@ class CozmoRuntime:
 
     # ── forced grounding search (research mode) ──────────────────────────
 
-    def _grounding_search(self, user_input: str) -> str:
+    _SEARCH_STOPWORDS = {
+        "what", "is", "the", "are", "how", "to", "in", "of", "for", "a", "an",
+        "and", "or", "on", "at", "by", "with", "from", "do", "does", "can",
+        "will", "would", "should", "could", "did", "has", "have", "had",
+        "was", "were", "be", "been", "being", "get", "got", "am", "its",
+        "it's", "its", "that", "this", "these", "those", "i", "my", "me",
+        "you", "your", "we", "our", "they", "them", "their", "he", "she",
+        "him", "her", "his", "tell", "give", "show", "find", "help",
+        "when", "where", "why", "which", "who", "whom",
+    }
+
+    @staticmethod
+    def _key_terms(query: str) -> list[str]:
+        """Extract meaningful search terms, skipping stopwords."""
+        tokens = re.findall(r"[A-Za-z0-9]+", query.lower())
+        return [t for t in tokens if t not in CozmoRuntime._SEARCH_STOPWORDS and len(t) > 1]
+
+    @staticmethod
+    def _relevance_score(results_text: str, key_terms: list[str]) -> float:
+        """Fraction of key terms appearing in results text."""
+        if not key_terms:
+            return 1.0
+        lower = results_text.lower()
+        hits = sum(1 for t in key_terms if t in lower)
+        return hits / len(key_terms)
+
+    @staticmethod
+    def _reformulate_query(original: str, key_terms: list[str]) -> str:
+        """Build a reformulated query from key terms when original failed."""
+        return " ".join(key_terms[:6])
+
+    def _grounding_search(self, user_input: str, trace=None) -> EvidenceBundle:
+        """Search web, collect evidence, return structured grounding text.
+
+        Uses EvidenceCollector for: search → rank (prioritize text) → fetch → merge.
+        Returns EvidenceBundle — check bundle.error to distinguish search API failure
+        from empty results. Sets bundle.quality to the final RetrievalQuality.
+        """
         if not user_input or not user_input.strip():
-            return ""
+            return EvidenceBundle(query=user_input)
         if self._check_stop():
+            return EvidenceBundle(query=user_input)
+        collector = EvidenceCollector()
+        bundle = collector.collect(user_input, min_sources=2)
+
+        if bundle.error:
+            log.warning("grounding search failed for '%s': %s", user_input, bundle.error)
+            bundle.quality = RetrievalQuality.FAILED
+            if trace is not None:
+                trace.debug_events.append(DebugTraceEvent(
+                    category="retrieval",
+                    data={
+                        "status": "failed",
+                        "error": bundle.error,
+                        "query": user_input,
+                        "provider": "searxng",
+                        "quality": bundle.quality.value,
+                    },
+                ))
+            return bundle
+
+        if not bundle.results or bundle.source_count == 0:
+            log.info("grounding search found no textual sources for '%s'", user_input)
+            bundle.quality = RetrievalQuality.EMPTY
+            if trace is not None:
+                trace.debug_events.append(DebugTraceEvent(
+                    category="retrieval",
+                    data={
+                        "status": "empty",
+                        "query": user_input,
+                        "provider": "searxng",
+                        "quality": bundle.quality.value,
+                    },
+                ))
+            return bundle
+
+        # Check relevance, reformulate and retry once if low
+        key_terms = self._key_terms(user_input)
+        relevance = self._relevance_score(bundle.merged_text, key_terms) if key_terms else 1.0
+        if key_terms and relevance < 0.3:
+            reformulated = self._reformulate_query(user_input, key_terms)
+            log.info("low relevance (%.2f) for '%s', retrying with '%s'",
+                     relevance, user_input, reformulated)
+            retry = collector.collect(reformulated, min_sources=1)
+            if retry.results and retry.source_count > 0:
+                bundle = retry
+                relevance = self._relevance_score(bundle.merged_text, key_terms) if key_terms else 1.0
+
+        # Assign quality based on final state
+        has_text = bool(bundle.merged_text and bundle.merged_text.strip())
+        bundle.quality = (
+            RetrievalQuality.SUFFICIENT
+            if has_text and relevance >= 0.3
+            else RetrievalQuality.WEAK
+        )
+        return bundle
+
+    # ── knowledge base retrieval (local) ─────────────────────────────────
+
+    def _retrieve_knowledge(self, query: str, k: int = 5) -> str:
+        """Query local knowledge base. Returns formatted text or empty string."""
+        try:
+            ki = get_knowledge_index()
+        except Exception:
             return ""
-        for name in _SEARCH_TOOL_PREFERENCE:
-            info = self._registry.get(name)
-            if info is None:
-                continue
-            try:
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    fut = pool.submit(info.fn, query=user_input)
-                    result = fut.result(timeout=15)
-                text = self._sanitize(str(result))
-                # A no-results/unavailable message is not grounding — return
-                # empty so the loop keeps search tools available instead.
-                if text.startswith("Web search unavailable"):
-                    log.warning("grounding search returned no results (%s)", name)
-                    return ""
-                return text
-            except FutureTimeout:
-                log.warning("grounding search timed out (%s)", name)
-                return ""
-            except Exception as e:
-                log.warning("grounding search failed (%s): %s", name, e)
-                return ""
-        return ""
+        if ki is None:
+            return ""
+        try:
+            results = ki.search(query, k=min(k, 20))
+        except Exception:
+            return ""
+        if not results:
+            return ""
+        lines = []
+        for r in results:
+            meta = r.get("metadata", {})
+            path = meta.get("path", "?")
+            title = meta.get("title", path)
+            score = r.get("score", 0.0)
+            text = r.get("text", "")[:300].replace("\n", " ")
+            lines.append(f"- **{title}** ({path}, score={score:.2f}): {text}")
+        return "\n".join(lines)
+
+    # ── retrieval plan execution ─────────────────────────────────────────
+
+    def _execute_retrieval_plan(self, ctx, user_input):
+        """Execute RetrievalPlan: KB-only, web-only, or KB→web escalation.
+
+        Sets ctx.grounding_text, ctx.grounding_quality, ctx.grounding_error,
+        ctx.retrieval_escalated, and trace retrieval fields.
+        Yields trace events for the stream.
+        """
+        plan = ctx.analysis.retrieval_plan
+        ctx.trace.retrieval_strategy = plan.strategy.value
+        ctx.trace.retrieval_sources = ",".join(s.value for s in plan.sources)
+        ctx.retrieval_plan = plan
+
+        if plan.strategy == RetrievalStrategy.NONE:
+            event = self._trace_event(
+                action=TraceAction.RESPONDING,
+                category="knowledge",
+                summary="This is a stable concept well-covered in available knowledge.",
+                trace=ctx.trace,
+                debug_category="grounding",
+                debug_data={
+                    "retrieval_plan": plan.strategy.value,
+                    "reason": plan.reason,
+                },
+            )
+            yield ("trace", event)
+            return
+
+        if plan.strategy == RetrievalStrategy.WEB_ONLY:
+            event = self._trace_event(
+                action=TraceAction.RETRIEVING,
+                category="information_retrieval",
+                summary="This question may depend on recent information. Looking up current data.",
+                trace=ctx.trace,
+                debug_category="grounding",
+                debug_data={
+                    "retrieval_plan": plan.strategy.value,
+                    "reason": plan.reason,
+                },
+            )
+            yield ("trace", event)
+            yield ("thinking", event.action.value, event.summary, user_input)
+            t0 = time.time()
+            bundle = self._grounding_search(user_input, trace=ctx.trace)
+            ctx.grounding_text = bundle.merged_text
+            ctx.grounding_error = bundle.error
+            ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
+            ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+            ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
+            ctx.trace.grounding_quality = ctx.grounding_quality
+            ctx.trace.grounding_source_count = bundle.source_count
+            ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+            return
+
+        if plan.strategy == RetrievalStrategy.KNOWLEDGE_ONLY:
+            event = self._trace_event(
+                action=TraceAction.RETRIEVING,
+                category="knowledge_retrieval",
+                summary="Searching local knowledge base for relevant information.",
+                trace=ctx.trace,
+                debug_category="retrieval",
+                debug_data={
+                    "retrieval_plan": plan.strategy.value,
+                    "reason": plan.reason,
+                },
+            )
+            yield ("trace", event)
+            yield ("thinking", "Searching knowledge base...", "", user_input)
+            t0 = time.time()
+            kb_text = self._retrieve_knowledge(user_input)
+            ctx.grounding_text = kb_text
+            ctx.grounding_quality = RetrievalQuality.SUFFICIENT.value if kb_text else RetrievalQuality.EMPTY.value
+            ctx.trace.grounding_searched = bool(kb_text)
+            ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
+            ctx.trace.grounding_quality = ctx.grounding_quality
+            ctx.trace.grounding_source_count = 1 if kb_text else 0
+            ctx.trace.grounding_relevance_score = 1.0 if kb_text else 0.0
+            return
+
+        if plan.strategy == RetrievalStrategy.KNOWLEDGE_THEN_WEB:
+            event = self._trace_event(
+                action=TraceAction.RETRIEVING,
+                category="information_retrieval",
+                summary="Searching local knowledge first, then web if needed.",
+                trace=ctx.trace,
+                debug_category="retrieval",
+                debug_data={
+                    "retrieval_plan": plan.strategy.value,
+                    "reason": plan.reason,
+                },
+            )
+            yield ("trace", event)
+            yield ("thinking", "Searching knowledge base...", "", user_input)
+            t0 = time.time()
+            kb_text = self._retrieve_knowledge(user_input)
+            if kb_text:
+                ctx.grounding_text = kb_text
+                ctx.grounding_quality = RetrievalQuality.SUFFICIENT.value
+                ctx.retrieval_escalated = False
+                ctx.trace.grounding_searched = True
+                ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
+                ctx.trace.grounding_quality = ctx.grounding_quality
+                ctx.trace.grounding_source_count = 1
+                ctx.trace.grounding_relevance_score = 1.0
+                return
+
+            ctx.retrieval_escalated = True
+            ctx.trace.retrieval_escalated = True
+            yield ("thinking", "Escalating to web search...", "", user_input)
+            bundle = self._grounding_search(user_input, trace=ctx.trace)
+            ctx.grounding_text = bundle.merged_text
+            ctx.grounding_error = bundle.error
+            ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
+            ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+            ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
+            ctx.trace.grounding_quality = ctx.grounding_quality
+            ctx.trace.grounding_source_count = bundle.source_count
+            ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+            return
 
     # ── agent mode: plan generation ──────────────────────────────────────
 
-    def _gather_agent_context(self, user_input: str) -> str:
+    def _gather_agent_context(self, user_input: str, trace=None) -> str:
         """Gather memory, project info, and search results for plan context."""
         parts = []
-        memory = self._query_memory(user_input)
+        memory = self._query_memory(user_input, trace=trace)
         if memory:
             parts.append(f"Memory from past sessions:\n{memory}")
         if self._project_context:
@@ -580,6 +898,11 @@ class CozmoRuntime:
         if self._summary:
             parts.append(f"Session summary:\n{self._summary}")
         return "\n\n".join(parts) if parts else "(no additional context)"
+
+    def _should_plan(self, analysis) -> bool:
+        if analysis is None:
+            return False
+        return analysis.complexity.plan_level >= self._planning_threshold
 
     def _generate_plan(self, user_input: str, context: str) -> str:
         """Use the research model to generate a structured plan."""
@@ -671,27 +994,72 @@ class CozmoRuntime:
         return None
 
     def _exec_tool(self, name: str, args: dict) -> str:
+        # Retrieval coordinator interception (budget + dedup)
+        coord = getattr(self, '_active_coordinator', None)
+        if coord is not None and coord.is_web_tool(name):
+            blocked = coord.intercept(name, args)
+            if blocked is not None:
+                return blocked
+
         info = self._registry.get(name)
         if info is None:
             known = ", ".join(sorted(t.name for t in self._registry.list()))
             out = f"Error: unknown tool '{name}'. Available tools: {known}"
             self.lesson_store.record(name, args, out)
+            if coord is not None:
+                coord.record(name, args, out)
             return out
         if not self._check_permission(name, args):
             out = (f"Error: the user DENIED permission for {name}. Do not retry "
                     f"this call — explain what you wanted to do and ask the user.")
             self.lesson_store.record(name, args, out)
+            if coord is not None:
+                coord.record(name, args, out)
             return out
         try:
             raw = str(info.fn(**args))
         except TypeError as e:
             out = f"Error: bad arguments for {name}: {e}. Check the tool schema and retry."
             self.lesson_store.record(name, args, out)
+            if coord is not None:
+                coord.record(name, args, out)
             return out
         except Exception as e:
             raw = f"Error: {e}"
         result = self._sanitize(raw)
+        result = self._validate_tool_result(name, result)
+
+        # Retry with fallback chain (Phase 5E.2)
+        if result.startswith("Error:") and name in self._tool_fallbacks:
+            for fb_name in self._tool_fallbacks[name]:
+                fb_info = self._registry.get(fb_name)
+                if fb_info is None:
+                    continue
+                try:
+                    fb_raw = str(fb_info.fn(**args))
+                    fb_result = self._sanitize(fb_raw)
+                    fb_result = self._validate_tool_result(fb_name, fb_result)
+                    if not fb_result.startswith("Error:"):
+                        self.lesson_store.record(name, args, result)
+                        self.lesson_store.record(fb_name, args, fb_result)
+                        if coord is not None:
+                            coord.record(name, args, fb_result)
+                        return fb_result
+                except Exception:
+                    continue
+
         self.lesson_store.record(name, args, result)
+        if coord is not None:
+            coord.record(name, args, result)
+        return result
+
+    def _validate_tool_result(self, name: str, result: str) -> str:
+        if not result or not result.strip():
+            return f"Error: {name} returned empty output"
+        if "permission denied" in result.lower():
+            return f"Error: {name} — permission denied. Try a different approach."
+        if "timed out" in result.lower() or "timeout" in result.lower():
+            return f"Error: {name} timed out. Try a simpler query or different tool."
         return result
 
     def _sanitize(self, text: str) -> str:
@@ -706,6 +1074,85 @@ class CozmoRuntime:
     @staticmethod
     def _tool_category(name: str) -> str:
         return _TOOL_CATEGORIES.get(name, "other")
+
+    # ── recovery (Knowledge Assessment / Runtime Recovery) ────────────────
+
+    def _evaluate_recovery(self, ctx, step, calls_this_step) -> RecoveryDecision:
+        """Determine whether runtime recovery is warranted.
+
+        Conditions (all must hold):
+        1. Retrieval was attempted (quality recorded)
+        2. Quality is not SUFFICIENT
+        3. Model chose to answer without calling any tool
+        4. Below recovery attempt limit
+        5. Either: needs_grounding was True, OR a retrieval plan with sources was active
+        """
+        quality_str = ctx.grounding_quality
+        if not quality_str:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason="no retrieval quality recorded")
+
+        try:
+            quality = RetrievalQuality(quality_str)
+        except ValueError:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason="unrecognized quality")
+
+        if quality == RetrievalQuality.SUFFICIENT:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason="retrieval was sufficient")
+
+        needs_grounding = (
+            ctx.analysis is not None
+            and ctx.analysis.grounding.needs_grounding
+        )
+        had_plan = (
+            ctx.analysis is not None
+            and ctx.analysis.retrieval_plan is not None
+            and ctx.analysis.retrieval_plan.strategy not in (RetrievalStrategy.NONE,)
+        )
+        if not needs_grounding and not had_plan:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason="no retrieval was requested")
+
+        if calls_this_step > 0:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason="model is already using tools")
+
+        if ctx.trace.recovery_attempts >= 1:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason="max recovery attempts reached")
+
+        return RecoveryDecision(
+            action=RecoveryAction.UPGRADE_SEARCH,
+            reason=f"retrieval quality={quality_str}, model answered without tools",
+        )
+
+    def _apply_recovery(self, ctx, runnable, model_name, temperature, decision, msgs):
+        """Apply the recovery decision: upgrade capabilities, rebind runnable,
+        inject system message, log debug event."""
+        if decision.action == RecoveryAction.NONE:
+            return runnable
+
+        if decision.action == RecoveryAction.UPGRADE_SEARCH:
+            search_tools = self._capability_registry.get_tool_names(["search"])
+            ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
+            lc_tools = self._tools_for_mode(allowed_tools=ctx.allowed_tools)
+            mm = self.model_service if self.model_service else self.model_manager
+            runnable = mm.bind_model(model_name, lc_tools, temperature=temperature)
+            msgs.append(SystemMessage(
+                content="[Web search tools (web_search, web_fetch) are now available. "
+                        "Use them if you need current information.]"
+            ))
+            ctx.trace.recovery_attempts += 1
+            ctx.trace.recovery_action = decision.action.value
+
+            if self.debug_trace and ctx.trace is not None:
+                ctx.trace.debug_events.append(DebugTraceEvent(
+                    category="recovery",
+                    data={
+                        "action": decision.action.value,
+                        "reason": decision.reason,
+                        "attempt": ctx.trace.recovery_attempts,
+                        "allowed_tools": list(ctx.allowed_tools),
+                    },
+                ))
+
+        return runnable
 
     # ── main streaming loop ──────────────────────────────────────────────
 
@@ -734,12 +1181,47 @@ class CozmoRuntime:
             except Exception:
                 pass
 
-    def run_stream(self, user_input: str, attachments: list[dict] | None = None,
+    # ── tracing ──────────────────────────────────────────────────────────
+
+    def _finalize_trace(self, stop_reason: str = "completed", trace=None):
+        if trace is None:
+            return
+        trace.total_latency_ms = round((time.time() - trace.started_at) * 1000, 2)
+        trace.total_tool_calls = sum(len(s.tool_calls) for s in trace.steps)
+        trace.stop_reason = stop_reason
+        trace.emit_event(self.event_bus)
+
+    def _record_tool_call(self, step_idx: int, name: str, args: dict,
+                          result: str, latency_ms: float, success: bool,
+                          error: str | None = None,
+                          fallback_used: str | None = None,
+                          trace=None):
+        if trace is None:
+            return
+        while len(trace.steps) <= step_idx:
+            trace.steps.append(StepTrace(step=len(trace.steps)))
+        step = trace.steps[step_idx]
+        step.tool_calls.append(ToolCallTrace(
+            name=name,
+            args=dict(args),
+            result_preview=(result or "")[:200],
+            latency_ms=round(latency_ms, 2),
+            success=success,
+            error=error,
+            fallback_used=fallback_used,
+        ))
+
+    def run_stream(self, user_input: str | None = None,
+                   attachments: list[dict] | None = None,
                    force_mode: str | None = None, agent_runtime=None,
                    force_capability: str | None = None,
                    force_model: str | None = None,
-                   execution_plan: object | None = None):
+                   execution_plan: object | None = None,
+                   context: ExecutionContext | None = None):
         """Yield (kind, text) tuples. Unified pipeline — no mode branching.
+
+        Prefer passing a pre-built ExecutionContext via ``context=``.
+        Legacy positional params are still supported for backward compat.
 
         force_mode is deprecated compat: logged, ignored for routing.
         AgentRuntime support via agent_runtime param (legacy path).
@@ -748,95 +1230,378 @@ class CozmoRuntime:
         """
         intent_str = "conversation"
         try:
-            has_images = attachments and any(a.get("type") == "image" for a in attachments)
-            activated_skills: list[dict] = self._scan_skills(user_input, [])
+            # ── Build or adopt ExecutionContext ────────────────────────────
+            ctx = context
+            if ctx is None:
+                # Legacy path: build context from old params
+                ctx = ExecutionContext(
+                    user_input=user_input or "",
+                    attachments=attachments or [],
+                    history=list(self.history),
+                    summary=self._summary,
+                    force_model=force_model or self.force_model,
+                    force_capability=force_capability or self.force_capability,
+                )
+            # Ensure trace exists
+            if ctx.trace is None:
+                ctx.trace = ExecutionTrace(user_input=ctx.user_input)
+            # Sync user_input for backward compat (e.g. _remember calls)
+            user_input = ctx.user_input
 
-            # ── deprecated force_mode compat / execution plan ───────────
-            if execution_plan is not None:
-                intent_str = execution_plan.goal.intent.value
+            has_images = ctx.attachments and any(a.get("type") == "image" for a in ctx.attachments)
+            ctx.has_images = has_images
+            if not ctx.activated_skills:
+                ctx.activated_skills = self._scan_skills(user_input, [])
+
+            # ── Analysis phase: orchestrator or fallback ──────────────────
+            if ctx.execution_plan is not None:
+                # Pre-computed plan from webui orchestrator path
+                ctx.analysis = ctx.execution_plan.context.get("analysis")
+                if not ctx.allowed_tools:
+                    ctx.allowed_tools = list(ctx.execution_plan.tools)
+            elif ctx.analysis is not None:
+                # Pre-populated from context (new path)
+                ctx.trace.complexity_score = ctx.analysis.complexity.score
+                ctx.trace.plan_level = ctx.analysis.complexity.plan_level
+                if self.debug_trace:
+                    ctx.trace.debug_events.append(DebugTraceEvent(
+                        category="analysis",
+                        data={
+                            "signals": [s.type for s in ctx.analysis.evidence.signals],
+                            "confidence": ctx.analysis.evidence.confidence,
+                            "needs_grounding": ctx.analysis.grounding.needs_grounding,
+                            "grounding_confidence": ctx.analysis.grounding.confidence,
+                            "grounding_source": ctx.analysis.grounding.source,
+                        },
+                    ))
+                if not ctx.allowed_tools:
+                    ctx.allowed_tools = self._capability_registry.get_tool_names(ctx.cap_ids)
+            elif self._orchestrator is not None:
+                # Single analysis pipeline: TaskAnalysis drives routing
+                ctx.analysis = self._orchestrator.analyze(user_input, self.history, has_images)
+                ctx.allowed_tools = self._capability_registry.get_tool_names(ctx.cap_ids)
+                ctx.trace.complexity_score = ctx.analysis.complexity.score
+                ctx.trace.plan_level = ctx.analysis.complexity.plan_level
+                if self.debug_trace:
+                    ctx.trace.debug_events.append(DebugTraceEvent(
+                        category="analysis",
+                        data={
+                            "signals": [s.type for s in ctx.analysis.evidence.signals],
+                            "confidence": ctx.analysis.evidence.confidence,
+                            "needs_grounding": ctx.analysis.grounding.needs_grounding,
+                            "grounding_confidence": ctx.analysis.grounding.confidence,
+                            "grounding_source": ctx.analysis.grounding.source,
+                        },
+                    ))
             elif force_mode is not None:
                 log.warning("force_mode='%s' is deprecated. Use force_capability / force_model.", force_mode)
-                intent_str = force_mode
+                cap_name = ctx.force_capability or force_mode
+                ctx.allowed_tools = self._capability_registry.get_tool_names(
+                    self._intent_cap_ids.get(cap_name, ["conversation"]))
             else:
+                # Legacy fallback: standalone intent classification
                 intent = classify_intent(user_input, self.router_llm, self.history, has_images)
-                intent_str = intent.value
+                cap_name = ctx.force_capability or intent.value
+                ctx.allowed_tools = self._capability_registry.get_tool_names(
+                    self._intent_cap_ids.get(cap_name, ["conversation"]))
 
-            yield ("status", "Routing...")
-            if activated_skills:
-                names = ", ".join(s["name"] for s in activated_skills)
-                yield ("thinking", f"Intent: {intent_str} — Skills: {names}", f"Operating on {intent_str} intent with skills: {names}", None)
-            else:
-                yield ("thinking", f"Intent: {intent_str}", f"Operating on {intent_str} intent", None)
+            intent_str = ctx.intent_str
+            ctx.trace.intent = intent_str
+
+            yield ("status", "Analyzing request...")
+            event = self._trace_event(
+                action=TraceAction.UNDERSTANDING,
+                category="reasoning",
+                summary="Determining how to process this question.",
+                trace=ctx.trace,
+                debug_category="analysis",
+                debug_data={
+                    "intent": intent_str,
+                    "has_orchestrator": self._orchestrator is not None,
+                },
+            )
+            yield ("trace", event)
             self._emit_bus("intent_set", intent=intent_str)
+            # ── Stop checkpoint — after thinking, before routing ──────────
+            if self._check_stop():
+                self._finalize_trace("stopped", trace=ctx.trace)
+                return
+ 
+            # ── Retrieval (phase 2: pre-loop execution) ──────────────────
+            if (ctx.analysis is not None
+                    and ctx.analysis.retrieval_plan is not None
+                    and ctx.analysis.retrieval_plan.strategy != RetrievalStrategy.NONE):
+                for kind_value in self._execute_retrieval_plan(ctx, user_input):
+                    yield kind_value
+            elif ctx.analysis is not None and ctx.analysis.grounding.needs_grounding:
+                grounding_data = {
+                    "needs_grounding": True,
+                    "confidence": ctx.analysis.grounding.confidence,
+                    "source": ctx.analysis.grounding.source,
+                    "reason": ctx.analysis.grounding.reason,
+                    "signals": [s.type for s in ctx.analysis.evidence.signals],
+                    "evidence_confidence": ctx.analysis.evidence.confidence,
+                }
+                event = self._trace_event(
+                    action=TraceAction.RETRIEVING,
+                    category="information_retrieval",
+                    summary="This question may depend on recent information. Looking up current data.",
+                    trace=ctx.trace,
+                    debug_category="grounding",
+                    debug_data=grounding_data,
+                )
+                yield ("trace", event)
+                yield ("thinking", event.action.value, event.summary, user_input)
+                t0 = time.time()
+                bundle = self._grounding_search(user_input, trace=ctx.trace)
+                ctx.grounding_text = bundle.merged_text
+                ctx.grounding_error = bundle.error
+                ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
+                ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+                ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
+                ctx.trace.grounding_quality = ctx.grounding_quality
+                ctx.trace.grounding_source_count = bundle.source_count
+                ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+            elif ctx.analysis is not None:
+                grounding_data = {
+                    "needs_grounding": False,
+                    "confidence": ctx.analysis.grounding.confidence,
+                    "source": ctx.analysis.grounding.source,
+                    "reason": ctx.analysis.grounding.reason,
+                    "signals": [s.type for s in ctx.analysis.evidence.signals],
+                    "evidence_confidence": ctx.analysis.evidence.confidence,
+                }
+                event = self._trace_event(
+                    action=TraceAction.RESPONDING,
+                    category="knowledge",
+                    summary="This is a stable concept well-covered in available knowledge.",
+                    trace=ctx.trace,
+                    debug_category="grounding",
+                    debug_data=grounding_data,
+                )
+                yield ("trace", event)
+            elif intent_str == "research":
+                event = self._trace_event(
+                    action=TraceAction.RETRIEVING,
+                    category="information_retrieval",
+                    summary="This question depends on current information. Looking up data.",
+                    trace=ctx.trace,
+                    debug_category="grounding",
+                    debug_data={
+                        "intent": intent_str,
+                        "source": "fallback_intent",
+                    },
+                )
+                yield ("trace", event)
+                yield ("thinking", event.action.value, event.summary, user_input)
+                t0 = time.time()
+                bundle = self._grounding_search(user_input, trace=ctx.trace)
+                ctx.grounding_text = bundle.merged_text
+                ctx.grounding_error = bundle.error
+                ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+                ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
+                ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
+                ctx.trace.grounding_quality = ctx.grounding_quality
+                ctx.trace.grounding_source_count = bundle.source_count
+                ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
 
-            # ── optional grounding search (research intent) ──────────────
-            grounding = ""
-            if intent_str == "research":
-                yield ("thinking", "Searching...", "Searching the web for context", user_input)
-                grounding = self._grounding_search(user_input)
+            # ── Retrieval coordinator setup ─────────────────────────────
+            coord = RetrievalCoordinator()
+            if ctx.analysis is not None and ctx.analysis.retrieval_plan is not None:
+                plan_strat = ctx.analysis.retrieval_plan.strategy
+                if plan_strat == RetrievalStrategy.WEB_ONLY:
+                    coord.budget.max_web_searches = 1
+                    coord.budget.max_web_fetches = 1
+                elif plan_strat == RetrievalStrategy.KNOWLEDGE_THEN_WEB:
+                    coord.budget.max_web_searches = 1
+                    coord.budget.max_web_fetches = 1
+                elif plan_strat == RetrievalStrategy.KNOWLEDGE_ONLY:
+                    coord.budget.max_web_searches = 0
+                    coord.budget.max_web_fetches = 0
+            if ctx.grounding_text and ctx.grounding_quality:
+                coord.seed_cache(ctx.user_input, ctx.grounding_text)
+            ctx.retrieval_coordinator = coord
+            ctx.retrieval_budget = coord.budget
+            self._active_coordinator = coord
 
-            # ── capability-based tool resolution (Phase 4) ────────────────
+            # ── Model / tool routing ─────────────────────────────────────
             profile = None
-            if execution_plan is not None:
-                allowed_tools = execution_plan.tools
-                model_name = execution_plan.model_spec.get("model", "") or force_model or ""
-                role = _INTENT_TO_ROLE.get(intent_str, "chat")
-                if self.model_service and not force_model:
+            if ctx.execution_plan is not None:
+                ctx.model_name = ctx.execution_plan.model_spec.get("model", "") or ctx.force_model or ""
+                ctx.role = self._intent_roles.get(intent_str, "chat")
+                if self.model_service and not ctx.force_model:
                     try:
-                        _, role_model = self.model_service.resolve(role)
+                        _, role_model = self.model_service.resolve(ctx.role)
                         if role_model:
-                            model_name = role_model
+                            ctx.model_name = role_model
                     except Exception:
                         pass
-                temp = execution_plan.temperature
-                max_steps = execution_plan.max_steps
-            else:
-                cap_name = force_capability or intent_str
-                cap_ids = _INTENT_TO_CAP_IDS.get(cap_name, ["conversation"])
-                allowed_tools = self._capability_registry.get_tool_names(cap_ids)
-                model_name = force_model or ""
-                role = _INTENT_TO_ROLE.get(cap_name, "chat")
-                if not model_name:
+                ctx.temperature = ctx.execution_plan.temperature
+                ctx.max_steps = ctx.execution_plan.max_steps
+                ctx.model_supports_tools = ctx.execution_plan.model_spec.get("supports_tools", True)
+            elif ctx.analysis is not None:
+                # TaskAnalysis-driven routing: capabilities → role → model
+                if not ctx.model_name:
+                    ctx.model_name = ctx.force_model or ""
+                preferred_cap = ctx.cap_ids[0] if ctx.cap_ids else "conversation"
+                ctx.role = self._capability_roles.get(preferred_cap, "chat")
+                if not ctx.model_name:
                     if self.model_service:
                         try:
-                            _, role_model = self.model_service.resolve(role)
+                            _, role_model = self.model_service.resolve(ctx.role)
                             if role_model:
-                                model_name = role_model
+                                ctx.model_name = role_model
                         except Exception:
                             pass
-                if not model_name:
+                if not ctx.model_name:
+                    req = [ModelRequirement(capability=preferred_cap)]
+                    ctx.model_name = self._model_router.resolve(req)
+                ctx.temperature = self.temperature
+                ctx.max_steps = ctx.analysis.complexity.max_steps
+            else:
+                # Fallback: intent-based routing
+                cap_name = ctx.force_capability or intent_str
+                ctx.role = self._intent_roles.get(cap_name, "chat")
+                if not ctx.model_name:
+                    ctx.model_name = ctx.force_model or ""
+                if not ctx.model_name:
+                    if self.model_service:
+                        try:
+                            _, role_model = self.model_service.resolve(ctx.role)
+                            if role_model:
+                                ctx.model_name = role_model
+                        except Exception:
+                            pass
+                if not ctx.model_name:
                     req = [ModelRequirement(capability=cap_name)]
-                    model_name = self._model_router.resolve(req)
-                temp = self.temperature
-                max_steps = self.max_steps
+                    ctx.model_name = self._model_router.resolve(req)
+                ctx.temperature = self.temperature
+                ctx.max_steps = self.max_steps
 
-            yield ("model", model_name)
+            # Set model_supports_tools for non-plan paths
+            if ctx.execution_plan is None and intent_str == "vision":
+                ctx.model_supports_tools = False
+
+            ctx.trace.model_selected = ctx.model_name
+            ctx.trace.role = ctx.role
+            if ctx.execution_plan is not None:
+                ctx.trace.model_reason = "execution_plan"
+                ctx.model_reason = "execution_plan"
+            elif ctx.force_model:
+                ctx.trace.model_reason = "config_override"
+                ctx.model_reason = "config_override"
+            elif ctx.force_capability:
+                ctx.trace.model_reason = "force_capability"
+                ctx.model_reason = "force_capability"
+            else:
+                ctx.trace.model_reason = "role_match"
+                ctx.model_reason = "role_match"
+            yield ("model", ctx.model_name)
+
+            # ── Stop checkpoint — before planning ────────────────────────
+            if self._check_stop():
+                self._finalize_trace("stopped", trace=ctx.trace)
+                return
+
+            # ── Optional plan injection (Phase 5F) ─────────────────────────
+            if ctx.analysis is not None and self._should_plan(ctx.analysis):
+                event = self._trace_event(
+                    action=TraceAction.PLANNING,
+                    category="planning",
+                    summary="Analyzing request complexity and building execution plan.",
+                    trace=ctx.trace,
+                    debug_category="planning",
+                    debug_data={
+                        "plan_level": ctx.analysis.complexity.plan_level,
+                        "complexity_score": ctx.analysis.complexity.score,
+                    },
+                )
+                yield ("trace", event)
+                yield ("thinking", event.action.value, event.summary, None)
+                t0 = time.time()
+                ctx.plan_context = self._generate_plan(user_input, ctx.grounding_text)
+                ctx.trace.plan_generated = bool(ctx.plan_context)
+                ctx.trace.plan_latency_ms = round((time.time() - t0) * 1000, 2)
+                if ctx.plan_context:
+                    yield ("thinking", "Plan generated", ctx.plan_context[:200], None)
+            else:
+                ctx.trace.plan_generated = False
+                ctx.trace.plan_latency_ms = 0.0
+            # ── Stop checkpoint — after planning, before tool binding ────
+            if self._check_stop():
+                self._finalize_trace("stopped", trace=ctx.trace)
+                return
+
+            # ── Phase 2: pre-loop tool availability (RetrievalPlan-aware) ─
+            plan = ctx.analysis.retrieval_plan if ctx.analysis is not None else None
+            if plan is not None and plan.strategy in (
+                RetrievalStrategy.WEB_ONLY,
+                RetrievalStrategy.KNOWLEDGE_THEN_WEB,
+            ):
+                search_tools = self._capability_registry.get_tool_names(["search"])
+                missing = set(search_tools) - set(ctx.allowed_tools)
+                if missing:
+                    ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
+                    ctx.trace.recovery_attempts += 1
+                    ctx.trace.recovery_action = "upgrade_search"
+                    if self.debug_trace and ctx.trace is not None:
+                        ctx.trace.debug_events.append(DebugTraceEvent(
+                            category="recovery",
+                            data={
+                                "action": "upgrade_search",
+                                "reason": f"retrieval plan requires web: {plan.strategy.value}",
+                                "attempt": ctx.trace.recovery_attempts,
+                                "added_tools": list(missing),
+                            },
+                        ))
+            elif ctx.grounding_quality and ctx.grounding_quality != "sufficient":
+                if ctx.trace.recovery_attempts < 1:
+                    search_tools = self._capability_registry.get_tool_names(["search"])
+                    ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
+                    ctx.trace.recovery_attempts += 1
+                    ctx.trace.recovery_action = "upgrade_search"
+                    if self.debug_trace and ctx.trace is not None:
+                        ctx.trace.debug_events.append(DebugTraceEvent(
+                            category="recovery",
+                            data={
+                                "action": "upgrade_search",
+                                "reason": f"pre-loop: retrieval quality={ctx.grounding_quality}",
+                                "attempt": ctx.trace.recovery_attempts,
+                                "allowed_tools": list(ctx.allowed_tools),
+                            },
+                        ))
 
             # ── build ReAct loop ─────────────────────────────────────────
             lc_tools = self._tools_for_mode(capability=intent_str, profile=None,
-                                            allowed_tools=allowed_tools)
+                                            allowed_tools=ctx.allowed_tools)
+            ctx.trace.tools_bound = sorted(t.name for t in lc_tools)
+            ctx.trace.tools_available = sorted(t.name for t in lc_tools)
 
-            # Skip tool binding if model doesn't support tools (e.g. vision models)
-            model_supports_tools = True
-            if execution_plan is not None:
-                model_supports_tools = execution_plan.model_spec.get("supports_tools", True)
-            elif intent_str == "vision":
-                model_supports_tools = False
-            if not model_supports_tools:
+            if not ctx.model_supports_tools:
                 lc_tools = []
 
-            _SEARCH_TOOL_NAMES = {"web_search", "web_search_pipeline", "web_fetch", "fetch_url"}
-            _skip_search = bool(grounding)
-            if _skip_search:
-                lc_tools = [t for t in lc_tools if t.name not in _SEARCH_TOOL_NAMES]
-
             mm = self.model_service if self.model_service else self.model_manager
-            runnable = (mm.bind_model(model_name, lc_tools, temperature=temp)
-                        if lc_tools else mm.client_for_model(model_name, temp))
+            runnable = (mm.bind_model(ctx.model_name, lc_tools, temperature=ctx.temperature)
+                        if lc_tools else mm.client_for_model(ctx.model_name, ctx.temperature))
+
+            # Append plan context to grounding if planning was triggered
+            full_grounding = ctx.grounding_text
+            if ctx.plan_context:
+                full_grounding = (ctx.grounding_text + "\n\n" + ctx.plan_context) if ctx.grounding_text else ctx.plan_context
 
             msgs = [SystemMessage(content=self._system_prompt(
-                user_input, intent_str, grounding, attachments, activated_skills, profile,
-                allowed_tools=allowed_tools))]
+                user_input, intent_str, full_grounding,
+                grounding_error=ctx.grounding_error,
+                attachments=ctx.attachments, activated_skills=ctx.activated_skills, profile=profile,
+                allowed_tools=ctx.allowed_tools, analysis=ctx.analysis, trace=ctx.trace))]
+            coord = ctx.retrieval_coordinator
+            if coord is not None and coord.budget.max_web_searches > 0:
+                msgs.append(SystemMessage(
+                    content="[Retrieval guidance] Retrieval is in progress. Prefer using "
+                            "existing retrieved evidence. Avoid repeated searches unless "
+                            "previous evidence is clearly insufficient. Only one web search "
+                            f"and one web fetch are allowed."
+                ))
             msgs += self._history_messages()
 
             if has_images:
@@ -845,14 +1610,22 @@ class CozmoRuntime:
             else:
                 msgs.append(HumanMessage(content=user_input))
 
+            # ── Stop checkpoint — before ReAct loop ─────────────────────
+            if self._check_stop():
+                self._finalize_trace("stopped", trace=ctx.trace)
+                return
+
             final = ""
             seen_calls: set[str] = set()
-            for step in range(max_steps):
+            for step in range(ctx.max_steps):
                 acc = None
                 content_buf = ""
+                step_start = time.time()
+                tokens_in_step = 0
 
                 for chunk in runnable.stream(msgs):
                     if self._check_stop():
+                        self._finalize_trace("stopped", trace=ctx.trace)
                         return
                     acc = chunk if acc is None else acc + chunk
                     reasoning_content = chunk.additional_kwargs.get("reasoning_content", "")
@@ -861,15 +1634,22 @@ class CozmoRuntime:
                     piece = chunk.content or ""
                     if piece:
                         content_buf += piece
+                        tokens_in_step += 1
                         yield ("token", piece)
 
                 ai = acc if acc is not None else AIMessage(content=content_buf)
+                model_ms = round((time.time() - step_start) * 1000, 2)
+                while len(ctx.trace.steps) <= step:
+                    ctx.trace.steps.append(StepTrace(step=len(ctx.trace.steps)))
+                ctx.trace.steps[step].model_inference_ms = model_ms
+                ctx.trace.steps[step].tokens_generated = tokens_in_step
+
                 calls = self._extract_calls(ai)
 
                 if not calls:
-                    newly = self._scan_skills(content_buf, activated_skills)
+                    newly = self._scan_skills(content_buf, ctx.activated_skills)
                     if newly:
-                        activated_skills.extend(newly)
+                        ctx.activated_skills.extend(newly)
                         names = ", ".join(s["name"] for s in newly)
                         yield ("thinking", f"Activating skill: {names}",
                                f"Loading skill instructions: {names}", None)
@@ -877,6 +1657,11 @@ class CozmoRuntime:
                                     else AIMessage(content=content_buf))
                         for sk in newly:
                             msgs.append(SystemMessage(content=self._skill_block(sk)))
+                        continue
+                    decision = self._evaluate_recovery(ctx, step, 0)
+                    if decision.action != RecoveryAction.NONE:
+                        runnable = self._apply_recovery(ctx, runnable, ctx.model_name,
+                                                        ctx.temperature, decision, msgs)
                         continue
                     final = content_buf.strip()
                     break
@@ -898,33 +1683,62 @@ class CozmoRuntime:
                     call_id = f"call-{step}-{c['name']}"
                     yield ("tool_call", c["name"], c["args"], call_id, self._tool_category(c["name"]))
                     self._emit_bus("tool_called", tool=c["name"], args=c["args"], step=step)
+                    tool_t0 = time.time()
                     if sig in seen_calls:
                         out = (f"Error: you already made this exact {c['name']} call "
                                f"and have its result above. Use it, or try a "
                                f"DIFFERENT call — do not repeat yourself.")
+                        tool_success = False
                     else:
                         seen_calls.add(sig)
                         out = self._exec_tool(c["name"], c["args"])
+                        tool_success = not out.startswith("Error")
+                    tool_ms = round((time.time() - tool_t0) * 1000, 2)
+                    self._record_tool_call(
+                        step_idx=step, name=c["name"], args=c["args"],
+                        result=out, latency_ms=tool_ms, success=tool_success,
+                        error=out if out.startswith("Error") else None,
+                        trace=ctx.trace,
+                    )
 
                     diff = self._compute_diff(c["name"], c["args"])
                     yield ("tool_result", c["name"], out, call_id, diff)
                     self._emit_bus("tool_result", tool=c["name"], call_id=call_id,
                                    is_error=out.startswith("Error"))
                     msgs.append(ToolMessage(content=out, tool_call_id=c["id"]))
+
+                    # Post-tool recovery: search_knowledge returned empty → escalate to web
+                    if (c["name"] == "search_knowledge"
+                            and ("No matching knowledge found" in out or not out.strip())
+                            and ctx.trace.recovery_attempts < 1
+                            and not any(s in ctx.allowed_tools for s in
+                                        self._capability_registry.get_tool_names(["search"]))):
+                        search_tools = self._capability_registry.get_tool_names(["search"])
+                        ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
+                        new_lc_tools = self._tools_for_mode(allowed_tools=ctx.allowed_tools)
+                        runnable = mm.bind_model(ctx.model_name, new_lc_tools, temperature=ctx.temperature)
+                        ctx.trace.recovery_attempts += 1
+                        ctx.trace.recovery_action = "post_tool_escalation"
+                        msgs.append(SystemMessage(
+                            content="[Knowledge base returned no results. Web search tools "
+                                    "(web_search, web_fetch) are now available. Use them to find "
+                                    "current information.]"
+                        ))
+                        if self.debug_trace and ctx.trace is not None:
+                            ctx.trace.debug_events.append(DebugTraceEvent(
+                                category="recovery",
+                                data={
+                                    "action": "post_tool_escalation",
+                                    "reason": "search_knowledge returned empty in loop",
+                                    "step": step,
+                                    "tool": c["name"],
+                                },
+                            ))
+
                     if self._check_stop():
+                        self._finalize_trace("stopped", trace=ctx.trace)
                         return
                 yield ("thinking", "Thinking...", "Processing tool results and forming response", None)
-
-                if _skip_search:
-                    _skip_search = False
-                    if model_supports_tools:
-                        full_tools = self._tools_for_mode(capability=intent_str,
-                                                          allowed_tools=allowed_tools)
-                    else:
-                        full_tools = []
-                    mm = self.model_service if self.model_service else self.model_manager
-                    runnable = (mm.bind_model(model_name, full_tools, temperature=temp)
-                                if full_tools else mm.client_for_model(model_name, temp))
             else:
                 final = ("I ran out of steps before finishing. Here's where I "
                          "got to — ask me to continue if you want me to keep going.")
@@ -934,9 +1748,25 @@ class CozmoRuntime:
                 final = "(no response — the model returned empty output; try rephrasing)"
                 yield ("token", final)
 
+            stop_reason = "completed"
+            if not final.strip():
+                stop_reason = "empty"
+            elif "ran out of steps" in final:
+                stop_reason = "max_steps"
+            ctx.trace.final_response_length = len(final)
+            rc = ctx.retrieval_coordinator
+            if rc is not None:
+                ctx.trace.retrieval_search_count = rc.budget.searches_used
+                ctx.trace.retrieval_fetch_count = rc.budget.fetches_used
+                ctx.trace.retrieval_budget_exhausted = rc.budget.is_exhausted
+            self._finalize_trace(stop_reason, trace=ctx.trace)
+
             self._remember(user_input, final)
+            self._active_coordinator = None
 
         except Exception as e:
+            self._active_coordinator = None
+            self._finalize_trace("error", trace=ctx.trace)
             msg = f"I hit an error: {e}"
             yield ("token", msg)
             self._remember(user_input, msg)

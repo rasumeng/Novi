@@ -301,7 +301,7 @@ class TestRuntimeExecutionPlan:
             # allowed_tools from the plan are configured correctly.
             # Verify the intent was set from the plan.
             status_events = [e for e in events if e[0] == "status"]
-            assert any("conversation" in str(e).lower() or "routing" in str(e).lower() for e in status_events)
+            assert any("conversation" in str(e).lower() or "analyzing" in str(e).lower() for e in status_events)
 
     def test_execution_plan_uses_plan_model(self, runtime):
         """When execution_plan is provided, plan's model_spec is used."""

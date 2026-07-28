@@ -141,6 +141,23 @@ class CozmoContext:
             init_scheduler_tool(self._scheduler)
         return self._scheduler
 
+    @property
+    def orchestrator(self):
+        from ..orchestrator.orchestrator import Orchestrator
+        from ..orchestrator.intent import IntentDetector
+        from ..orchestrator.complexity import ComplexityEstimator
+        from ..orchestrator.evidence import EvidenceDetector
+
+        if not hasattr(self, "_orchestrator"):
+            self._orchestrator = None
+        if self._orchestrator is None:
+            self._orchestrator = Orchestrator(
+                intent_detector=IntentDetector(router_llm=self.router_llm),
+                complexity_estimator=ComplexityEstimator(),
+                evidence_detector=EvidenceDetector(router_llm=self.router_llm),
+            )
+        return self._orchestrator
+
     # ── lifecycle ───────────────────────────────────────────────────────
 
     def init_knowledge_index(self):
@@ -167,6 +184,7 @@ class CozmoContext:
             event_bus=overrides.get("event_bus", EventBus()),
             skills=overrides.get("skills", None),
             registry=overrides.get("registry", None),
+            orchestrator=overrides.get("orchestrator", self.orchestrator),
         )
         return runtime
 

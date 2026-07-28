@@ -94,10 +94,10 @@ class TestModelRouterComplexity:
         return r
 
     def test_preferred_model_used(self, router):
-        """When preferred model is registered and fits VRAM, use it."""
+        """Preferred model is used when its capability matches the requirement."""
         from cozmo.runtime.model_router import ModelRequirement
         result = router.resolve(
-            requirements=[ModelRequirement(capability="coding")],
+            requirements=[ModelRequirement(capability="research")],
             preferred="qwen3:8b",
         )
         assert result == "qwen3:8b"
@@ -105,11 +105,11 @@ class TestModelRouterComplexity:
     def test_loaded_model_preferred(self, router):
         """Already-loaded models are preferred over unloaded ones."""
         from cozmo.runtime.model_router import ModelRequirement
+        router.resource_manager.load_model("ornith:9b", 6.0)
         result = router.resolve(
             requirements=[ModelRequirement(capability="coding")],
         )
-        # phi4-mini is loaded but for conversation capability — should still be found
-        assert result == "phi4-mini"
+        assert result == "ornith:9b"
 
     def test_complexity_upgrades_capability(self, router):
         """High complexity score upgrades capability tier."""

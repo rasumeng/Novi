@@ -1,0 +1,339 @@
+[
+  {
+    "id": "REG-001",
+    "query": "Explain binary search",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["timeless"]
+  },
+  {
+    "id": "REG-002",
+    "query": "How does TCP work?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["timeless"]
+  },
+  {
+    "id": "REG-003",
+    "query": "What is dependency injection?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["timeless"]
+  },
+  {
+    "id": "REG-004",
+    "query": "Explain transformers in machine learning",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["timeless"]
+  },
+  {
+    "id": "REG-005",
+    "query": "What is a monad?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["timeless"]
+  },
+  {
+    "id": "REG-006",
+    "query": "How do I write a for loop in Python?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["filesystem", "conversation"]
+    },
+    "tags": ["timeless"]
+  },
+  {
+    "id": "REG-007",
+    "query": "What is the best PVE loadout in Shindo Life?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "gaming"]
+  },
+  {
+    "id": "REG-008",
+    "query": "Latest Ollama release?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "software"]
+  },
+  {
+    "id": "REG-009",
+    "query": "Should I buy an RTX 5090?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "hardware"]
+  },
+  {
+    "id": "REG-010",
+    "query": "Best local AI models in 2026?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "ai"]
+  },
+  {
+    "id": "REG-011",
+    "query": "Who won the Super Bowl?",
+    "expected": {
+      "intent": "research",
+      "strategy": "research",
+      "capabilities": ["search", "research", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "sports"]
+  },
+  {
+    "id": "REG-012",
+    "query": "What is the current weather in Tokyo?",
+    "expected": {
+      "intent": "research",
+      "strategy": "research",
+      "capabilities": ["search", "research", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "weather"]
+  },
+  {
+    "id": "REG-013",
+    "query": "What is the price of Apple stock?",
+    "expected": {
+      "intent": "research",
+      "strategy": "research",
+      "capabilities": ["search", "research", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["current", "finance"]
+  },
+  {
+    "id": "REG-014",
+    "query": "Best programming language for a startup in 2026?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["recommendation"]
+  },
+  {
+    "id": "REG-015",
+    "query": "Is RTX 5090 worth buying?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["recommendation", "hardware"]
+  },
+  {
+    "id": "REG-016",
+    "query": "Best GPU tier list 2026",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["recommendation"]
+  },
+  {
+    "id": "REG-017",
+    "query": "Write a Python function to sort a list",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": ["filesystem", "terminal", "coding"]
+    },
+    "tags": ["coding"]
+  },
+  {
+    "id": "REG-018",
+    "query": "Fix auth.py",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": ["filesystem", "terminal", "coding"]
+    },
+    "tags": ["coding"]
+  },
+  {
+    "id": "REG-019",
+    "query": "Refactor the backend API",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": ["filesystem", "terminal", "coding"]
+    },
+    "tags": ["coding"]
+  },
+  {
+    "id": "REG-020",
+    "query": "Add a new feature to the frontend",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": ["filesystem", "terminal", "coding"]
+    },
+    "tags": ["coding"]
+  },
+  {
+    "id": "REG-021",
+    "query": "Fix the bug in FastAPI using latest docs",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": ["filesystem", "terminal", "coding", "search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["coding", "current"]
+  },
+  {
+    "id": "REG-022",
+    "query": "Implement React hooks using current best practices",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": ["filesystem", "terminal", "coding", "search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["coding", "current"]
+  },
+  {
+    "id": "REG-023",
+    "query": "What did we decide yesterday?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["memory", "conversation"],
+      "evidence_memory": true
+    },
+    "tags": ["memory"]
+  },
+  {
+    "id": "REG-024",
+    "query": "Continue our previous discussion",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["memory", "conversation"],
+      "evidence_memory": true
+    },
+    "tags": ["memory"]
+  },
+  {
+    "id": "REG-025",
+    "query": "Do you remember what I asked earlier?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["memory", "conversation"],
+      "evidence_memory": true
+    },
+    "tags": ["memory"]
+  },
+  {
+    "id": "REG-026",
+    "query": "Hello, how are you?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["edge"]
+  },
+  {
+    "id": "REG-027",
+    "query": "What time is it?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["edge"]
+  },
+  {
+    "id": "REG-028",
+    "query": "42",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"]
+    },
+    "tags": ["edge"]
+  },
+  {
+    "id": "REG-029",
+    "query": "What is the best programming language?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["conversation"],
+      "evidence_external": false
+    },
+    "tags": ["ambiguous"]
+  },
+  {
+    "id": "REG-030",
+    "query": "Best restaurant near me",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["search", "conversation"],
+      "evidence_external": true
+    },
+    "tags": ["ambiguous"]
+  },
+  {
+    "id": "REG-031",
+    "query": "Plan the architecture for a new feature",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["planning", "conversation"]
+    },
+    "tags": ["planning"]
+  },
+  {
+    "id": "REG-032",
+    "query": "Design a roadmap for Q3",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": ["planning", "conversation"]
+    },
+    "tags": ["planning"]
+  }
+]

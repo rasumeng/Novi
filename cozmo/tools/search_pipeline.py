@@ -103,11 +103,20 @@ def rewrite_query(query: str, llm=None) -> str:
 
 # ─── Phase 2: Multi-Source Search ─────────────────────────────────────────────
 
-def _search_searxng(query: str, config: SearchConfig) -> list[SearchResult]:
+_SEARXNG_TIME_MAP = {
+    "d": "day",
+    "w": "week",
+    "m": "month",
+    "y": "year",
+}
+
+
+def _search_searxng(query: str, config: SearchConfig) -> tuple[list[SearchResult], str | None]:
     if not query or not query.strip():
-        return []
+        return [], None
     import urllib.request
     import urllib.parse
+    import urllib.error
 
     searxng_url = _ensure_searxng()
     if not searxng_url:
@@ -119,7 +128,8 @@ def _search_searxng(query: str, config: SearchConfig) -> list[SearchResult]:
         "language": "en",
     })
     if config.timelimit:
-        params += f"&time_range={config.timelimit}"
+        time_val = _SEARXNG_TIME_MAP.get(config.timelimit, config.timelimit)
+        params += f"&time_range={time_val}"
 
     url = f"{searxng_url}/search?{params}"
 
@@ -137,15 +147,20 @@ def _search_searxng(query: str, config: SearchConfig) -> list[SearchResult]:
                 source="searxng",
                 freshness=item.get("publishedDate", ""),
             ))
-        return results
+        return results, None
+    except urllib.error.HTTPError as e:
+        log.warning("SearXNG search failed (HTTP %d): %s", e.code, e.reason)
+        return [], f"HTTP {e.code}: {e.reason}"
     except Exception as e:
         log.warning("SearXNG search failed: %s", e)
-        return []
+        return [], str(e)
 
 
-def _search_multi(query: str, config: SearchConfig) -> list[SearchResult]:
-    """Search SearXNG and deduplicate results."""
-    all_results = _search_searxng(query, config)
+def _search_multi(query: str, config: SearchConfig) -> tuple[list[SearchResult], str | None]:
+    """Search SearXNG and deduplicate results. Returns (results, error)."""
+    all_results, err = _search_searxng(query, config)
+    if err:
+        return [], err
 
     seen_urls = set()
     unique = []
@@ -154,7 +169,7 @@ def _search_multi(query: str, config: SearchConfig) -> list[SearchResult]:
             seen_urls.add(r.url)
             unique.append(r)
 
-    return unique[:config.max_results]
+    return unique[:config.max_results], None
 
 
 # ─── Phase 3: Fetch Full Pages ────────────────────────────────────────────────
@@ -377,7 +392,16 @@ def run_search_pipeline(
     if rewrite_query_flag and llm:
         rewritten = rewrite_query(query, llm)
 
-    results = _search_multi(rewritten, config)
+    results, search_err = _search_multi(rewritten, config)
+
+    if search_err:
+        return {
+            "rewritten_query": rewritten,
+            "results": [],
+            "facts": f"Search service error: {search_err}",
+            "sources": "",
+            "search_error": search_err,
+        }
 
     if not results:
         return {
@@ -429,7 +453,9 @@ def web_search_pipeline(query: str, use_pipeline: bool = True) -> str:
     """
     if not use_pipeline:
         config = _get_config()
-        results = _search_multi(query, config)
+        results, search_err = _search_multi(query, config)
+        if search_err:
+            return f"Search service error: {search_err}"
         if not results:
             return "No results found."
         lines = []

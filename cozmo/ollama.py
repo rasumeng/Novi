@@ -17,17 +17,26 @@ def is_ollama_running(timeout: float = 2) -> bool:
         return False
 
 
-def start_ollama(ollama_url: str = "http://localhost:11434") -> bool:
+def start_ollama(ollama_url: str = "http://localhost:11434") -> subprocess.Popen | None:
     if is_ollama_running():
-        return True
+        return None
     try:
-        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return wait_for_ollama(ollama_url)
+        proc = subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if wait_for_ollama(ollama_url):
+            return proc
+        return None
     except Exception:
-        return False
+        return None
 
 
-def stop_ollama() -> bool:
+def stop_ollama(proc: subprocess.Popen | None = None) -> bool:
+    if proc:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
     try:
         subprocess.run(["ollama", "stop"], capture_output=True, timeout=10)
         return True

@@ -14,7 +14,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from ..runtime.resources import ResourceManager
@@ -74,11 +74,13 @@ class ModelRouter:
         default_model: str = "qwen3:8b",
         default_capability: str = "chat",
         resource_manager: Optional[ResourceManager] = None,
+        capability_preferences: Optional[dict[str, list[str]]] = None,
     ):
         self.default_model = default_model
         self.default_capability = default_capability
         self.resource_manager = resource_manager or ResourceManager()
         self._models: dict[str, ModelInfo] = {}
+        self._cap_preferences = capability_preferences or _CAPABILITY_PREFERENCE
 
     def register(self, model: ModelInfo):
         self._models[model.name] = model
@@ -177,6 +179,10 @@ class ModelRouter:
         # Upgrade capability tier based on complexity
         cap = self._complexity_tier(cap, complexity_score)
 
+        # Single canonical requirement — same cap used for search, validation, and selection
+        if req and cap != req.capability:
+            req = replace(req, capability=cap)
+
         candidates = self._find_models(cap)
         if not candidates:
             return self.default_model
@@ -221,7 +227,7 @@ class ModelRouter:
 
     def _find_models(self, capability: str) -> list[ModelInfo]:
         """Find models matching capability, with preference fallback chain."""
-        pref_order = _CAPABILITY_PREFERENCE.get(capability, ["conversation"])
+        pref_order = self._cap_preferences.get(capability, ["conversation"])
         seen = set()
         result = []
         for cap in pref_order:

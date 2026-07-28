@@ -16,7 +16,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from ..runtime.retrieval_policy import RetrievalPlan
+
+
+def _default_retrieval_plan():
+    from ..runtime.retrieval_policy import RetrievalPlan
+    return RetrievalPlan()
 
 
 class TaskStatus(str, Enum):
@@ -31,6 +39,64 @@ class TaskStatus(str, Enum):
     ERROR = "error"
     CANCELLED = "cancelled"
     ARCHIVED = "archived"
+
+
+@dataclass
+class EvidenceRequirements:
+    """What information sources are needed to answer this task."""
+    parametric: bool = True
+    external: bool = False
+    project: bool = False
+    memory: bool = False
+    vision: bool = False
+
+
+@dataclass
+class EvidenceSignal:
+    """One signal detected by EvidenceDetector — what triggered and how strong."""
+    type: str
+    strength: str
+    detail: str = ""
+
+
+@dataclass
+class GroundingDecision:
+    """Whether the system should proactively fetch external evidence.
+
+    Single source of truth for the grounding decision.
+    Populated by Orchestrator._resolve_grounding().
+    """
+    needs_grounding: bool = False
+    confidence: float = 0.0
+    reason: str = ""
+    source: str = ""  # "keyword" | "heuristic" | "llm" | "none"
+
+
+@dataclass
+class EvidenceAnalysis:
+    """Result of evidence detection — requirements + confidence + reasoning."""
+    requirements: EvidenceRequirements = field(default_factory=EvidenceRequirements)
+    confidence: float = 0.0
+    signals: list[EvidenceSignal] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+    @property
+    def needs_external(self) -> bool:
+        signal_types = {s.type for s in self.signals}
+        return bool(signal_types & {"temporal", "comparative", "dynamic"})
+
+    @property
+    def needs_memory(self) -> bool:
+        signal_types = {s.type for s in self.signals}
+        return bool(signal_types & {"memory", "temporal"})
+
+    @property
+    def needs_project(self) -> bool:
+        return any(s.type == "project" for s in self.signals)
+
+    @property
+    def needs_vision(self) -> bool:
+        return self.requirements.vision
 
 
 class IntentType(str, Enum):
@@ -49,6 +115,23 @@ class ExecutionStrategy(str, Enum):
     EXECUTE = "execute"
     PLANNED = "planned"
     AUTONOMOUS = "autonomous"
+
+
+@dataclass
+class TaskAnalysis:
+    """Complete analysis of a user task. Single object from the analysis pipeline.
+
+    Bundles intent, evidence, complexity, capabilities, strategy, confidence,
+    grounding, and retrieval plan. The runtime consumes this directly.
+    """
+    intent: IntentType = IntentType.CONVERSATION
+    evidence: EvidenceAnalysis = field(default_factory=EvidenceAnalysis)
+    complexity: 'ComplexityScore' = field(default_factory=lambda: ComplexityScore())
+    capabilities: list[str] = field(default_factory=list)
+    strategy: ExecutionStrategy = ExecutionStrategy.RESPOND
+    confidence: float = 1.0
+    grounding: GroundingDecision = field(default_factory=GroundingDecision)
+    retrieval_plan: 'RetrievalPlan' = field(default_factory=_default_retrieval_plan)
 
 
 @dataclass
@@ -71,7 +154,6 @@ class TaskProfile:
     intent: IntentType = IntentType.CONVERSATION
     capabilities_needed: list[str] = field(default_factory=list)
     needs_planning: bool = False
-    needs_grounding: bool = False
     planning_level: int = 0
     model_capability: str = "chat"
     temperature: float = 0.6

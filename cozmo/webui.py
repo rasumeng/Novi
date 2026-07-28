@@ -25,6 +25,7 @@ class WebUIBackend:
         from .runtime.tool_registry import ToolRegistry
         from .orchestrator.intent import IntentDetector
         from .orchestrator.complexity import ComplexityEstimator
+        from .orchestrator.evidence import EvidenceDetector
         from .orchestrator.orchestrator import Orchestrator
         from .jobs.manager import JobManager
 
@@ -57,9 +58,11 @@ class WebUIBackend:
         # Orchestrator components
         intent_detector = IntentDetector()
         complexity_estimator = ComplexityEstimator()
+        evidence_detector = EvidenceDetector(router_llm=ctx.router_llm)
         orchestrator = Orchestrator(
             intent_detector=intent_detector,
             complexity_estimator=complexity_estimator,
+            evidence_detector=evidence_detector,
             capability_registry=capability_registry,
             model_router=model_router,
         )

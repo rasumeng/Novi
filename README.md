@@ -22,30 +22,44 @@ cozmo webui     # → http://127.0.0.1:8765
 ## Architecture
 
 ```
-User Input → IntentDetector → ComplexityEstimator → Orchestrator.plan()
-                                                         ↓
-                                               ExecutionPlan
-                                                         ↓
-                                              CozmoRuntime.run_stream()
-                                                    ↓
-                                        Engine (ReAct loop) → Tool calls
-                                                    ↓
-                                            Final response
+User Input
+    ↓
+Orchestrator.analyze()
+├── IntentDetector          (classifies task type)
+├── EvidenceDetector        (detects info signals)
+├── ComplexityEstimator     (scores task complexity)
+├── Grounding Decision      (should we retrieve?)
+└── RetrievalPolicy         (where should we retrieve?)
+    ↓
+Orchestrator.plan() → ExecutionPlan
+    ↓
+CozmoRuntime.run_stream()
+├── RetrievalCoordinator    (executes with budget/dedup)
+├── EvidenceCollector       (search → rank → fetch → merge)
+├── Recovery System         (pre-loop + mid-loop recovery)
+├── Trace System            (user events + debug traces)
+└── Agent Execution Loop    (ReAct with tool calling)
+    ↓
+Final response
 ```
 
 ### Runtime (`cozmo/runtime/`)
-- `CozmoRuntime` — production execution loop
-- `Engine` — stateless ReAct loop with checkpoint support
+- `CozmoRuntime` — unified execution loop with retrieval, recovery, tracing
+- `retrieval_policy.py` — `RetrievalPolicy`, `RetrievalStrategy`, `RetrievalPlan`
+- `retrieval_coordinator.py` — `RetrievalCoordinator`, budget enforcement, duplicate prevention
+- `evidence.py` — `EvidenceCollector`, `EvidenceBundle`, `RetrievalQuality`
+- `trace.py` — `ExecutionTrace`, `TraceEvent`, `DebugTraceEvent`, `TraceAction`
+- `execution_context.py` — `ExecutionContext`, unified run state
 - `ModelRouter` — capability-based model selection with resource awareness
 - `PermissionResolver` — pattern-based allow/ask/deny gating
 - `EventBus` — typed event pub/sub (tool calls, results, plan steps)
 - `LessonStore` — persistent tool success/failure patterns
-- `MCPHost` — MCP stdio client sessions
 
 ### Orchestrator (`cozmo/orchestrator/`)
 - `IntentDetector` — classifies user input (conversation/research/coding/planning/vision)
+- `EvidenceDetector` — detects external information signals (temporal, dynamic, comparative)
 - `ComplexityEstimator` — scores task complexity for model routing
-- `Orchestrator` — intent → plan → execution pipeline
+- `Orchestrator` — owns analysis pipeline: intent + evidence + complexity + grounding + retrieval policy
 
 ### Job System (`cozmo/jobs/`)
 - `JobManager` — submit/pause/resume/cancel/retry lifecycle
@@ -101,10 +115,9 @@ Client (WebUI) ←WS→ WebUIServer ←→ CozmoRuntime ←→ Engine ←→ Too
 - CLI: `cozmo webui`, `cozmo run`, `cozmo code`, `cozmo config`, `cozmo telegram`
 
 ### In Progress
+- Evidence Processing Layer (structured evidence → model reasoning)
 - End-to-end test coverage
 - Context window management across long sessions
-- Streaming MCP notifications
-- Full desktop automation
 
 ### Planned
 - Plugins/extensions system
@@ -234,22 +247,23 @@ Registered tools auto-discovered by the runtime. Tools not listed default to MED
 
 ```
 cozmo/
-├── runtime/            # Production execution loop, engine, model routing, permissions
-│   ├── providers/      # MCP provider (persistent connections)
-│   ├── engine.py       # Stateless ReAct loop with checkpoint support
+├── runtime/            # Production execution loop, retrieval, tracing, recovery
 │   ├── runtime.py      # CozmoRuntime — unified pipeline
+│   ├── retrieval_policy.py     # Retrieval source/strategy decision
+│   ├── retrieval_coordinator.py# Budget enforcement, duplicate prevention
+│   ├── evidence.py     # EvidenceCollector, EvidenceBundle, RetrievalQuality
+│   ├── trace.py        # ExecutionTrace, TraceEvent, DebugTraceEvent
+│   ├── execution_context.py    # Unified run state
 │   ├── model_router.py # Capability-based model selection
 │   ├── event_bus.py    # Typed pub/sub event system
 │   ├── permissions.py  # Pattern-based allow/ask/deny
 │   ├── tool_registry.py# Tool registration and LangChain wrapping
 │   ├── tool_risk.py    # Risk classification for permission defaults
-│   ├── mcp_host.py     # MCP stdio client sessions
 │   ├── resources.py    # VRAM tracking, model ranking
 │   ├── lessons.py      # Tool success/failure store
-│   ├── context.py      # History trimming, token estimation
 │   └── prompts.py      # System prompt builder
 │
-├── orchestrator/       # Intent detection, complexity, plan creation
+├── orchestrator/       # Intent detection, evidence, complexity, grounding
 ├── jobs/               # Job lifecycle management
 ├── capabilities/       # Declarable capability definitions
 ├── planner/            # Planning strategies (scaffolding)
@@ -281,12 +295,15 @@ cozmo/
 
 | Layer | Status | Notes |
 |-------|--------|-------|
-| **Runtime** | Beta | Unified ReAct loop, execution plans, checkpoint/resume |
-| **Orchestrator** | Beta | Intent detection, complexity estimation, plan creation |
+| **Runtime** | Beta | Retrieval pipeline, recovery system, trace architecture |
+| **Orchestrator** | Beta | Intent detection, evidence detection, grounding decision, retrieval policy |
+| **Retrieval** | Beta | RetrievalPolicy, RetrievalCoordinator, budget/dedup, KB→web escalation |
+| **Tracing** | Beta | TraceEvent/DebugTraceEvent separation, TraceAction, ExecutionTrace |
+| **Evidence** | Beta | EvidenceCollector, EvidenceBundle, RetrievalQuality, search pipeline |
 | **Memory** | Beta | LanceDB hybrid search, importance scoring, knowledge index |
 | **WebUI** | Beta | Streaming, permissions, projects, code/collab, STT |
 | **MCP** | Beta | Stdio transport, catalog, multi-server, health checks |
-| **Cognition** | Alpha | Memory ranking, complexity-aware routing, lessons |
+| **Cognition** | Alpha | Memory ranking, complexity-aware routing, lessons, recovery |
 | **Job System** | Beta | Lifecycle, persistence, scheduler integration |
 | **CLI** | Deprecated | `webui` is primary; `run`/`code` maintained |
 

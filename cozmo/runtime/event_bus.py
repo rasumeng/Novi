@@ -86,6 +86,9 @@ class EventType(str, Enum):
     # Model
     MODEL_SELECTED = "model.selected"
 
+    # Trace
+    TRACE_COMPLETED = "trace.completed"
+
 
 @dataclass
 class Event:

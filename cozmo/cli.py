@@ -260,12 +260,11 @@ def main():
 
         ctx = CozmoContext()
         ollama_url = ctx.config.get("ollama", {}).get("url", "http://localhost:11434")
-        proc, started = None, False
+        proc = None
         if not is_ollama_running():
             print("Starting Ollama...")
             proc = start_ollama(ollama_url)
             if proc:
-                started = True
                 if not wait_for_ollama(ollama_url):
                     print("Warning: Ollama didn't respond in time. It may still be starting.")
             else:
@@ -275,7 +274,7 @@ def main():
             print(f"Cozmo WebUI at http://{args.host}:{args.port}")
             run_server(ctx.config, host=args.host, port=args.port)
         finally:
-            if started:
+            if proc:
                 stop_ollama(proc)
 
     elif args.command == "mcp":
@@ -322,12 +321,11 @@ def main():
 
         ctx = CozmoContext()
         ollama_url = ctx.config.get("ollama", {}).get("url", "http://localhost:11434")
-        proc, started = None, False
+        proc = None
         if not is_ollama_running():
             print("Starting Ollama...")
             proc = start_ollama(ollama_url)
             if proc:
-                started = True
                 if not wait_for_ollama(ollama_url):
                     print("Warning: Ollama didn't respond in time. It may still be starting.")
             else:
@@ -337,7 +335,7 @@ def main():
             print(f"Cozmo WebUI at http://127.0.0.1:8765")
             run_server(ctx.config, host="127.0.0.1", port=8765)
         finally:
-            if started:
+            if proc:
                 stop_ollama(proc)
 
 

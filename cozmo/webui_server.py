@@ -289,6 +289,7 @@ def build_runtime(cfg: dict):
         router_llm=b["router_llm"],
         skills=b["skills"],
         event_bus=event_bus,
+        orchestrator=b.get("orchestrator"),
     )
     runtime._mcp_manager = b["mcp"]
     return runtime, b["orchestrator"], b["job_manager"], event_bus
@@ -448,6 +449,11 @@ class Session:
                         self._emit(payload)
                     elif kind == "reasoning":
                         self._emit({"type": "reasoning", "text": item[1]})
+                    elif kind == "trace":
+                        event = item[1]
+                        payload = event.to_dict()
+                        payload["type"] = "trace"
+                        self._emit(payload)
                     else:
                         text = item[1]
                         detail = item[2] if len(item) > 2 else None
