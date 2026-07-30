@@ -5,21 +5,27 @@ Resolves a capability set + complexity score to the optimal model.
 Consults ResourceManager for VRAM and loaded-model status.
 Prefers already-loaded models to avoid reload cost.
 
-Architecture:
-  Orchestrator.plan() → ModelRouter.resolve(requirements, preferred)
-                         ↓
-                    ResourceManager.best_available() / can_load()
+Single entry point for runtime: ``resolve_from_context(ctx)``.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Optional
+from typing import Any, Optional
 
 from ..runtime.resources import ResourceManager
 
 log = logging.getLogger("cozmo.model_router")
+
+
+@dataclass
+class ModelResolution:
+    """Result of resolving a model from execution context."""
+    model_name: str = ""
+    role: str = "chat"
+    reason: str = "role_match"
+    """One of: execution_plan, config_override, force_capability, role_match."""
 
 
 @dataclass
@@ -75,10 +81,12 @@ class ModelRouter:
         default_capability: str = "chat",
         resource_manager: Optional[ResourceManager] = None,
         capability_preferences: Optional[dict[str, list[str]]] = None,
+        model_service=None,
     ):
         self.default_model = default_model
         self.default_capability = default_capability
         self.resource_manager = resource_manager or ResourceManager()
+        self.model_service = model_service
         self._models: dict[str, ModelInfo] = {}
         self._cap_preferences = capability_preferences or _CAPABILITY_PREFERENCE
 
@@ -241,6 +249,100 @@ class ModelRouter:
                 result.append(m)
                 seen.add(m.name)
         return result
+
+    def resolve_from_context(
+        self,
+        ctx,
+        intent_roles: dict[str, str] | None = None,
+        capability_roles: dict[str, str] | None = None,
+    ) -> ModelResolution:
+        """Resolve model name and role from execution context.
+
+        Dispatch order mirrors original 3-path logic:
+          0. Pre-set ctx.model_name (caller override, no plan) → preserve
+          1. execution_plan → plan.model_spec > service > router
+          2. analysis       → force_model > service > router
+          3. fallback       → force_model > force_capability > service > router
+        """
+        # If caller pre-set ctx.model_name (no exec_plan), honor it.
+        if ctx.model_name and ctx.execution_plan is None:
+            if ctx.analysis is not None:
+                cap = ctx.cap_ids[0] if ctx.cap_ids else "conversation"
+                role = (capability_roles or {}).get(cap, "chat")
+            else:
+                cap = ctx.force_capability or ctx.intent_str
+                role = (intent_roles or {}).get(cap, "chat")
+            return ModelResolution(model_name=ctx.model_name, role=role, reason="role_match")
+
+        # ── Path 1: execution plan ───────────────────────────────────────
+        if ctx.execution_plan is not None:
+            role = (intent_roles or {}).get(ctx.intent_str, "chat")
+            model = ctx.execution_plan.model_spec.get("model", "")
+            if model:
+                return ModelResolution(model_name=model, role=role, reason="execution_plan")
+            if ctx.force_model:
+                return ModelResolution(model_name=ctx.force_model, role=role, reason="config_override")
+            if self.model_service:
+                try:
+                    _, role_model = self.model_service.resolve(role)
+                    if role_model:
+                        return ModelResolution(model_name=role_model, role=role, reason="execution_plan")
+                except Exception:
+                    pass
+            return ModelResolution(model_name=model or "", role=role, reason="execution_plan")
+
+        # ── Path 2: analysis / capability ───────────────────────────────
+        if ctx.analysis is not None:
+            preferred_cap = ctx.cap_ids[0] if ctx.cap_ids else "conversation"
+            role = (capability_roles or {}).get(preferred_cap, "chat")
+            if ctx.force_model:
+                return ModelResolution(model_name=ctx.force_model, role=role, reason="config_override")
+            if self.model_service:
+                try:
+                    _, role_model = self.model_service.resolve(role)
+                    if role_model:
+                        return ModelResolution(model_name=role_model, role=role, reason="role_match")
+                except Exception:
+                    pass
+            req = [ModelRequirement(capability=preferred_cap)]
+            return ModelResolution(
+                model_name=self.resolve(req, complexity_score=ctx.complexity_score),
+                role=role,
+                reason="role_match",
+            )
+
+        # ── Path 3: fallback intent ─────────────────────────────────────
+        cap_name = ctx.force_capability or ctx.intent_str
+        role = (intent_roles or {}).get(cap_name, "chat")
+        if ctx.force_model:
+            return ModelResolution(model_name=ctx.force_model, role=role, reason="config_override")
+        if ctx.force_capability:
+            if self.model_service:
+                try:
+                    _, role_model = self.model_service.resolve(role)
+                    if role_model:
+                        return ModelResolution(model_name=role_model, role=role, reason="force_capability")
+                except Exception:
+                    pass
+            req = [ModelRequirement(capability=cap_name)]
+            return ModelResolution(
+                model_name=self.resolve(req),
+                role=role,
+                reason="force_capability",
+            )
+        if self.model_service:
+            try:
+                _, role_model = self.model_service.resolve(role)
+                if role_model:
+                    return ModelResolution(model_name=role_model, role=role, reason="role_match")
+            except Exception:
+                pass
+        req = [ModelRequirement(capability=cap_name)]
+        return ModelResolution(
+            model_name=self.resolve(req),
+            role=role,
+            reason="role_match",
+        )
 
     def list_available(self, capability: str = "") -> list[ModelInfo]:
         if not capability:

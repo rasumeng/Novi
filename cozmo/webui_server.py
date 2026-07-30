@@ -52,7 +52,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .tools import TOOL_REGISTRY
-from .runtime.runtime import CozmoRuntime, _load_all_skills
+from .runtime.runtime import CozmoRuntime
+from .runtime.interface import RuntimeInterface
 from .runtime.event_bus import EventBus
 from .services.context import CozmoContext
 from .runtime.tool_risk import get_tool_risk, risk_to_label
@@ -291,7 +292,6 @@ def build_runtime(cfg: dict):
         event_bus=event_bus,
         orchestrator=b.get("orchestrator"),
     )
-    runtime._mcp_manager = b["mcp"]
     return runtime, b["orchestrator"], b["job_manager"], event_bus
 
 
@@ -317,7 +317,7 @@ class Session:
         self.loop = loop
         self.events: asyncio.Queue = asyncio.Queue()
         self.stop_flag = threading.Event()
-        self.runtime.stop_event = self.stop_flag
+        self.runtime.set_config(stop_event=self.stop_flag)
         self._perm_event = threading.Event()
         self._perm_allowed = False
         self._plan_event = threading.Event()
@@ -327,8 +327,6 @@ class Session:
         self.current_job_id = ""
         self.current_task_id = ""
         self.agent_config: dict = {}
-        self.runtime.set_permission_callback(self._ask_permission)
-        self.runtime.set_plan_callback(self._ask_plan)
 
         # Bridge EventBus→WebSocket: forward runtime events
         self.event_bus.on_any(self._on_bus_event)
@@ -350,14 +348,16 @@ class Session:
         if not self.agent_config:
             return
         ac = self.agent_config
+        config = {}
         model = ac.get("model")
         if model:
-            self.runtime.force_model = model
+            config["force_model"] = model
         if "max_steps" in ac:
-            self.runtime.max_steps = int(ac["max_steps"])
+            config["max_steps"] = int(ac["max_steps"])
         if "temperature" in ac:
-            self.runtime.temperature = float(ac["temperature"])
-        self.runtime._agent_system_extra = ac.get("system_prompt", "")
+            config["temperature"] = float(ac["temperature"])
+        config["agent_system_extra"] = ac.get("system_prompt", "")
+        self.runtime.set_config(**config)
 
     # runs in worker thread
     def _emit(self, payload: dict):
@@ -407,10 +407,7 @@ class Session:
     def start_run(self, user_input: str, attachments_meta: list[dict] | None = None, project_context: str | None = None):
         self.stop_flag.clear()
         resolved_atts = self._resolve_attachments(attachments_meta) if attachments_meta else None
-        if project_context:
-            self.runtime._project_context = project_context
-        else:
-            self.runtime._project_context = ""
+        self.runtime.set_config(project_context=project_context or "")
 
         def work():
             try:
@@ -1392,15 +1389,13 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         set_allowed_root(p)
                         idx = ProjectIndex(p)
                         n = idx.index_all()
-                        session.runtime.project_index = idx
-                        session.runtime._project_context = f"Project directory: {p}"
+                        session.runtime.set_config(project_index=idx, project_context=f"Project directory: {p}")
                         await ws.send_text(json.dumps({"type": "directory_set", "path": str(p), "indexed": n}))
                     except Exception as e:
                         await ws.send_text(json.dumps({"type": "error", "text": f"Failed to index directory: {e}"}))
                 elif mtype == "set_permission_mode":
                     mode = msg.get("mode", "manual")
-                    session.runtime._perms.auto = (mode == "bypass")
-                    session.runtime._perm_mode = mode
+                    session.runtime.set_config(permission_mode=mode)
                 elif mtype == "list_projects":
                     idx = _projects_idx()
                     search = (msg.get("search") or "").lower()
@@ -1460,8 +1455,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     pdx = _projects_idx()
                     pdx["projects"].insert(0, project)
                     _save_projects_idx(pdx)
-                    session.runtime.project_index = idx_p
-                    session.runtime._project_context = f"Project: {name} at {project_dir}"
+                    session.runtime.set_config(project_index=idx_p, project_context=f"Project: {name} at {project_dir}")
                     await ws.send_text(json.dumps({"type": "project_created", "project": project, "indexed": n}))
                 elif mtype == "create_project":
                     name = (msg.get("name") or "").strip()
@@ -1506,8 +1500,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         pidx["projects"].insert(0, project)
                         _save_projects_idx(pidx)
                         # Set as current agent task context
-                        session.runtime.project_index = idx
-                        session.runtime._project_context = f"Project: {name} at {project_dir}"
+                        session.runtime.set_config(project_index=idx, project_context=f"Project: {name} at {project_dir}")
                         project["path"] = str(project_dir)
                         project["indexed"] = n
                         await ws.send_text(json.dumps({
@@ -1526,7 +1519,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                             found = p
                             break
                     if found:
-                        session.runtime._project_context = found.get("sharedContext", "")
+                        session.runtime.set_config(project_context=found.get("sharedContext", ""))
                         await ws.send_text(json.dumps({"type": "project_selected", "project": found}))
                     else:
                         await ws.send_text(json.dumps({"type": "error", "text": "Project not found"}))

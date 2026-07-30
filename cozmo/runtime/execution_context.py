@@ -76,6 +76,7 @@ class ExecutionContext:
 
     # ── Grounding ────────────────────────────────────────────────────────
     grounding_text: str = ""
+    """MIGRATION TARGET: prefer retrieval_plan fields on RetrievalExecutor in new code."""
     grounding_error: str | None = None
     grounding_quality: str = ""
     """Serialized RetrievalQuality value. Empty string means no retrieval was attempted."""

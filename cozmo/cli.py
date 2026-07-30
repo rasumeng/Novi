@@ -70,10 +70,6 @@ def interactive_session(ctx, initial_query: str | None = None):
     ctx.init_knowledge_index()
     _ = ctx.scheduler
     runtime = ctx.create_runtime()
-    runtime.set_permission_callback(
-        lambda tool, args: runtime._perms.prompt(tool, args, "cozmo")
-    )
-
     if initial_query:
         _safe_print(f"\nCozmo: {runtime.run(initial_query)}\n")
     while True:
@@ -94,9 +90,6 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
     _ = ctx.scheduler
     runtime = ctx.create_runtime(project_index=ProjectIndex(project_path))
     runtime._perms.auto = auto
-    runtime.set_permission_callback(
-        lambda tool, args: runtime._perms.prompt(tool, args, "cozmo")
-    )
 
     if query:
         _safe_print(f"\nCozmo: {runtime.run(query)}\n")

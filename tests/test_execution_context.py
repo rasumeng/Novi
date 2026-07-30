@@ -1,8 +1,11 @@
 """Tests for ExecutionContext — the unified runtime state object."""
 
+import json
+
 import pytest
 
 from cozmo.runtime.execution_context import ExecutionContext
+from cozmo.runtime.tool_executor import ToolExecutor
 from cozmo.orchestrator.task_types import (
     ComplexityScore,
     EvidenceAnalysis,
@@ -475,11 +478,11 @@ def test_backward_compat_trace_ownership():
 
 
 class TestSearchReformulation:
-    """Unit tests for _grounding_search reformulation logic."""
+    """Unit tests for RetrievalExecutor static utilities."""
 
     def test_key_terms_extracts_meaningful_words(self):
-        from cozmo.runtime.runtime import CozmoRuntime
-        terms = CozmoRuntime._key_terms("what is the best pve build in SHindo Life")
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        terms = RetrievalExecutor.extract_key_terms("what is the best pve build in SHindo Life")
         assert "pve" in terms
         assert "build" in terms
         assert "shindo" in terms
@@ -489,32 +492,572 @@ class TestSearchReformulation:
         assert "the" not in terms
 
     def test_key_terms_skips_stopwords(self):
-        from cozmo.runtime.runtime import CozmoRuntime
-        terms = CozmoRuntime._key_terms("how do I fix this bug")
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        terms = RetrievalExecutor.extract_key_terms("how do I fix this bug")
         assert "fix" in terms
         assert "bug" in terms
         assert "how" not in terms
         assert "do" not in terms
 
     def test_relevance_score_high_match(self):
-        from cozmo.runtime.runtime import CozmoRuntime
+        from cozmo.runtime.retrieval import RetrievalExecutor
         text = "Shindo Life is a Roblox game with PvE builds and bloodlines"
-        score = CozmoRuntime._relevance_score(text, ["shindo", "life", "pve", "build"])
+        score = RetrievalExecutor.compute_relevance(text, ["shindo", "life", "pve", "build"])
         assert score >= 0.75
 
     def test_relevance_score_low_match(self):
-        from cozmo.runtime.runtime import CozmoRuntime
+        from cozmo.runtime.retrieval import RetrievalExecutor
         text = "Genshin Impact best builds for Hu Tao and Zhongli"
-        score = CozmoRuntime._relevance_score(text, ["shindo", "life", "pve"])
-        # At most 0/3
+        score = RetrievalExecutor.compute_relevance(text, ["shindo", "life", "pve"])
         assert score < 0.3
 
     def test_relevance_score_empty_terms(self):
-        from cozmo.runtime.runtime import CozmoRuntime
-        assert CozmoRuntime._relevance_score("any text", []) == 1.0
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        assert RetrievalExecutor.compute_relevance("any text", []) == 1.0
 
     def test_reformulate_query_uses_key_terms(self):
-        from cozmo.runtime.runtime import CozmoRuntime
+        from cozmo.runtime.retrieval import RetrievalExecutor
         terms = ["shindo", "life", "pve", "build", "roblox"]
-        result = CozmoRuntime._reformulate_query(None, terms)
+        result = RetrievalExecutor.reformulate_query(None, terms)
         assert result == "shindo life pve build roblox"
+
+class TestExecutorEntryPoint:
+    """Strategy dispatch via single execute() entry point."""
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def _fake_search(self):
+        """Monkey-patch EvidenceCollector.collect to return SUFFICIENT."""
+        from cozmo.runtime.evidence import EvidenceBundle, EvidenceCollector, RetrievalQuality
+
+        def fake_collect(self, query, min_sources=1):
+            b = EvidenceBundle(query=query)
+            b.merged_text = "test result about shindo life"
+            b.results = [{"title": "x", "content": "test"}]
+            b.source_count = 1
+            b.quality = RetrievalQuality.SUFFICIENT
+            return b
+
+        orig = EvidenceCollector.collect
+        EvidenceCollector.collect = fake_collect
+        return orig
+
+    def _make_ctx(self, user_input: str):
+        from cozmo.runtime.execution_context import ExecutionContext
+        from cozmo.runtime.trace import ExecutionTrace
+        ctx = ExecutionContext(user_input=user_input)
+        ctx.trace = ExecutionTrace(user_input=user_input)
+        return ctx
+
+    def _set_research_analysis(self, ctx):
+        import types
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value="research"),
+            capabilities=["research"],
+            grounding=types.SimpleNamespace(
+                needs_grounding=False, confidence=0.0,
+                source="fallback", reason="no analysis",
+            ),
+            evidence=types.SimpleNamespace(signals=[], confidence=0.0),
+            retrieval_plan=None,
+            complexity=types.SimpleNamespace(score=1, plan_level=0),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+
+    def _set_plan(self, ctx, strategy):
+        import types
+        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value="research"),
+            capabilities=["research"],
+            grounding=types.SimpleNamespace(
+                needs_grounding=False, confidence=0.0,
+                source="plan", reason="plan-driven",
+            ),
+            evidence=types.SimpleNamespace(signals=[], confidence=0.0),
+            retrieval_plan=types.SimpleNamespace(
+                strategy=strategy,
+                sources=[],
+                reason="test",
+            ),
+            complexity=types.SimpleNamespace(score=1, plan_level=0),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+
+    # ── path 1: retrieval plan (WEB_ONLY) ────────────────────────────────
+
+    def test_execute_plan_web_only(self):
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+
+        exe = RetrievalExecutor(debug_trace=True)
+        ctx = self._make_ctx("test web only")
+        self._set_plan(ctx, RetrievalStrategy.WEB_ONLY)
+        orig = self._fake_search()
+        try:
+            results = list(exe.execute(ctx, "test web only"))
+        finally:
+            from cozmo.runtime.evidence import EvidenceCollector
+            EvidenceCollector.collect = orig
+        kinds = [r[0] for r in results]
+        assert "trace" in kinds
+        assert "thinking" in kinds
+        assert ctx.grounding_text == "test result about shindo life"
+        assert ctx.trace.retrieval_strategy == "web_only"
+
+    # ── path 1: retrieval plan (KNOWLEDGE_ONLY) ──────────────────────────
+
+    def test_execute_plan_knowledge_only(self):
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+
+        exe = RetrievalExecutor(debug_trace=True)
+        ctx = self._make_ctx("test kb only")
+        self._set_plan(ctx, RetrievalStrategy.KNOWLEDGE_ONLY)
+        results = list(exe.execute(ctx, "test kb only"))
+        kinds = [r[0] for r in results]
+        assert "trace" in kinds
+        assert "thinking" in kinds
+        assert ctx.trace.retrieval_strategy == "knowledge_only"
+
+    # ── path 1: retrieval plan (NONE) → no-op trace ─────────────────────
+
+    def test_execute_plan_none(self):
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+
+        exe = RetrievalExecutor(debug_trace=True)
+        ctx = self._make_ctx("test plan none")
+        self._set_plan(ctx, RetrievalStrategy.NONE)
+        results = list(exe.execute(ctx, "test plan none"))
+        kinds = [r[0] for r in results]
+        assert kinds == ["trace"]
+        assert ctx.grounding_text == ""
+
+    # ── path 2: analysis needs_grounding ─────────────────────────────────
+
+    def test_execute_needs_grounding(self):
+        import types
+        from cozmo.runtime.retrieval import RetrievalExecutor
+
+        exe = RetrievalExecutor(debug_trace=True)
+        ctx = self._make_ctx("test needs grounding")
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value="research"),
+            capabilities=["research"],
+            grounding=types.SimpleNamespace(
+                needs_grounding=True, confidence=0.8,
+                source="evidence", reason="low confidence",
+            ),
+            evidence=types.SimpleNamespace(
+                signals=[types.SimpleNamespace(type="ambiguous")],
+                confidence=0.6,
+            ),
+            retrieval_plan=None,
+            complexity=types.SimpleNamespace(score=1, plan_level=0),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+        orig = self._fake_search()
+        try:
+            results = list(exe.execute(ctx, "test needs grounding"))
+        finally:
+            from cozmo.runtime.evidence import EvidenceCollector
+            EvidenceCollector.collect = orig
+        kinds = [r[0] for r in results]
+        assert "trace" in kinds
+        assert "thinking" in kinds
+        assert ctx.grounding_text == "test result about shindo life"
+
+    # ── path 3: analysis exists but no grounding ─────────────────────────
+
+    def test_execute_no_grounding_needed(self):
+        import types
+        from cozmo.runtime.retrieval import RetrievalExecutor
+
+        exe = RetrievalExecutor(debug_trace=True)
+        ctx = self._make_ctx("test no grounding")
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value="coding"),
+            capabilities=["coding"],
+            grounding=types.SimpleNamespace(
+                needs_grounding=False, confidence=0.9,
+                source="stable", reason="well-known",
+            ),
+            evidence=types.SimpleNamespace(
+                signals=[types.SimpleNamespace(type="stable_context")],
+                confidence=0.9,
+            ),
+            retrieval_plan=None,
+            complexity=types.SimpleNamespace(score=1, plan_level=0),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+        results = list(exe.execute(ctx, "test no grounding"))
+        kinds = [r[0] for r in results]
+        assert kinds == ["trace"]
+        assert ctx.grounding_text == ""
+
+    # ── path 4: research intent fallback (no analysis) ───────────────────
+
+    def test_execute_research_fallback(self):
+        import types
+        from cozmo.runtime.retrieval import RetrievalExecutor
+
+        exe = RetrievalExecutor(debug_trace=True)
+        # research intent requires no analysis, needs execution_plan
+        ctx = self._make_ctx("test research fallback")
+        ctx.execution_plan = types.SimpleNamespace(
+            goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="research")),
+            capabilities=[],
+            model_spec={},
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+        orig = self._fake_search()
+        try:
+            results = list(exe.execute(ctx, "test research fallback"))
+        finally:
+            from cozmo.runtime.evidence import EvidenceCollector
+            EvidenceCollector.collect = orig
+        kinds = [r[0] for r in results]
+        assert "trace" in kinds
+        assert "thinking" in kinds
+        assert ctx.grounding_text == "test result about shindo life"
+
+    # ── path 5: nothing to do ───────────────────────────────────────────
+
+    def test_execute_noop(self):
+        from cozmo.runtime.retrieval import RetrievalExecutor
+
+        exe = RetrievalExecutor(debug_trace=True)
+        ctx = self._make_ctx("test noop")
+        results = list(exe.execute(ctx, "test noop"))
+        assert results == []
+        assert ctx.grounding_text == ""
+
+
+class TestModelResolution:
+    """All 3 model resolution paths go through ModelRouter.resolve_from_context."""
+
+    def _router(self):
+        from cozmo.runtime.model_router import ModelRouter
+        return ModelRouter(default_model="test-default")
+
+    def _ctx(self, **overrides):
+        from cozmo.runtime.execution_context import ExecutionContext
+        from cozmo.runtime.trace import ExecutionTrace
+        ctx = ExecutionContext(user_input="hello")
+        ctx.trace = ExecutionTrace(user_input="hello")
+        for k, v in overrides.items():
+            setattr(ctx, k, v)
+        return ctx
+
+    # ── Path 1: execution_plan model selection ───────────────────────────
+
+    def test_execution_plan_sets_model(self):
+        import types
+        router = self._router()
+        ctx = self._ctx()
+        ctx.execution_plan = types.SimpleNamespace(
+            model_spec={"model": "plan-model", "supports_tools": True},
+            temperature=0.3, max_steps=8, goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="coding")),
+        )
+        result = router.resolve_from_context(ctx, {"coding": "coder"})
+        assert result.model_name == "plan-model"
+        assert result.reason == "execution_plan"
+        assert result.role == "coder"
+
+    def test_execution_plan_falls_back_to_service(self):
+        import types
+        router = self._router()
+        router.model_service = types.SimpleNamespace(
+            resolve=lambda role: ("test-provider", "service-model"),
+        )
+        ctx = self._ctx()
+        ctx.execution_plan = types.SimpleNamespace(
+            model_spec={},
+            temperature=0.3, max_steps=8, goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="research")),
+        )
+        result = router.resolve_from_context(ctx, {"research": "planner"})
+        assert result.model_name == "service-model"
+        assert result.reason == "execution_plan"
+
+    def test_execution_plan_force_model(self):
+        import types
+        router = self._router()
+        ctx = self._ctx()
+        ctx.force_model = "forced-model"
+        ctx.execution_plan = types.SimpleNamespace(
+            model_spec={},
+            temperature=0.3, max_steps=8, goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="chat")),
+        )
+        result = router.resolve_from_context(ctx, {"chat": "chat"})
+        assert result.model_name == "forced-model"
+        assert result.reason == "config_override"
+
+    # ── Path 2: analysis/capability model selection ──────────────────────
+
+    def test_analysis_capability_router(self):
+        import types
+        from cozmo.runtime.model_router import ModelRequirement
+        router = self._router()
+        router._models["cap-model"] = types.SimpleNamespace(
+            name="cap-model", capability="coding",
+            vram_required_gb=0, supports_tools=True, supports_vision=False,
+        )
+        ctx = self._ctx()
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value="coding"),
+            capabilities=["coding"],
+            grounding=types.SimpleNamespace(needs_grounding=False, confidence=0, source="", reason=""),
+            evidence=types.SimpleNamespace(signals=[], confidence=0),
+            retrieval_plan=None,
+            complexity=types.SimpleNamespace(score=1, plan_level=0, max_steps=10),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+        result = router.resolve_from_context(
+            ctx, capability_roles={"coding": "coder"},
+        )
+        assert result.model_name == "cap-model"
+        assert result.reason == "role_match"
+
+    def test_analysis_force_model(self):
+        import types
+        router = self._router()
+        ctx = self._ctx()
+        ctx.force_model = "forced-ana"
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value="coding"),
+            capabilities=["coding"],
+            grounding=types.SimpleNamespace(needs_grounding=False, confidence=0, source="", reason=""),
+            evidence=types.SimpleNamespace(signals=[], confidence=0),
+            retrieval_plan=None,
+            complexity=types.SimpleNamespace(score=1, plan_level=0, max_steps=10),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+        result = router.resolve_from_context(
+            ctx, capability_roles={"coding": "coder"},
+        )
+        assert result.model_name == "forced-ana"
+        assert result.reason == "config_override"
+
+    # ── Path 3: fallback intent model selection ──────────────────────────
+
+    def test_fallback_router(self):
+        import types
+        from cozmo.runtime.model_router import ModelRequirement
+        router = self._router()
+        router._models["fallback-model"] = types.SimpleNamespace(
+            name="fallback-model", capability="conversation",
+            vram_required_gb=0, supports_tools=True, supports_vision=False,
+        )
+        ctx = self._ctx()
+        # no analysis, no exec_plan → fallback path
+        result = router.resolve_from_context(ctx, {"conversation": "chat"})
+        assert result.model_name == "fallback-model"
+        assert result.reason == "role_match"
+        assert result.role == "chat"
+
+    def test_fallback_force_model(self):
+        router = self._router()
+        ctx = self._ctx()
+        ctx.force_model = "forced-fb"
+        result = router.resolve_from_context(ctx, {"conversation": "chat"})
+        assert result.model_name == "forced-fb"
+        assert result.reason == "config_override"
+
+    def test_fallback_force_capability(self):
+        import types
+        from cozmo.runtime.model_router import ModelRequirement
+        router = self._router()
+        router._models["research-model"] = types.SimpleNamespace(
+            name="research-model", capability="research",
+            vram_required_gb=0, supports_tools=True, supports_vision=False,
+        )
+        ctx = self._ctx()
+        ctx.force_capability = "research"
+        result = router.resolve_from_context(
+            ctx, {"research": "planner", "conversation": "chat"},
+        )
+        assert result.model_name == "research-model"
+        assert result.reason == "force_capability"
+        assert result.role == "planner"
+
+    def test_pre_set_model_name_honored(self):
+        router = self._router()
+        ctx = self._ctx()
+        ctx.model_name = "pre-set-model"
+        result = router.resolve_from_context(ctx, {"conversation": "chat"})
+        assert result.model_name == "pre-set-model"
+
+
+class TestToolExecutor:
+    """Regression tests for ToolExecutor (extracted from CozmoRuntime)."""
+
+    @pytest.fixture
+    def registry(self):
+        from cozmo.runtime.tool_registry import ToolRegistry
+        reg = ToolRegistry()
+
+        def _echo(**kwargs):
+            return json.dumps(kwargs)
+
+        def _fail():
+            raise ValueError("boom")
+
+        def _empty():
+            return ""
+
+        def _ok():
+            return "ok result"
+
+        def _requires_args(x):
+            return str(x)
+
+        reg.register("echo", _echo, "Echo args as JSON")
+        reg.register("fail", _fail, "Always fails")
+        reg.register("empty", _empty, "Returns empty string")
+        reg.register("ok", _ok, "Always succeeds")
+        reg.register("requires_args", _requires_args, "Requires 'x' arg")
+        return reg
+
+    @pytest.fixture
+    def perms(self):
+        import types
+        return types.SimpleNamespace(resolve=lambda tool, args, agent: "ask")
+
+    @pytest.fixture
+    def lesson_store(self):
+        import types
+        calls = []
+        store = types.SimpleNamespace(
+            calls=calls,
+            record=lambda name, args, out: calls.append((name, args, out)),
+        )
+        return store
+
+    @pytest.fixture
+    def executor(self, registry, perms, lesson_store):
+        from cozmo.runtime.tool_executor import ToolExecutor
+        lc_tools = registry.as_lc_tools()
+        return ToolExecutor(
+            registry=registry,
+            perms=perms,
+            lesson_store=lesson_store,
+            lc_tools=lc_tools,
+            tool_fallbacks={"fail": ["ok"]},
+            max_tool_output=200,
+            perm_mode="bypass",
+        )
+
+    # ── execute ──────────────────────────────────────────────────────────
+
+    def test_execute_success(self, executor):
+        tr = executor.execute("echo", {"x": 1})
+        assert tr.success is True
+        assert json.loads(tr.output) == {"x": 1}
+
+    def test_execute_unknown_tool(self, executor, lesson_store):
+        tr = executor.execute("nonexistent", {})
+        assert tr.success is False
+        assert tr.output.startswith("Error: unknown tool 'nonexistent'")
+        assert len(lesson_store.calls) == 1
+
+    def test_execute_permission_denied(self, executor):
+        tr = executor.execute("echo", {"x": 1}, perm_mode="plan")
+        assert tr.success is False
+        assert tr.output.startswith("Error: the user DENIED permission")
+
+    def test_execute_type_error(self, executor, lesson_store):
+        tr = executor.execute("requires_args", {})
+        assert tr.success is False
+        assert tr.output.startswith("Error: bad arguments for requires_args")
+        assert len(lesson_store.calls) == 1
+
+    def test_execute_empty_result(self, executor):
+        tr = executor.execute("empty", {})
+        assert tr.success is False
+        assert tr.output.startswith("Error: empty returned empty output")
+
+    def test_execute_fallback_chain(self, executor, lesson_store):
+        tr = executor.execute("fail", {})
+        assert tr.success is True
+        assert tr.output == "ok result"
+        assert len(lesson_store.calls) == 2
+
+    def test_execute_coordinator_intercept(self, executor):
+        import types
+        coord = types.SimpleNamespace(
+            is_web_tool=lambda n: n == "echo",
+            intercept=lambda n, a: "blocked by coordinator",
+            record=lambda n, a, r: None,
+        )
+        tr = executor.execute("echo", {"x": 1}, coordinator=coord)
+        assert tr.success is False
+        assert tr.output == "blocked by coordinator"
+
+    # ── permission gating ────────────────────────────────────────────────
+
+    def test_check_permission_plan_mode(self, executor):
+        assert executor._check_permission("echo", {}, perm_mode="plan") is False
+
+    def test_check_permission_bypass_mode(self, executor):
+        assert executor._check_permission("echo", {}, perm_mode="bypass") is True
+
+    def test_check_permission_accept_edits(self, executor):
+        assert executor._check_permission("edit_file", {}, perm_mode="accept-edits") is True
+        assert executor._check_permission("echo", {}, perm_mode="accept-edits") is False
+
+    def test_check_permission_callback(self, executor):
+        called = []
+        def cb(name, args):
+            called.append(name)
+            return True
+        assert executor._check_permission("echo", {}, perm_mode="manual", permission_callback=cb) is True
+        assert called == ["echo"]
+
+    # ── compute_diff ─────────────────────────────────────────────────────
+
+    def test_compute_diff_edit_file(self):
+        diff = ToolExecutor.compute_diff("edit_file", {
+            "path": "test.py", "old_text": "foo\nbar\n", "new_text": "foo\nbaz\n",
+        })
+        assert diff is not None
+        assert diff["added"] == 1
+        assert diff["removed"] == 1
+
+    def test_compute_diff_write_file(self):
+        diff = ToolExecutor.compute_diff("write_file", {"content": "hello\nworld\n"})
+        assert diff is not None
+        assert diff["added"] == 2
+
+    def test_compute_diff_other(self):
+        assert ToolExecutor.compute_diff("echo", {}) is None
+
+    # ── tool_category ────────────────────────────────────────────────────
+
+    def test_tool_category_known(self):
+        assert ToolExecutor.tool_category("read_file") == "workspace"
+        assert ToolExecutor.tool_category("web_search") == "web"
+        assert ToolExecutor.tool_category("run_command") == "python"
+
+    def test_tool_category_unknown(self):
+        assert ToolExecutor.tool_category("nonexistent") == "other"
+
+    # ── record_tool_call ─────────────────────────────────────────────────
+
+    def test_record_tool_call(self):
+        from cozmo.runtime.trace import ExecutionTrace
+        trace = ExecutionTrace(user_input="test")
+        ToolExecutor.record_tool_call(
+            None, 0, "echo", {"x": 1}, '{"x":1}', 10.5, True,
+            trace=trace,
+        )
+        assert len(trace.steps) == 1
+        assert len(trace.steps[0].tool_calls) == 1
+        tc = trace.steps[0].tool_calls[0]
+        assert tc.name == "echo"
+        assert tc.latency_ms == 10.5
+        assert tc.success is True
+
+    def test_record_tool_call_no_trace(self):
+        # Must not raise
+        ToolExecutor.record_tool_call(None, 0, "echo", {}, "", 0, True, trace=None)
