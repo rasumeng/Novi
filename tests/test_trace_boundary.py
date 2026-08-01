@@ -23,6 +23,13 @@ from cozmo.runtime.trace import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Trace boundary tests target trace events, not search results.
+    Stub the live search so RESEARCH analyses run deterministically."""
+    monkeypatch.setattr("cozmo.tools.search_pipeline._search_searxng", lambda *a, **k: ([], None))
+
+
 class TestTraceActionEnum:
     """TraceAction must be high-level, not tied to implementation."""
 

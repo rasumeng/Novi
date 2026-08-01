@@ -1,0 +1,401 @@
+{
+  "dataset": "Phase 7 evidence grounding A/B fixture corpus (live-model gr",
+  "model": "qwen3:8b",
+  "aggregate": {
+    "cases": 9,
+    "fallback_count": 0,
+    "facts": 18,
+    "avg_confidence": 0.634,
+    "compression": 0.2531,
+    "recall": {
+      "A_merged": 0.9375,
+      "B_context": 0.9375,
+      "N_none": 0.0625
+    },
+    "grounded": {
+      "A_merged": 0.8889,
+      "B_context": 0.8889,
+      "N_none": 0.1111
+    }
+  },
+  "cases": [
+    {
+      "id": "EV-01",
+      "query": "Who wrote the novel Moby-Dick and in what year was it first published?",
+      "facts": 2,
+      "conflicts": 0,
+      "confidence": 0.573,
+      "fallback": false,
+      "chars_a": 631,
+      "chars_b": 400,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "Herman Melville wrote the novel Moby-Dick, which was first published in 1851.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 3000.55
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The novel Moby-Dick was written by Herman Melville and was first published in 1851.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 664.77
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 2,
+            "supported": false,
+            "latency_ms": 281.31
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-02",
+      "query": "Which planet is known as the Red Planet and what are its two moons called?",
+      "facts": 2,
+      "conflicts": 0,
+      "confidence": 0.593,
+      "fallback": false,
+      "chars_a": 393,
+      "chars_b": 374,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "Mars is known as the Red Planet, and its two moons are called Phobos and Deimos.",
+            "hits": 3,
+            "total": 3,
+            "supported": true,
+            "latency_ms": 626.5
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The planet known as the Red Planet is Mars, and its two moons are called Phobos and Deimos.",
+            "hits": 3,
+            "total": 3,
+            "supported": true,
+            "latency_ms": 657.97
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 3,
+            "supported": false,
+            "latency_ms": 266.31
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-03",
+      "query": "What is the tallest mountain on Earth and what is its height in meters?",
+      "facts": 1,
+      "conflicts": 0,
+      "confidence": 0.662,
+      "fallback": false,
+      "chars_a": 664,
+      "chars_b": 410,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "The tallest mountain on Earth is Mount Everest, and its height is 8848 meters.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 649.41
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The tallest mountain on Earth is Mount Everest, and its height is 8848 meters.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 624.6
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 2,
+            "supported": false,
+            "latency_ms": 271.9
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-04",
+      "query": "Who invented the telephone and in what year was the patent granted?",
+      "facts": 1,
+      "conflicts": 0,
+      "confidence": 0.635,
+      "fallback": false,
+      "chars_a": 382,
+      "chars_b": 171,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "Alexander Graham Bell invented the telephone, and the patent was granted in 1876.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 593.48
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "Alexander Graham Bell invented the telephone, and the patent was granted in 1876.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 589.3
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 2,
+            "supported": false,
+            "latency_ms": 262.91
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-05",
+      "query": "What is the official capital of Australia?",
+      "facts": 4,
+      "conflicts": 0,
+      "confidence": 0.646,
+      "fallback": false,
+      "chars_a": 659,
+      "chars_b": 663,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "The official capital of Australia is Canberra.",
+            "hits": 1,
+            "total": 1,
+            "supported": true,
+            "latency_ms": 389.55
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The official capital of Australia is Canberra.",
+            "hits": 1,
+            "total": 1,
+            "supported": true,
+            "latency_ms": 377.0
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "The official capital of Australia is Canberra.",
+            "hits": 1,
+            "total": 1,
+            "supported": true,
+            "latency_ms": 340.33
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-06",
+      "query": "What is the chemical symbol for gold and what is its atomic number?",
+      "facts": 1,
+      "conflicts": 0,
+      "confidence": 0.798,
+      "fallback": false,
+      "chars_a": 366,
+      "chars_b": 200,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "The chemical symbol for gold is Au and its atomic number is 79.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 527.19
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The chemical symbol for gold is Au and its atomic number is 79.",
+            "hits": 2,
+            "total": 2,
+            "supported": true,
+            "latency_ms": 524.12
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 2,
+            "supported": false,
+            "latency_ms": 265.36
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-07",
+      "query": "What is the capital of Switzerland and how many official languages does it have?",
+      "facts": 1,
+      "conflicts": 0,
+      "confidence": 0.721,
+      "fallback": false,
+      "chars_a": 413,
+      "chars_b": 228,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "The capital of Switzerland is Bern, and it has four official languages: German, French, Italian, and Romansh.",
+            "hits": 2,
+            "total": 3,
+            "supported": true,
+            "latency_ms": 699.98
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The capital of Switzerland is Bern, and it has four official languages: German, French, Italian, and Romansh.",
+            "hits": 2,
+            "total": 3,
+            "supported": true,
+            "latency_ms": 698.1
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 3,
+            "supported": false,
+            "latency_ms": 262.37
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-08",
+      "query": "What is the boiling point of water at sea level?",
+      "facts": 3,
+      "conflicts": 0,
+      "confidence": 0.535,
+      "fallback": false,
+      "chars_a": 340,
+      "chars_b": 393,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "The boiling point of water at sea level is 100 degrees Celsius.",
+            "hits": 1,
+            "total": 1,
+            "supported": true,
+            "latency_ms": 520.05
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "The boiling point of water at sea level is 100 degrees Celsius.",
+            "hits": 1,
+            "total": 1,
+            "supported": true,
+            "latency_ms": 526.46
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 1,
+            "supported": false,
+            "latency_ms": 269.57
+          }
+        ]
+      ]
+    },
+    {
+      "id": "EV-09",
+      "query": "What is the official currency of Ecuador?",
+      "facts": 3,
+      "conflicts": 1,
+      "confidence": 0.541,
+      "fallback": false,
+      "chars_a": 474,
+      "chars_b": 389,
+      "modes": [
+        [
+          "A_merged",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 0,
+            "supported": false,
+            "latency_ms": 299.4
+          }
+        ],
+        [
+          "B_context",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 0,
+            "supported": false,
+            "latency_ms": 290.32
+          }
+        ],
+        [
+          "N_none",
+          {
+            "answer": "I don't know.",
+            "hits": 0,
+            "total": 0,
+            "supported": false,
+            "latency_ms": 262.59
+          }
+        ]
+      ]
+    }
+  ]
+}

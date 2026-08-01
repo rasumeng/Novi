@@ -21,8 +21,8 @@ def check(name, condition, detail=""):
         fail += 1
 
 def _run_chunk_tests():
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "cozmo"))
-    from memory.knowledge_index import _chunk_with_overlap
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from cozmo.memory.knowledge_index import _chunk_with_overlap
 
     text = "Para one.\n\nPara two.\n\nPara three.\n\nPara four.\n\nPara five."
 

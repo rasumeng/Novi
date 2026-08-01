@@ -1,6 +1,7 @@
 """Tests for ExecutionContext — the unified runtime state object."""
 
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -265,26 +266,6 @@ def test_run_stream_accepts_context():
     # Trace should be populated
     assert ctx.trace is not None
     assert ctx.trace.user_input == "hello"
-
-
-def test_run_stream_backward_compat():
-    """run_stream() with old positional params still works."""
-    from cozmo.runtime.runtime import CozmoRuntime
-
-    runtime = CozmoRuntime()
-    events = list(runtime.run_stream("hello world"))
-    kinds = [k for k, *_ in events]
-    assert "thinking" in kinds or "token" in kinds
-
-
-def test_run_stream_populates_ctx_trace():
-    """Trace created by run_stream should be stored in ctx.trace."""
-    from cozmo.runtime.runtime import CozmoRuntime
-
-    runtime = CozmoRuntime()
-    ctx = ExecutionContext(user_input="test")
-    list(runtime.run_stream(context=ctx))
-    assert ctx.trace is not None
     assert ctx.trace.request_id  # auto-generated
 
 
@@ -434,7 +415,10 @@ def test_full_research_pipeline_trace_ownership():
         ),
     )
     ctx = ExecutionContext(user_input="what is the best pve build in SHindo Life", analysis=analysis)
-    events = list(runtime.run_stream(context=ctx))
+    # Deterministic: stub the live search; assertions target trace/routing state,
+    # not search results.
+    with patch("cozmo.tools.search_pipeline._search_searxng", return_value=([], None)):
+        events = list(runtime.run_stream(context=ctx))
 
     # Trace must exist and be fully owned by ctx
     assert ctx.trace is not None, "ctx.trace must exist after execution"

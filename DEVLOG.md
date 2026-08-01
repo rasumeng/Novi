@@ -285,6 +285,41 @@ Excluded from user-facing `to_dict()`.
 
 ---
 
+## Pre-Phase 9 — Memory & Knowledge Correctness Sprint
+
+### Context
+Phase 7 (Evidence Processing) and Phase 8 (Evaluation & Observability) are complete. The 2026-07-31 memory architectural audit found correctness defects in the existing foundations — duplicate knowledge indexing, broken WebUI memory endpoints, unregistered memory tools, dead reranking paths, and config values that did not control behavior. Unified retrieval (Phase 9) must not be built on unstable foundations.
+
+### Sprint Scope (reliability, not architecture)
+- **Knowledge index reliability**: deterministic chunk identifiers, idempotent re-indexing, stale-chunk removal, vector index support
+- **Memory system reliability**: config now actually controls behavior (`max_turns_before_summary`, `max_short_term_pairs`), active `MemoryManager` registered via `get/set_memory_manager` for tool access, `embed_model` stamped on stored records
+- **Embedding lifecycle**: `EmbeddingService.model_name` / `RerankerService.model_name` exposed; config values (memory, embedding, reranker) drive observed behavior
+- **Reranking**: `reranker` service wired into knowledge index initialization
+- **Memory tools**: `memory_ops` registered in the tool registry
+
+### Regression Coverage
+New `tests/test_memory_correctness.py` locks down: re-index idempotency, stale/legacy-row removal on file change, deterministic UUID replacement, and embedding-model change handling.
+
+---
+
+## Test Suite Consolidation
+
+### Problem
+Suite was correct but slow and partly environment-dependent. ~73% of runtime was live-network/backend work, not assertions: 5 tests hit a real SearXNG server, and the `TestSession` fixture built the full production backend (11s one-time).
+
+### Changes
+- **Deterministic tests**: `test_search_pipeline.py` mocks `urllib.request.urlopen` (preserves the HTTP-400 contract); `test_evidence.py` mocks `_search_multi`; `test_v2_pipeline.py` `TestSession` mocks `build_runtime` (real EventBus + mocks); `test_execution_context.py` and `test_trace_boundary.py` stub the live search
+- **Dead/duplicate removal**: `test_next_character_grounding_true` (empty `pass` body), `test_memory_types_per_intent` and `test_research_python_history` (tautologies), duplicate run_stream backward-compat test
+- **Parameterization**: `TestGroundingDecision` 5 near-identical source tests → 1 parametrized; `TestEvidencePatterns` 9 near-identical detection tests → 2 parametrized; shared `orch_factory` fixture removed 6× orchestration boilerplate
+- **Bug found**: mocking the live search exposed an un-gated `DebugTraceEvent` append in `RetrievalExecutor.execute_search` (empty/failed branches leaked debug events when `debug_trace=False`). Fixed to gate on `self.debug_trace`, matching the pattern everywhere else.
+
+### Result
+- **403 tests, all passing** (was 408 — net -5 dead/duplicate; parametrize preserved all assertions)
+- **Suite: ~25s → ~5.4s** (~78% faster); only remaining slow test is the intentional 2s `test_timeout_guard`
+- No network dependency: suite runs without SearXNG or a live backend
+
+---
+
 ## Current Architecture State
 
 ```
@@ -308,9 +343,9 @@ Response
 ```
 
 ### Test Suite
-- 262 total tests
-- All passing
-- New test files: `test_trace_boundary.py`, `test_evidence.py`, `test_grounding.py`, `test_retrieval_coordinator.py`, `test_search_pipeline.py`, `test_execution_context.py`, `test_regression.py`
+- 403 total tests
+- All passing in ~5.4s (no network/backend dependencies)
+- Test files: `test_trace_boundary.py`, `test_evidence.py`, `test_grounding.py`, `test_retrieval_coordinator.py`, `test_search_pipeline.py`, `test_execution_context.py`, `test_regression.py`, `test_evidence_processing.py`, `test_evidence_ab.py`, `test_evaluation.py`, `test_memory_correctness.py`
 
 ### Key Files
 
@@ -331,4 +366,4 @@ cozmo/
 ```
 
 ### Current Focus
-**Evidence Processing Layer** — not yet implemented. Next milestone.
+**Pre-Phase 9 Memory & Knowledge Correctness Sprint** — in progress. Phase 9 (Unified Retrieval Policy) is next.

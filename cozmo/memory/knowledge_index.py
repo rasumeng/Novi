@@ -45,9 +45,13 @@ def _parse_okf(filepath: Path) -> tuple[dict, str]:
 _global_knowledge_index: "KnowledgeIndex | None" = None
 
 
-def init_knowledge_index(knowledge_dir: str | Path, persist_dir: str | Path | None = None) -> "KnowledgeIndex":
+def init_knowledge_index(
+    knowledge_dir: str | Path,
+    persist_dir: str | Path | None = None,
+    reranker: RerankerService | str | None = None,
+) -> "KnowledgeIndex":
     global _global_knowledge_index
-    ki = KnowledgeIndex(knowledge_dir=knowledge_dir, persist_dir=persist_dir)
+    ki = KnowledgeIndex(knowledge_dir=knowledge_dir, persist_dir=persist_dir, rerank_model=reranker)
     ki.index_all()
     _global_knowledge_index = ki
     return ki
@@ -58,7 +62,11 @@ def get_knowledge_index() -> "KnowledgeIndex | None":
 
 
 def _chunk_with_overlap(text: str, max_chars: int = 1000, overlap_chars: int = 150) -> list[str]:
-    """Split text into overlapping chunks at paragraph boundaries."""
+    """Split text into overlapping chunks at paragraph boundaries.
+
+    Oversized single paragraphs are force-split into max_chars windows with
+    overlap so no chunk exceeds the limit.
+    """
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if not paragraphs:
         return [text[:max_chars]] if text else []
@@ -67,9 +75,14 @@ def _chunk_with_overlap(text: str, max_chars: int = 1000, overlap_chars: int = 1
     current = ""
     for p in paragraphs:
         para_len = len(p)
-        if not current and para_len > max_chars:
-            # Single paragraph exceeds max_chars — force-split mid-paragraph
-            chunks.append(p)
+        if para_len > max_chars:
+            # Single paragraph exceeds max_chars — force-split with overlap
+            if current:
+                chunks.append(current)
+                current = ""
+            step = max(max_chars - overlap_chars, 1)
+            for start in range(0, para_len, step):
+                chunks.append(p[start:start + max_chars])
             continue
 
         candidate = (current + "\n\n" + p).strip() if current else p
@@ -93,39 +106,6 @@ def _chunk_with_overlap(text: str, max_chars: int = 1000, overlap_chars: int = 1
         chunks.append(current)
 
     return chunks
-
-
-class Reranker:
-    """Cross-encoder reranker. Lazy-loaded model, cached across calls."""
-
-    def __init__(self, model_name: str | None = None):
-        if model_name is None:
-            cfg = cozmo_config.load()
-            model_name = cfg.get("reranker", {}).get("model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
-        self.model_name = model_name
-        self._model = None
-
-    def _load(self):
-        if self._model is None:
-            from sentence_transformers import CrossEncoder
-            self._model = CrossEncoder(self.model_name)
-
-    def rerank(self, query: str, results: list[dict], k: int = 5) -> list[dict]:
-        """Rerank results by cross-encoder relevance score."""
-        if not results:
-            return results
-        try:
-            self._load()
-            pairs = [(query, r["text"]) for r in results]
-            scores = self._model.predict(pairs)
-            for i, s in enumerate(scores):
-                results[i]["score"] = round(float(s), 4)
-                results[i]["rerank_score"] = round(float(s), 4)
-            results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
-            return results[:k]
-        except Exception as e:
-            log.warning("reranker failed, falling back: %s", e)
-            return results[:k]
 
 
 class KnowledgeIndex:
@@ -166,9 +146,16 @@ class KnowledgeIndex:
             table_name="knowledge_index",
             embed_func=embed,
             embed_dim=embed_dim,
+            embed_model=embed_service.model_name,
+            vector_index=cozmo_config.load().get("vector_index", {}).get("enabled", True),
         )
         self._indexed_files: dict[str, float] = {}
-        self._reranker = rerank_model if isinstance(rerank_model, RerankerService) else None
+        if isinstance(rerank_model, RerankerService):
+            self._reranker = rerank_model
+        elif isinstance(rerank_model, str):
+            self._reranker = RerankerService({"reranker": {"model": rerank_model}})
+        else:
+            self._reranker = None
 
     def index_all(self, force: bool = False):
         """Index all knowledge files. Skips files with unchanged mtime."""
@@ -194,18 +181,27 @@ class KnowledgeIndex:
             log.info("indexed %d knowledge file(s)", count)
 
     def index_file(self, path: Path, rel: Optional[str] = None):
-        """Index a single knowledge file."""
+        """Index a single knowledge file.
+
+        Chunks get deterministic ids of the form ``<rel>::<chunk>`` so
+        re-indexing the same file replaces, rather than duplicates, its rows.
+        """
         if rel is None:
-            rel = str(path.relative_to(self.knowledge_dir))
+            rel = path.relative_to(self.knowledge_dir).as_posix()
+        else:
+            rel = Path(rel).as_posix()
         meta, body = _parse_okf(path)
         title = meta.get("title", path.stem)
         tags = meta.get("tags", [])
 
-        existing = self.store.query_sql(f"id LIKE '{rel}%'")
+        # Remove existing chunks for this file (matches both deterministic rows
+        # and any legacy uuid rows) before re-adding.
+        existing = self.store.query_sql(f"metadata LIKE '%\"path\": \"{rel}\"%'")
         for e in existing:
             self.store.delete(e.get("id", ""))
 
         chunks = _chunk_with_overlap(body)
+        ids = [f"{rel}::{i}" for i in range(len(chunks))]
         for i, chunk in enumerate(chunks):
             metadata = {
                 "path": rel,
@@ -215,8 +211,9 @@ class KnowledgeIndex:
                 "chunk": i,
                 "total_chunks": len(chunks),
                 "timestamp": meta.get("timestamp", datetime.now().isoformat()),
+                "embed_model": self._embedder.model_name,
             }
-            self.store.add_texts([chunk], [metadata])
+            self.store.add_texts([chunk], [metadata], ids=[ids[i]])
 
     def search(self, query: str, k: int = 5, rerank: bool = True) -> list[dict]:
         """Search knowledge base. Returns ranked results with metadata.
@@ -235,11 +232,10 @@ class KnowledgeIndex:
         # Normalize scores to 0-1 for consistent output
         if results and "rerank_score" in results[0]:
             scores = [r.get("rerank_score", 0) for r in results]
-            if scores:
-                max_s = max(scores)
-                if max_s > 0:
-                    for r in results:
-                        r["score"] = round(max(0, r.get("rerank_score", 0) / max_s), 4)
+            max_s = max(scores) if scores else 0
+            if max_s > 0:
+                for r in results:
+                    r["score"] = round(max(0, r.get("rerank_score", 0) / max_s), 4)
 
         return results[:k]
 

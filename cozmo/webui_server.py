@@ -800,10 +800,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def list_memory():
         b = get_backend(cfg)
         mem = b.get("memory")
-        if not mem or not hasattr(mem, "chroma"):
+        if not mem:
             return []
-        items = mem.chroma.list_all(limit=200)
-        return items
+        return mem.list_all(limit=200)
 
     @app.get("/api/memory/search")
     def search_memory(q: str = ""):
@@ -823,10 +822,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def delete_memory(item_id: str):
         b = get_backend(cfg)
         mem = b.get("memory")
-        if not mem or not hasattr(mem, "chroma"):
+        if not mem:
             return {"ok": False}
-        ok = mem.chroma.delete(item_id)
-        return {"ok": ok}
+        return {"ok": bool(mem.delete(item_id))}
 
     @app.get("/api/memory/path")
     def memory_path():

@@ -1,5 +1,7 @@
 """Tests for EvidenceCollector — structured evidence acquisition pipeline."""
 
+from unittest.mock import patch
+
 import pytest
 from cozmo.tools.search_pipeline import SearchResult
 from cozmo.runtime.evidence import EvidenceCollector, EvidenceBundle, _domain
@@ -129,11 +131,12 @@ class TestEvidenceCollectorIntegration:
         assert bundle.query == ""
 
     def test_collect_no_results(self):
-        """Non-sensical query with no search results returns empty bundle."""
+        """Search returning no results yields an empty bundle."""
         collector = EvidenceCollector()
-        bundle = collector.collect("zxvzxcvasdfqwer")
-        # Expected: no results from SearXNG
+        with patch("cozmo.runtime.evidence._search_multi", return_value=([], None)):
+            bundle = collector.collect("zxvzxcvasdfqwer")
         assert isinstance(bundle, EvidenceBundle)
+        assert bundle.source_count == 0
 
 
 class TestEvidenceBundle:

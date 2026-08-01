@@ -29,6 +29,19 @@ from .lancedb_store import LanceStore
 
 log = logging.getLogger("cozmo.memory.manager")
 
+_memory_manager: "MemoryManager | None" = None
+
+
+def set_memory_manager(manager: "MemoryManager | None"):
+    """Register the active MemoryManager for tool access (mirrors KnowledgeIndex pattern)."""
+    global _memory_manager
+    _memory_manager = manager
+
+
+def get_memory_manager() -> "MemoryManager | None":
+    return _memory_manager
+
+
 SUMMARIZE_PROMPT = """Condense the following conversation into 2-3 sentences.
 Capture key facts, user preferences, and any actionable items.
 Do not include greetings or small talk.
@@ -57,10 +70,12 @@ class MemoryManager:
         persist_dir: str,
         embed_model: str | EmbeddingService | None = None,
         max_turns: int = 5,
+        max_short_term_pairs: int = 10,
     ):
         self.llm = llm
         self.short_term: list[dict] = []
         self.max_turns = max_turns
+        self.max_short_term_pairs = max_short_term_pairs
         self.turn_count = 0
 
         if isinstance(embed_model, EmbeddingService):
@@ -81,10 +96,14 @@ class MemoryManager:
             table_name="cozmo_memories",
             embed_func=embed,
             embed_dim=embed_dim,
+            embed_model=embed_service.model_name,
+            vector_index=cozmo_config.load().get("vector_index", {}).get("enabled", True),
         )
 
     def add_interaction(self, user: str, assistant: str):
         self.short_term.append({"user": user, "assistant": assistant})
+        if len(self.short_term) > self.max_short_term_pairs:
+            self.short_term = self.short_term[-self.max_short_term_pairs:]
         self.turn_count += 1
         if self.turn_count >= self.max_turns:
             self._summarize_and_store()
@@ -104,6 +123,7 @@ class MemoryManager:
             "type": memory_type,
             "frequency": 1,
             "title": summary.split(".")[0][:80],
+            "embed_model": self.store.embed_model,
         }
         self.store.add_texts([summary], [meta])
         self.short_term = self.short_term[-1:]
@@ -132,6 +152,7 @@ class MemoryManager:
             "key": key,
             "frequency": 1,
             "title": f"preference: {key}",
+            "embed_model": self.store.embed_model,
         }
         self.store.add_texts([text], [meta])
 
@@ -140,6 +161,7 @@ class MemoryManager:
             "timestamp": datetime.now().isoformat(),
             "type": "project",
             "frequency": 1,
+            "embed_model": self.store.embed_model,
         }
         self.store.add_texts([context], [meta])
 
@@ -151,6 +173,7 @@ class MemoryManager:
             "tags": tags or [],
             "frequency": 1,
             "title": title,
+            "embed_model": self.store.embed_model,
         }
         self.store.add_texts([fact], [meta])
 

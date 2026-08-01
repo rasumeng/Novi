@@ -112,13 +112,17 @@ class CozmoContext:
 
     @property
     def memory(self):
-        from ..memory.manager import MemoryManager
+        from ..memory.manager import MemoryManager, set_memory_manager
 
         if self._memory is None:
+            mem_cfg = self.config.get("memory", {})
             self._memory = MemoryManager(
                 self.router_llm,
                 persist_dir=str(Path.home() / ".cozmo" / "memory"),
+                max_turns=int(mem_cfg.get("max_turns_before_summary", 5)),
+                max_short_term_pairs=int(mem_cfg.get("max_short_term_pairs", 10)),
             )
+            set_memory_manager(self._memory)
         return self._memory
 
     @property
@@ -167,6 +171,7 @@ class CozmoContext:
             init_knowledge_index(
                 knowledge_dir=self.config.get("knowledge_dir", "./knowledge"),
                 persist_dir=str(Path.home() / ".cozmo" / "knowledge_index"),
+                reranker=self.reranker_service,
             )
             self._knowledge_inited = True
 

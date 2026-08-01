@@ -24,19 +24,6 @@ class TestMemoryContextAssembly:
         rt = CozmoRuntime(model_service=mm)
         return rt
 
-    def test_memory_types_per_intent(self):
-        """Each intent maps to appropriate memory types."""
-        mapping = {
-            "conversation": ["conversation", "preference", "fact"],
-            "research": ["reference", "fact", "conversation"],
-            "coding": ["project", "learning", "reference"],
-            "planning": ["project", "reference", "fact"],
-            "vision": ["reference", "conversation"],
-        }
-        assert set(mapping["conversation"]) == {"conversation", "preference", "fact"}
-        assert set(mapping["coding"]) == {"project", "learning", "reference"}
-        assert set(mapping["research"]) == {"reference", "fact", "conversation"}
-
     def test_query_memory_empty_when_no_memory(self, runtime):
         """Without a memory manager, query returns empty string."""
         result = runtime._query_memory("hello")

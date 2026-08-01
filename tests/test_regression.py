@@ -31,7 +31,7 @@ def get_orchestrator():
 @pytest.mark.parametrize("entry", load_corpus(), ids=lambda e: e["id"])
 def test_regression(entry: dict[str, Any]):
     orch = get_orchestrator()
-    plan = orch.plan(entry["query"])
+    plan = orch.plan(entry["query"], has_images=entry.get("has_images", False))
     analysis = plan.context.get("analysis")
     actual_intent = plan.goal.intent.value
     actual_strategy = plan.strategy.value

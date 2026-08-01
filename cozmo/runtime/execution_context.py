@@ -25,7 +25,7 @@ the context= parameter.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from ..orchestrator.task_types import (
     EvidenceAnalysis,
@@ -39,6 +39,9 @@ from .retrieval_policy import RetrievalPlan
 from .retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
 from .trace import ExecutionTrace
 from .evidence import RetrievalQuality
+
+if TYPE_CHECKING:
+    from ..evidence.context import EvidenceContext
 
 
 @dataclass
@@ -80,6 +83,10 @@ class ExecutionContext:
     grounding_error: str | None = None
     grounding_quality: str = ""
     """Serialized RetrievalQuality value. Empty string means no retrieval was attempted."""
+    evidence_context: Optional[EvidenceContext] = None
+    """Phase 7 structured evidence (frozen contract). Observational only —
+       never set by runtime; populated by an optional downstream consumer.
+       Coexists with grounding_text during migration."""
 
     # ── Retrieval Plan (from RetrievalPolicy) ────────────────────────────
     retrieval_plan: RetrievalPlan = field(default_factory=RetrievalPlan)

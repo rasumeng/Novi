@@ -5,9 +5,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "binary search"
+      ]
     },
-    "tags": ["timeless"]
+    "tags": [
+      "timeless"
+    ]
   },
   {
     "id": "REG-002",
@@ -15,9 +22,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "tcp"
+      ]
     },
-    "tags": ["timeless"]
+    "tags": [
+      "timeless"
+    ]
   },
   {
     "id": "REG-003",
@@ -25,9 +39,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "dependency injection"
+      ]
     },
-    "tags": ["timeless"]
+    "tags": [
+      "timeless"
+    ]
   },
   {
     "id": "REG-004",
@@ -35,9 +56,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "transformers"
+      ]
     },
-    "tags": ["timeless"]
+    "tags": [
+      "timeless"
+    ]
   },
   {
     "id": "REG-005",
@@ -45,9 +73,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "monad"
+      ]
     },
-    "tags": ["timeless"]
+    "tags": [
+      "timeless"
+    ]
   },
   {
     "id": "REG-006",
@@ -55,9 +90,14 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["filesystem", "conversation"]
+      "capabilities": [
+        "filesystem",
+        "conversation"
+      ]
     },
-    "tags": ["timeless"]
+    "tags": [
+      "timeless"
+    ]
   },
   {
     "id": "REG-007",
@@ -65,10 +105,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "gaming"]
+    "tags": [
+      "current",
+      "gaming"
+    ]
   },
   {
     "id": "REG-008",
@@ -76,10 +122,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "software"]
+    "tags": [
+      "current",
+      "software"
+    ]
   },
   {
     "id": "REG-009",
@@ -87,10 +139,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "hardware"]
+    "tags": [
+      "current",
+      "hardware"
+    ]
   },
   {
     "id": "REG-010",
@@ -98,10 +156,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "ai"]
+    "tags": [
+      "current",
+      "ai"
+    ]
   },
   {
     "id": "REG-011",
@@ -109,10 +173,17 @@
     "expected": {
       "intent": "research",
       "strategy": "research",
-      "capabilities": ["search", "research", "conversation"],
+      "capabilities": [
+        "search",
+        "research",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "sports"]
+    "tags": [
+      "current",
+      "sports"
+    ]
   },
   {
     "id": "REG-012",
@@ -120,10 +191,17 @@
     "expected": {
       "intent": "research",
       "strategy": "research",
-      "capabilities": ["search", "research", "conversation"],
+      "capabilities": [
+        "search",
+        "research",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "weather"]
+    "tags": [
+      "current",
+      "weather"
+    ]
   },
   {
     "id": "REG-013",
@@ -131,10 +209,17 @@
     "expected": {
       "intent": "research",
       "strategy": "research",
-      "capabilities": ["search", "research", "conversation"],
+      "capabilities": [
+        "search",
+        "research",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["current", "finance"]
+    "tags": [
+      "current",
+      "finance"
+    ]
   },
   {
     "id": "REG-014",
@@ -142,10 +227,15 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["recommendation"]
+    "tags": [
+      "recommendation"
+    ]
   },
   {
     "id": "REG-015",
@@ -153,10 +243,16 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["recommendation", "hardware"]
+    "tags": [
+      "recommendation",
+      "hardware"
+    ]
   },
   {
     "id": "REG-016",
@@ -164,10 +260,15 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["recommendation"]
+    "tags": [
+      "recommendation"
+    ]
   },
   {
     "id": "REG-017",
@@ -175,9 +276,18 @@
     "expected": {
       "intent": "coding",
       "strategy": "execute",
-      "capabilities": ["filesystem", "terminal", "coding"]
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ],
+      "answer_contains": [
+        "sort"
+      ]
     },
-    "tags": ["coding"]
+    "tags": [
+      "coding"
+    ]
   },
   {
     "id": "REG-018",
@@ -185,9 +295,15 @@
     "expected": {
       "intent": "coding",
       "strategy": "execute",
-      "capabilities": ["filesystem", "terminal", "coding"]
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
     },
-    "tags": ["coding"]
+    "tags": [
+      "coding"
+    ]
   },
   {
     "id": "REG-019",
@@ -195,9 +311,15 @@
     "expected": {
       "intent": "coding",
       "strategy": "execute",
-      "capabilities": ["filesystem", "terminal", "coding"]
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
     },
-    "tags": ["coding"]
+    "tags": [
+      "coding"
+    ]
   },
   {
     "id": "REG-020",
@@ -205,9 +327,15 @@
     "expected": {
       "intent": "coding",
       "strategy": "execute",
-      "capabilities": ["filesystem", "terminal", "coding"]
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
     },
-    "tags": ["coding"]
+    "tags": [
+      "coding"
+    ]
   },
   {
     "id": "REG-021",
@@ -215,10 +343,19 @@
     "expected": {
       "intent": "coding",
       "strategy": "execute",
-      "capabilities": ["filesystem", "terminal", "coding", "search", "conversation"],
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding",
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["coding", "current"]
+    "tags": [
+      "coding",
+      "current"
+    ]
   },
   {
     "id": "REG-022",
@@ -226,10 +363,19 @@
     "expected": {
       "intent": "coding",
       "strategy": "execute",
-      "capabilities": ["filesystem", "terminal", "coding", "search", "conversation"],
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding",
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["coding", "current"]
+    "tags": [
+      "coding",
+      "current"
+    ]
   },
   {
     "id": "REG-023",
@@ -237,10 +383,15 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["memory", "conversation"],
+      "capabilities": [
+        "memory",
+        "conversation"
+      ],
       "evidence_memory": true
     },
-    "tags": ["memory"]
+    "tags": [
+      "memory"
+    ]
   },
   {
     "id": "REG-024",
@@ -248,10 +399,15 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["memory", "conversation"],
+      "capabilities": [
+        "memory",
+        "conversation"
+      ],
       "evidence_memory": true
     },
-    "tags": ["memory"]
+    "tags": [
+      "memory"
+    ]
   },
   {
     "id": "REG-025",
@@ -259,10 +415,15 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["memory", "conversation"],
+      "capabilities": [
+        "memory",
+        "conversation"
+      ],
       "evidence_memory": true
     },
-    "tags": ["memory"]
+    "tags": [
+      "memory"
+    ]
   },
   {
     "id": "REG-026",
@@ -270,9 +431,13 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ]
     },
-    "tags": ["edge"]
+    "tags": [
+      "edge"
+    ]
   },
   {
     "id": "REG-027",
@@ -280,9 +445,13 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ]
     },
-    "tags": ["edge"]
+    "tags": [
+      "edge"
+    ]
   },
   {
     "id": "REG-028",
@@ -290,9 +459,13 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"]
+      "capabilities": [
+        "conversation"
+      ]
     },
-    "tags": ["edge"]
+    "tags": [
+      "edge"
+    ]
   },
   {
     "id": "REG-029",
@@ -300,10 +473,14 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["conversation"],
+      "capabilities": [
+        "conversation"
+      ],
       "evidence_external": false
     },
-    "tags": ["ambiguous"]
+    "tags": [
+      "ambiguous"
+    ]
   },
   {
     "id": "REG-030",
@@ -311,10 +488,15 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["search", "conversation"],
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
       "evidence_external": true
     },
-    "tags": ["ambiguous"]
+    "tags": [
+      "ambiguous"
+    ]
   },
   {
     "id": "REG-031",
@@ -322,9 +504,14 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["planning", "conversation"]
+      "capabilities": [
+        "planning",
+        "conversation"
+      ]
     },
-    "tags": ["planning"]
+    "tags": [
+      "planning"
+    ]
   },
   {
     "id": "REG-032",
@@ -332,8 +519,428 @@
     "expected": {
       "intent": "conversation",
       "strategy": "respond",
-      "capabilities": ["planning", "conversation"]
+      "capabilities": [
+        "planning",
+        "conversation"
+      ]
     },
-    "tags": ["planning"]
+    "tags": [
+      "planning"
+    ]
+  },
+  {
+    "id": "REG-033",
+    "query": "Summarize the latest AI news",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "ai"
+    ]
+  },
+  {
+    "id": "REG-034",
+    "query": "Compare PyTorch vs TensorFlow in 2026",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "comparative"
+    ]
+  },
+  {
+    "id": "REG-035",
+    "query": "What is the latest version of FastAPI?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "software"
+    ]
+  },
+  {
+    "id": "REG-036",
+    "query": "Write a unit test for this Python function",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
+    },
+    "tags": [
+      "coding"
+    ]
+  },
+  {
+    "id": "REG-037",
+    "query": "Refactor this SQL query to be more efficient",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
+    },
+    "tags": [
+      "coding"
+    ]
+  },
+  {
+    "id": "REG-038",
+    "query": "Debug why my React app is slow",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
+    },
+    "tags": [
+      "coding"
+    ]
+  },
+  {
+    "id": "REG-039",
+    "query": "Explain quantum computing",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "superposition"
+      ]
+    },
+    "tags": [
+      "timeless"
+    ]
+  },
+  {
+    "id": "REG-040",
+    "query": "How does a hash table work internally?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "hash"
+      ]
+    },
+    "tags": [
+      "timeless"
+    ]
+  },
+  {
+    "id": "REG-041",
+    "query": "What is the difference between REST and GraphQL?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "conversation"
+      ],
+      "answer_contains": [
+        "graphql",
+        "rest"
+      ]
+    },
+    "tags": [
+      "timeless"
+    ]
+  },
+  {
+    "id": "REG-042",
+    "query": "Best practices for Docker in production 2026",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "knowledge",
+        "web"
+      ]
+    },
+    "tags": [
+      "recommendation",
+      "current"
+    ]
+  },
+  {
+    "id": "REG-043",
+    "query": "What did we discuss about the database schema?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "memory",
+        "conversation"
+      ],
+      "evidence_memory": true,
+      "sources": [
+        "memory"
+      ]
+    },
+    "tags": [
+      "memory"
+    ]
+  },
+  {
+    "id": "REG-044",
+    "query": "Do you remember the file we were working on?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "memory",
+        "conversation"
+      ],
+      "evidence_memory": true,
+      "sources": [
+        "memory"
+      ]
+    },
+    "tags": [
+      "memory"
+    ]
+  },
+  {
+    "id": "REG-045",
+    "query": "What did we agree on last time?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "memory",
+        "conversation"
+      ],
+      "evidence_memory": true,
+      "sources": [
+        "memory"
+      ]
+    },
+    "tags": [
+      "memory"
+    ]
+  },
+  {
+    "id": "REG-046",
+    "query": "Who won the World Cup final?",
+    "expected": {
+      "intent": "research",
+      "strategy": "research",
+      "capabilities": [
+        "search",
+        "research",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "sports"
+    ]
+  },
+  {
+    "id": "REG-047",
+    "query": "What's the price of Ethereum today?",
+    "expected": {
+      "intent": "research",
+      "strategy": "research",
+      "capabilities": [
+        "search",
+        "research",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "finance"
+    ]
+  },
+  {
+    "id": "REG-048",
+    "query": "Weather in London right now?",
+    "expected": {
+      "intent": "research",
+      "strategy": "research",
+      "capabilities": [
+        "research",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "weather"
+    ]
+  },
+  {
+    "id": "REG-049",
+    "query": "Run this analysis in the background",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "planning",
+        "conversation"
+      ]
+    },
+    "tags": [
+      "autonomous"
+    ]
+  },
+  {
+    "id": "REG-050",
+    "query": "Write a Python script to count files",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
+    },
+    "tags": [
+      "coding"
+    ]
+  },
+  {
+    "id": "REG-051",
+    "query": "Refactor the auth module to use async",
+    "expected": {
+      "intent": "coding",
+      "strategy": "execute",
+      "capabilities": [
+        "filesystem",
+        "terminal",
+        "coding"
+      ]
+    },
+    "tags": [
+      "coding"
+    ]
+  },
+  {
+    "id": "REG-052",
+    "query": "What's the capital of France?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "conversation"
+      ]
+    },
+    "tags": [
+      "timeless"
+    ]
+  },
+  {
+    "id": "REG-053",
+    "query": "Latest trends in fintech 2026",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "search",
+        "conversation"
+      ],
+      "evidence_external": true,
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "current",
+      "finance"
+    ]
+  },
+  {
+    "id": "REG-054",
+    "query": "Analyze this image and describe what you see",
+    "expected": {
+      "intent": "vision",
+      "strategy": "respond",
+      "capabilities": [
+        "vision",
+        "conversation"
+      ]
+    },
+    "has_images": true,
+    "tags": [
+      "vision"
+    ]
+  },
+  {
+    "id": "REG-055",
+    "query": "Is it worth upgrading from RTX 4090 to RTX 5090?",
+    "expected": {
+      "intent": "conversation",
+      "strategy": "respond",
+      "capabilities": [
+        "conversation"
+      ],
+      "sources": [
+        "web"
+      ]
+    },
+    "tags": [
+      "recommendation",
+      "hardware"
+    ]
   }
 ]

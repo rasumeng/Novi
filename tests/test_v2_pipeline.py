@@ -234,11 +234,16 @@ class TestSession:
     def session(self):
         from cozmo.webui_server import Session
         from cozmo import config
+        from cozmo.runtime.event_bus import EventBus
 
         cfg = config.load()
         loop = MagicMock()
         loop.call_soon_threadsafe = lambda fn, *a: fn(*a) if callable(fn) else None
-        sess = Session(cfg, loop)
+        # Build a full production backend is slow (memory, project index, MCP).
+        # Session wiring is what's under test — use a real EventBus plus mocks.
+        backend = (MagicMock(), MagicMock(), MagicMock(), EventBus())
+        with patch("cozmo.webui_server.build_runtime", return_value=backend):
+            sess = Session(cfg, loop)
         return sess
 
     def test_session_has_runtime(self, session):

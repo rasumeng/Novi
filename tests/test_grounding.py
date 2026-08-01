@@ -31,46 +31,26 @@ class TestGroundingDecision:
         assert d.reason == ""
         assert d.source == ""
 
-    def test_keyword_source(self):
+    @pytest.mark.parametrize(
+        "source,needs_grounding,confidence,reason",
+        [
+            ("keyword", True, 1.0, "Intent classified as research"),
+            ("heuristic", True, 0.85, "temporal (high): matched 'latest'"),
+            ("llm", True, 0.72, "Question depends on current game meta"),
+            ("none", False, 0.0, ""),
+        ],
+    )
+    def test_construction_with_source(self, source, needs_grounding, confidence, reason):
         d = GroundingDecision(
-            needs_grounding=True,
-            confidence=1.0,
-            reason="Intent classified as research",
-            source="keyword",
+            needs_grounding=needs_grounding,
+            confidence=confidence,
+            reason=reason,
+            source=source,
         )
-        assert d.needs_grounding is True
-        assert d.confidence == 1.0
-        assert d.source == "keyword"
-
-    def test_heuristic_source(self):
-        d = GroundingDecision(
-            needs_grounding=True,
-            confidence=0.85,
-            reason="temporal (high): matched 'latest'",
-            source="heuristic",
-        )
-        assert d.needs_grounding is True
-        assert d.confidence == 0.85
-        assert d.source == "heuristic"
-
-    def test_llm_source(self):
-        d = GroundingDecision(
-            needs_grounding=True,
-            confidence=0.72,
-            reason="Question depends on current game meta",
-            source="llm",
-        )
-        assert d.needs_grounding is True
-        assert d.confidence == 0.72
-        assert d.source == "llm"
-
-    def test_none_source(self):
-        d = GroundingDecision(
-            needs_grounding=False,
-            source="none",
-        )
-        assert d.needs_grounding is False
-        assert d.source == "none"
+        assert d.needs_grounding is needs_grounding
+        assert d.confidence == confidence
+        assert d.reason == reason
+        assert d.source == source
 
 
 # ── EvidenceDetector pattern detection ───────────────────────────────────────
@@ -82,72 +62,37 @@ class TestEvidencePatterns:
     def make_detector(self):
         return EvidenceDetector()
 
-    def test_next_character_detected(self):
-        """'next character' should trigger temporal signal."""
+    @pytest.mark.parametrize(
+        "query,expected_signal",
+        [
+            ("Who is the next Wuthering Waves character?", "temporal"),
+            ("When is the next update for Genshin Impact?", "dynamic"),
+            ("What is the best PvE build in Shindo Life?", "dynamic"),
+            ("Should I summon the next Wuthering Waves character?", "dynamic"),
+            ("Best character tier list 2026", "dynamic"),
+            ("Is the RTX 5090 worth buying?", "dynamic"),
+        ],
+    )
+    def test_signal_detected(self, query, expected_signal):
         ed = self.make_detector()
-        analysis = ed.detect("Who is the next Wuthering Waves character?")
+        analysis = ed.detect(query)
         types = {s.type for s in analysis.signals}
-        assert "temporal" in types, f"Expected temporal signal, got {types}"
+        assert expected_signal in types, f"Expected {expected_signal} signal, got {types}"
         assert analysis.requirements.external is True
 
-    def test_next_update_detected(self):
-        """'next update' should trigger dynamic signal."""
-        ed = self.make_detector()
-        analysis = ed.detect("When is the next update for Genshin Impact?")
-        types = {s.type for s in analysis.signals}
-        assert "dynamic" in types, f"Expected dynamic signal, got {types}"
-        assert analysis.requirements.external is True
-
-    def test_best_pve_build_detected(self):
-        """'best PvE build' should now trigger dynamic signal (regex fix)."""
-        ed = self.make_detector()
-        analysis = ed.detect("What is the best PvE build in Shindo Life?")
-        types = {s.type for s in analysis.signals}
-        assert "dynamic" in types, f"Expected dynamic signal, got {types}"
-        assert analysis.requirements.external is True
-
-    def test_should_summon_detected(self):
-        """'should I summon' should trigger dynamic signal."""
-        ed = self.make_detector()
-        analysis = ed.detect("Should I summon the next Wuthering Waves character?")
-        types = {s.type for s in analysis.signals}
-        assert "dynamic" in types, f"Expected dynamic signal, got {types}"
-        assert analysis.requirements.external is True
-
-    def test_timeless_question_no_signals(self):
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "What is recursion?",
+            "Explain Python decorators",
+        ],
+    )
+    def test_no_external_signals(self, query):
         """Timeless questions should produce no external signals."""
         ed = self.make_detector()
-        analysis = ed.detect("What is recursion?")
+        analysis = ed.detect(query)
         assert analysis.requirements.external is False
         assert analysis.confidence == 0.0
-
-    def test_explain_python_decorators_no_signals(self):
-        """Timeless coding concept: no external signals."""
-        ed = self.make_detector()
-        analysis = ed.detect("Explain Python decorators")
-        assert analysis.requirements.external is False
-        assert analysis.confidence == 0.0
-
-    def test_research_python_history(self):
-        """'research X' may trigger project/coding patterns or temporal."""
-        ed = self.make_detector()
-        analysis = ed.detect("Research Python history")
-        # 'research' by itself doesn't trigger temporal/dynamic,
-        # but 'history' might. Check it produces at least some signals.
-        assert analysis.confidence >= 0.0
-
-    def test_tier_list_detected(self):
-        """'tier list' should trigger dynamic signal."""
-        ed = self.make_detector()
-        analysis = ed.detect("Best character tier list 2026")
-        types = {s.type for s in analysis.signals}
-        assert "dynamic" in types, f"Expected dynamic signal, got {types}"
-
-    def test_worth_it_detected(self):
-        ed = self.make_detector()
-        analysis = ed.detect("Is the RTX 5090 worth buying?")
-        types = {s.type for s in analysis.signals}
-        assert "dynamic" in types, f"Expected dynamic signal, got {types}"
 
 
 # ── GroundingReasoner LLM parsing ────────────────────────────────────────────
@@ -216,10 +161,8 @@ class TestResolveGrounding:
     # The orchestrator needs a capability_registry for construction,
     # but _resolve_grounding doesn't use it.
     @pytest.fixture
-    def orch(self):
-        registry = CapabilityRegistry()
-        register_builtin_capabilities(registry)
-        return Orchestrator(capability_registry=registry)
+    def orch(self, orch_factory):
+        return orch_factory()
 
     def test_research_intent_keyword_path(self, orch):
         """RESEARCH intent → keyword path → needs_grounding=true."""
@@ -307,49 +250,16 @@ class TestResolveGrounding:
 
 
 class TestTaskAnalysisGrounding:
-    def test_grounding_populated_in_analysis(self):
+    def test_grounding_populated_in_analysis(self, orch_factory):
         """TaskAnalysis.analyze() should populate grounding field."""
-        registry = CapabilityRegistry()
-        register_builtin_capabilities(registry)
-        orch = Orchestrator(capability_registry=registry)
-
+        orch = orch_factory()
         analysis = orch.analyze("Who is the next Wuthering Waves character?")
         assert analysis.grounding is not None
         assert isinstance(analysis.grounding, GroundingDecision)
 
-    def test_next_character_grounding_true(self):
-        """Regression: 'next character' → grounding=true."""
-        registry = CapabilityRegistry()
-        register_builtin_capabilities(registry)
-        orch = Orchestrator(capability_registry=registry)
-
-        analysis = orch.analyze("Who is the next Wuthering Waves character?")
-        # Heuristic path: 'next' triggers temporal(medium, 0.40)
-        # Medium confidence → LLM path if LLM available, else heuristic fallback
-        # Without LLM: confidence 0.40 < 0.7, LLM unavailable → heuristic fallback → needs=false
-        # BUT the pattern also has dynamic: (next|upcoming|new)\s+(character|...)
-        # "next Wuthering Waves character" — 'next' then some... wait,
-        # the pattern is: r"\b(next|upcoming|new)\s+(character|hero|unit|weapon|champion|patch|update|release|season)\b"
-        # "next Wuthering" — 'next' matches, '\s+' matches ' ', then '(character|...)' needs to match 'Wuthering'
-        # 'Wuthering' doesn't match 'character'. So this pattern doesn't match.
-        #
-        # Without runtime LLM, this test will hit the heuristic fallback.
-        # With temporal(medium)=0.40 + comparative(best)=0.40, etc.
-        # Actually the query is "Who is the next Wuthering Waves character?"
-        # Signals: temporal(next)=0.40. No dynamic/best/comparative.
-        # confidence = 0.40.
-        # 0 < 0.40 < 0.7 → LLM path. LLM unavailable → heuristic fallback.
-        # So grounding.needs_grounding might be False.
-        #
-        # This is OK - the heuristic path can't catch everything. The LLM
-        # path is what handles this case in production. This test documents
-        # the expected behavior: without LLM, ambiguous cases fall through.
-        # With LLM, they'd be caught.
-        pass
-
-    def test_best_pve_build_grounding_true(self, orch_with_search_cap):
+    def test_best_pve_build_grounding_true(self, orch_factory):
         """Regression: 'best PvE build' → grounding=true."""
-        orch = orch_with_search_cap
+        orch = orch_factory()
         analysis = orch.analyze("What is the best PvE build in Shindo Life?")
         # 'best' → comparative(medium, 0.40)
         # 'build' in dynamic pattern with 'for' → dynamic(medium, 0.40)
@@ -361,32 +271,23 @@ class TestTaskAnalysisGrounding:
         assert analysis.grounding.needs_grounding is True
         assert analysis.grounding.source in ("heuristic", "llm")
 
-    def test_timeless_question_grounding_false(self):
+    def test_timeless_question_grounding_false(self, orch_factory):
         """Regression: 'what is recursion' → grounding=false."""
-        registry = CapabilityRegistry()
-        register_builtin_capabilities(registry)
-        orch = Orchestrator(capability_registry=registry)
-
+        orch = orch_factory()
         analysis = orch.analyze("What is recursion?")
         assert analysis.grounding.needs_grounding is False
         assert analysis.grounding.source == "none"
 
-    def test_explain_python_decorators_grounding_false(self):
+    def test_explain_python_decorators_grounding_false(self, orch_factory):
         """Regression: 'explain Python decorators' → grounding=false."""
-        registry = CapabilityRegistry()
-        register_builtin_capabilities(registry)
-        orch = Orchestrator(capability_registry=registry)
-
+        orch = orch_factory()
         analysis = orch.analyze("Explain Python decorators")
         assert analysis.grounding.needs_grounding is False
         assert analysis.grounding.source == "none"
 
-    def test_latest_ollama_release_external(self):
+    def test_latest_ollama_release_external(self, orch_factory):
         """'latest Ollama release' → grounding=true via heuristic."""
-        registry = CapabilityRegistry()
-        register_builtin_capabilities(registry)
-        orch = Orchestrator(capability_registry=registry)
-
+        orch = orch_factory()
         analysis = orch.analyze("Latest Ollama release?")
         # 'latest' → temporal(high, 0.70) → heuristic fast path
         assert analysis.grounding.needs_grounding is True
@@ -397,12 +298,21 @@ class TestTaskAnalysisGrounding:
 
 
 @pytest.fixture
-def orch_with_search_cap():
+def orch_factory():
+    """Factory for a fresh Orchestrator with builtin capabilities."""
+
+    def _make():
+        registry = CapabilityRegistry()
+        register_builtin_capabilities(registry)
+        return Orchestrator(capability_registry=registry)
+
+    return _make
+
+
+@pytest.fixture
+def orch_with_search_cap(orch_factory):
     """Orchestrator with mock LLM to exercise LLM grounding path."""
-    registry = CapabilityRegistry()
-    register_builtin_capabilities(registry)
-    orch = Orchestrator(capability_registry=registry)
-    return orch
+    return orch_factory()
 
 
 # ── GroundingDecision on TaskAnalysis ────────────────────────────────────────

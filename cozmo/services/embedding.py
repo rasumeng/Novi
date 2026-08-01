@@ -28,10 +28,13 @@ class EmbeddingService:
         self._model = None
 
     @property
+    def model_name(self) -> str:
+        return self._config.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
+
+    @property
     def model(self):
         if self._model is None:
-            embed_cfg = self._config.get("embedding", {})
-            model_name = embed_cfg.get("model", "all-MiniLM-L6-v2")
+            model_name = self.model_name
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(model_name)
         return self._model
@@ -55,10 +58,13 @@ class RerankerService:
         self._model = None
 
     @property
+    def model_name(self) -> str:
+        return self._config.get("reranker", {}).get("model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+    @property
     def model(self):
         if self._model is None:
-            rerank_cfg = self._config.get("reranker", {})
-            model_name = rerank_cfg.get("model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+            model_name = self.model_name
             from sentence_transformers import CrossEncoder
             log.info("Loading reranker model: %s", model_name)
             self._model = CrossEncoder(model_name)

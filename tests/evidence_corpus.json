@@ -1,0 +1,165 @@
+{
+  "description": "Phase 7 evidence grounding A/B fixture corpus (live-model grounding comparison)",
+  "version": 1,
+  "cases": [
+    {
+      "id": "EV-01",
+      "query": "Who wrote the novel Moby-Dick and in what year was it first published?",
+      "expected": [
+        "melville",
+        "1851"
+      ],
+      "sources": [
+        {
+          "title": "Herman Melville",
+          "url": "https://en.wikipedia.org/wiki/Herman_Melville",
+          "snippet": "Melville wrote Moby-Dick.",
+          "full_text": "Herman Melville was an American novelist. His most famous work is Moby-Dick, first published in 1851. The novel tells the story of Captain Ahab's pursuit of a white whale. Melville's earlier novels earned moderate attention."
+        },
+        {
+          "title": "Moby-Dick summary",
+          "url": "https://example.com/moby",
+          "snippet": "Moby-Dick was published in 1851.",
+          "full_text": "Moby-Dick, published in 1851, is Melville's magnum opus. It was published after five revisions of the manuscript and received mixed reviews at first."
+        }
+      ]
+    },
+    {
+      "id": "EV-02",
+      "query": "Which planet is known as the Red Planet and what are its two moons called?",
+      "expected": [
+        "mars",
+        "phobos",
+        "deimos"
+      ],
+      "sources": [
+        {
+          "title": "Mars facts",
+          "url": "https://en.wikipedia.org/wiki/Mars",
+          "snippet": "Mars has two moons: Phobos and Deimos.",
+          "full_text": "Mars is the fourth planet from the Sun and is called the Red Planet because of its iron oxide surface. Mars has two small moons named Phobos and Deimos. Both moons are irregularly shaped and likely captured asteroids."
+        }
+      ]
+    },
+    {
+      "id": "EV-03",
+      "query": "What is the tallest mountain on Earth and what is its height in meters?",
+      "expected": [
+        "everest",
+        "8848"
+      ],
+      "sources": [
+        {
+          "title": "Mountains of the world",
+          "url": "https://example.com/mountains",
+          "snippet": "Everest is 8848 meters.",
+          "full_text": "This article surveys the great mountain ranges of Asia and Europe. The Alps are a popular tourist destination and are crossed by many passes. The Carpathians run through Romania and Ukraine in a long arc. The Himalayas contain the highest peaks, and Mount Everest reaches 8848 meters above sea level, making it the tallest mountain on Earth. The Rockies stretch from Canada to New Mexico and feature dramatic cliffs. The Andes form the longest continental mountain range in the world."
+        }
+      ]
+    },
+    {
+      "id": "EV-04",
+      "query": "Who invented the telephone and in what year was the patent granted?",
+      "expected": [
+        "bell",
+        "1876"
+      ],
+      "sources": [
+        {
+          "title": "Telephone history",
+          "url": "https://en.wikipedia.org/wiki/Telephone",
+          "snippet": "Bell patented the telephone in 1876.",
+          "full_text": "Alexander Graham Bell is credited with inventing the telephone. Bell's patent for the telephone was granted in 1876. Later inventors improved the device with carbon microphones and automatic exchanges."
+        }
+      ]
+    },
+    {
+      "id": "EV-05",
+      "query": "What is the official capital of Australia?",
+      "expected": [
+        "canberra"
+      ],
+      "sources": [
+        {
+          "title": "Australia overview",
+          "url": "https://example.com/australia",
+          "snippet": "Canberra is the capital.",
+          "full_text": "Australia is a large island continent in the southern hemisphere. Sydney is the largest city and a global financial hub. The official capital of Australia is Canberra, a purpose-built city. Melbourne also competes for cultural influence with Sydney."
+        },
+        {
+          "title": "City guide",
+          "url": "https://example.com/sydney-guide",
+          "snippet": "Sydney is often mistaken for the capital.",
+          "full_text": "Sydney is the most populous city in Australia and has the famous Opera House. Many tourists mistakenly assume Sydney is the capital of Australia, but the national capital is actually Canberra."
+        }
+      ]
+    },
+    {
+      "id": "EV-06",
+      "query": "What is the chemical symbol for gold and what is its atomic number?",
+      "expected": [
+        "au",
+        "79"
+      ],
+      "sources": [
+        {
+          "title": "Gold element",
+          "url": "https://en.wikipedia.org/wiki/Gold",
+          "snippet": "Gold is Au, atomic number 79.",
+          "full_text": "Gold is a chemical element with the symbol Au and atomic number 79. It is a dense, soft, malleable metal with a bright yellow color. Gold is used in jewelry, electronics, and as a store of value."
+        }
+      ]
+    },
+    {
+      "id": "EV-07",
+      "query": "What is the capital of Switzerland and how many official languages does it have?",
+      "expected": [
+        "bern",
+        "four",
+        "4"
+      ],
+      "sources": [
+        {
+          "title": "Switzerland",
+          "url": "https://en.wikipedia.org/wiki/Switzerland",
+          "snippet": "Bern is the capital; four official languages.",
+          "full_text": "Switzerland has four official languages: German, French, Italian, and Romansh. The federal city of Switzerland is Bern, which hosts the parliament. Swiss neutrality is a long-standing policy respected by neighboring states."
+        }
+      ]
+    },
+    {
+      "id": "EV-08",
+      "query": "What is the boiling point of water at sea level?",
+      "expected": [
+        "100"
+      ],
+      "sources": [
+        {
+          "title": "Water properties",
+          "url": "https://example.com/water",
+          "snippet": "Water boils at 100 degrees.",
+          "full_text": "Water boils at 100 degrees Celsius at sea level. At higher altitudes the boiling point drops because pressure is lower. Adding salt raises the boiling point slightly due to colligative effects."
+        }
+      ]
+    },
+    {
+      "id": "EV-09",
+      "query": "What is the official currency of Ecuador?",
+      "expected": [],
+      "sources": [
+        {
+          "title": "Ecuador economy",
+          "url": "https://example.com/ecuador-econ",
+          "snippet": "Ecuador uses the US dollar.",
+          "full_text": "The official currency of Ecuador is the US dollar, adopted in the year 2000. The switch stabilized inflation and encouraged foreign investment."
+        },
+        {
+          "title": "Currency guide",
+          "url": "https://example.com/currency",
+          "snippet": "Ecuador does not use the dollar.",
+          "full_text": "The official currency of Ecuador is not the US dollar. The country uses its own currency called the sucre instead."
+        }
+      ]
+    }
+  ]
+}

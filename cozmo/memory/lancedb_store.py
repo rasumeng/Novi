@@ -42,11 +42,16 @@ class LanceStore:
         table_name: str = "cozmo_memories",
         embed_func: Optional[Callable[[str], list[float]]] = None,
         embed_dim: int = 384,
+        embed_model: Optional[str] = None,
+        vector_index: bool = True,
     ):
         self.uri = str(uri)
         self.table_name = table_name
         self.embed_func = embed_func or self._default_embed
         self.embed_dim = embed_dim
+        self.embed_model = embed_model
+        self.vector_index = vector_index
+        self._index_checked = False
         self._db = lancedb.connect(self.uri)
         self._table = None
         self._open_or_create()
@@ -59,9 +64,11 @@ class LanceStore:
 
     def _open_or_create(self):
         """Open existing table or create a new one with the right schema."""
+        existed = True
         try:
             self._table = self._db.open_table(self.table_name)
         except Exception:
+            existed = False
             schema = pa.schema([
                 pa.field("id", pa.string()),
                 pa.field("text", pa.string()),
@@ -69,22 +76,103 @@ class LanceStore:
                 pa.field("vector", pa.list_(pa.float32(), self.embed_dim)),
             ])
             self._table = self._db.create_table(self.table_name, schema=schema)
+        if existed:
+            self._check_embedding_model()
+            self._maybe_create_index()
 
-    def add_texts(self, texts: list[str], metadatas: Optional[list[dict]] = None):
-        """Embed and insert texts with metadata."""
+    def add_texts(
+        self,
+        texts: list[str],
+        metadatas: Optional[list[dict]] = None,
+        ids: Optional[list[str]] = None,
+    ):
+        """Embed and insert texts with metadata.
+
+        Args:
+            texts: List of texts to embed and store.
+            metadatas: Optional per-text metadata dicts.
+            ids: Optional deterministic ids (e.g. path-derived chunk ids).
+                 Falls back to uuid4 when omitted.
+        """
         if not texts:
             return
         metadatas = metadatas or [{}] * len(texts)
+        if ids is not None and len(ids) != len(texts):
+            raise ValueError("ids length must match texts length")
         vectors = [self.embed_func(t) for t in texts]
         data = []
-        for text, meta, vec in zip(texts, metadatas, vectors):
+        for i, (text, meta, vec) in enumerate(zip(texts, metadatas, vectors)):
             data.append({
-                "id": str(uuid4()),
+                "id": ids[i] if ids is not None else str(uuid4()),
                 "text": text,
                 "metadata": json.dumps(meta),
                 "vector": vec,
             })
         self._table.add(data)
+        self._maybe_create_index()
+
+    def _check_embedding_model(self):
+        """Warn if stored vectors were produced by a different embedding model.
+
+        Stored rows carry their embedding model name in metadata when written
+        by an embedding-aware caller. On open, sample recent rows and log a
+        warning when the stored model no longer matches the configured one.
+        """
+        if not self.embed_model:
+            return
+        try:
+            rows = self._table.search().limit(100).to_list()
+        except Exception:
+            return
+        for r in rows:
+            try:
+                meta = json.loads(r.get("metadata", "{}"))
+            except (TypeError, ValueError):
+                continue
+            stored = meta.get("embed_model")
+            if stored and stored != self.embed_model:
+                log.warning(
+                    "Table '%s' contains vectors from embed model '%s' but "
+                    "config now uses '%s' — similarity results may be degraded. "
+                    "Re-index the store to migrate.",
+                    self.table_name, stored, self.embed_model,
+                )
+                return
+
+    def _maybe_create_index(self):
+        """Create a vector index once the table is large enough.
+
+        Guarded by:
+          - vector_index flag (caller reads config)
+          - existing index (never re-index)
+          - row-count threshold (brute force is fine for small tables)
+          - try/except (index creation must never break writes)
+        """
+        if not self.vector_index or self._index_checked:
+            return
+        self._index_checked = True
+        try:
+            indices = self._table.list_indices()
+            if indices:
+                return
+        except Exception:
+            return
+        try:
+            count = self._table.count_rows()
+        except Exception:
+            return
+        if count < 1000:
+            return
+        try:
+            from lancedb.index import IvfPq
+            num_partitions = max(4, min(64, count // 256))
+            self._table.create_index(
+                "vector",
+                config=IvfPq(distance_type="cosine", num_partitions=num_partitions),
+            )
+            log.info("Created IVF_PQ vector index on %s (%d rows)", self.table_name, count)
+        except Exception as e:
+            log.warning("vector index creation skipped for %s: %s", self.table_name, e)
 
     def similarity_search(
         self,

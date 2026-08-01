@@ -1,8 +1,9 @@
 """Tests for search pipeline — time_range mapping, error propagation, HTTP 400 handling."""
 
-import json
 from unittest.mock import patch, MagicMock
 from urllib.error import HTTPError
+
+import pytest
 
 from cozmo.tools.search_pipeline import (
     _SEARXNG_TIME_MAP,
@@ -11,6 +12,26 @@ from cozmo.tools.search_pipeline import (
     SearchConfig,
     SearchResult,
 )
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes = b'{"results": []}'):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+@pytest.fixture
+def searxng_stub(monkeypatch):
+    """Stub SearXNG bootstrap so tests never touch the live server or Docker."""
+    monkeypatch.setattr("cozmo.tools.search_pipeline._ensure_searxng", lambda: "http://localhost:8080")
 
 
 class TestTimeRangeMapping:
@@ -22,17 +43,19 @@ class TestTimeRangeMapping:
         assert _SEARXNG_TIME_MAP["m"] == "month"
         assert _SEARXNG_TIME_MAP["y"] == "year"
 
-    def test_unknown_code_passthrough(self):
+    def test_unknown_code_passthrough(self, searxng_stub):
+        """Invalid code passes through to SearXNG, which rejects it with HTTP 400."""
         config = SearchConfig(timelimit="invalid")
-        results, err = _search_searxng("test", config)
-        # Returns empty because SearXNG rejects invalid time_range
+        with patch("urllib.request.urlopen", side_effect=HTTPError("url", 400, "Bad Request", {}, None)):
+            results, err = _search_searxng("test", config)
         assert err is not None
         assert "HTTP 400" in err
         assert results == []
 
-    def test_none_timelimit_no_time_range(self):
+    def test_none_timelimit_no_time_range(self, searxng_stub):
         config = SearchConfig(timelimit=None)
-        results, err = _search_searxng("test", config)
+        with patch("urllib.request.urlopen", return_value=_FakeResponse()):
+            results, err = _search_searxng("test", config)
         assert err is None
         assert isinstance(results, list)
 
@@ -40,15 +63,17 @@ class TestTimeRangeMapping:
 class TestSearchErrorPropagation:
     """_search_searxng and _search_multi return (results, error) tuples."""
 
-    def test_returns_tuple(self):
+    def test_returns_tuple(self, searxng_stub):
         config = SearchConfig()
-        results, err = _search_searxng("test", config)
+        with patch("urllib.request.urlopen", return_value=_FakeResponse()):
+            results, err = _search_searxng("test", config)
         assert isinstance(results, list)
         assert err is None or isinstance(err, str)
 
-    def test_search_multi_returns_tuple(self):
+    def test_search_multi_returns_tuple(self, searxng_stub):
         config = SearchConfig()
-        results, err = _search_multi("test", config)
+        with patch("urllib.request.urlopen", return_value=_FakeResponse()):
+            results, err = _search_multi("test", config)
         assert isinstance(results, list)
         assert err is None or isinstance(err, str)
 

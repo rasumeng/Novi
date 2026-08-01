@@ -97,7 +97,7 @@ class RetrievalExecutor:
         if bundle.error:
             log.warning("grounding search failed for '%s': %s", user_input, bundle.error)
             bundle.quality = RetrievalQuality.FAILED
-            if trace is not None:
+            if trace is not None and self.debug_trace:
                 trace.debug_events.append(DebugTraceEvent(
                     category="retrieval",
                     data={
@@ -113,7 +113,7 @@ class RetrievalExecutor:
         if not bundle.results or bundle.source_count == 0:
             log.info("grounding search found no textual sources for '%s'", user_input)
             bundle.quality = RetrievalQuality.EMPTY
-            if trace is not None:
+            if trace is not None and self.debug_trace:
                 trace.debug_events.append(DebugTraceEvent(
                     category="retrieval",
                     data={
