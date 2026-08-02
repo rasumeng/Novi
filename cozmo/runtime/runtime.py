@@ -16,8 +16,6 @@ import logging
 import re
 import threading
 import time
-from dataclasses import dataclass
-from enum import Enum
 from datetime import datetime
 from pathlib import Path
 from langchain_core.messages import (
@@ -30,9 +28,9 @@ from ..orchestrator.intent import classify_intent
 from .model_router import ModelRequirement
 from .trace import DebugTraceEvent, ExecutionTrace, StepTrace, TraceAction
 from .execution_context import ExecutionContext
-from .evidence import RetrievalQuality
-from .retrieval_policy import RetrievalStrategy
-from .retrieval_coordinator import RetrievalCoordinator
+from .retrieval import RecoveryAction, RetrievalExecutor
+from .sources import KnowledgeRetrievalSource
+from ..memory.knowledge_index import get_knowledge_index
 from ..capabilities import CapabilityRegistry
 from ..capabilities.builtin import register_builtin_capabilities
 from .model_router import ModelRouter
@@ -65,7 +63,6 @@ _TOOL_CATEGORIES: dict[str, str] = {
     "calculator": "python",
     "web_search": "web",
     "web_search_pipeline": "web",
-    "search_web": "web",
     "web_fetch": "web",
     "fetch_url": "web",
     "webfetch": "web",
@@ -188,15 +185,6 @@ Context note:"""
 
 _TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-class RecoveryAction(str, Enum):
-    NONE = "none"
-    UPGRADE_SEARCH = "upgrade_search"
-
-@dataclass
-class RecoveryDecision:
-    action: RecoveryAction = RecoveryAction.NONE
-    reason: str = ""
-
 class CozmoRuntime:
     """Single agentic runtime loop with native tool calling."""
 
@@ -240,9 +228,17 @@ class CozmoRuntime:
         self.stop_event: threading.Event | None = None
         self._agent_system_extra: str = ""
         self.debug_trace = debug_trace
-        self._active_coordinator: RetrievalCoordinator | None = None
         self.lesson_store = LessonStore()
-        self.retrieval_executor = RetrievalExecutor(event_bus=event_bus, debug_trace=debug_trace)
+        self.retrieval_executor = RetrievalExecutor(
+            event_bus=event_bus,
+            debug_trace=debug_trace,
+            memory=memory,
+            project_index=project_index,
+            max_memory_results=self.max_memory_results,
+            memory_distance_threshold=self.memory_distance_threshold,
+            max_project_results=self.max_project_results,
+            knowledge_source=KnowledgeRetrievalSource(get_knowledge_index()),
+        )
         self._capability_registry = CapabilityRegistry()
         register_builtin_capabilities(self._capability_registry)
         llm_cfg = self.cfg.get("llm", {})
@@ -295,6 +291,7 @@ class CozmoRuntime:
                 self._project_context = v
             elif k == "project_index":
                 self.project_index = v
+                self.retrieval_executor.set_project_index(v)
             elif k == "permission_mode":
                 self._perm_mode = v
                 self._perms.auto = (v == "bypass")
@@ -308,62 +305,6 @@ class CozmoRuntime:
             "permission_mode": getattr(self, "_perm_mode", "manual"),
             "project_loaded": bool(getattr(self, "_project_context", "")),
         }
-    def _query_memory(self, user_input: str, intent: str = "conversation",
-                      trace=None) -> str:
-        if not self.memory:
-            return ""
-        t0 = time.time()
-        try:
-            type_filter = {
-                "conversation": ["conversation", "preference", "fact"],
-                "research": ["reference", "fact", "conversation"],
-                "coding": ["project", "learning", "reference"],
-                "planning": ["project", "reference", "fact"],
-                "vision": ["reference", "conversation"],
-            }.get(intent)
-            results = self.memory.query(
-                user_input,
-                k=self.max_memory_results * 3,
-                distance_threshold=self.memory_distance_threshold,
-                memory_types=type_filter,
-            )
-            if trace is not None:
-                trace.memory_queried = True
-            if not results:
-                return ""
-            results = self._rank_memories(results)[:self.max_memory_results]
-            if trace is not None:
-                trace.memory_result_count = len(results)
-                trace.memory_latency_ms = round((time.time() - t0) * 1000, 2)
-            sections = []
-            type_labels = set()
-            for r in results:
-                meta = r.get("metadata", {})
-                t = meta.get("type", "")
-                if t not in type_labels:
-                    type_labels.add(t)
-                    sections.append(f"\n--- {t.capitalize()} ---") if t else None
-                sections.append(f"  {r['text']}")
-            return "\n".join(sections) if sections else ""
-        except Exception:
-            return ""
-    def _rank_memories(self, results: list[dict]) -> list[dict]:
-        now = datetime.now()
-        scored = []
-        for r in results:
-            meta = r.get("metadata", {})
-            freq = meta.get("frequency", 1)
-            ts = meta.get("timestamp", "")
-            try:
-                age_hours = (now - datetime.fromisoformat(ts)).total_seconds() / 3600 if ts else 24
-            except Exception:
-                age_hours = 24
-            recency = max(0.1, 1.0 - age_hours / 168)
-            distance = r.get("distance", 0.5)
-            importance = freq * recency * (1.0 - distance)
-            scored.append((importance, r))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [r for _, r in scored]
     def _system_prompt(self, user_input: str, intent: str = "conversation",
                        grounding: str = "",
                        grounding_error: str | None = None,
@@ -371,7 +312,9 @@ class CozmoRuntime:
                        activated_skills: list[dict] | None = None,
                        allowed_tools: list[str] | None = None,
                        analysis=None,
-                       trace=None) -> str:
+                       trace=None,
+                       memory_context: str = "",
+                       project_context: str = "") -> str:
         parts = [_IDENTITY.format(date=datetime.now().strftime("%A, %B %d, %Y"))]
         if self._agent_system_extra:
             parts.append(f"AGENT INSTRUCTIONS:\n{self._agent_system_extra}")
@@ -395,26 +338,13 @@ class CozmoRuntime:
             parts.append(f"\nUser attached files:\n{file_list}\nReference these when relevant. For images, you can see them directly.")
         if self._summary:
             parts.append(f"\nContext from earlier in this session:\n{self._summary}")
-        should_query = False
-        if analysis is not None:
-            should_query = analysis.evidence.needs_memory
-        else:
-            should_query = intent in ("conversation", "planning")
-        memory = self._query_memory(user_input, intent, trace=trace) if should_query else ""
-        if memory:
-            parts.append(f"\nRelevant memory from past sessions:{memory}")
+        if memory_context:
+            parts.append(f"\nRelevant memory from past sessions:{memory_context}")
         lessons = self.lesson_store.get_context(tool_names=allowed_tools if allowed_tools else None)
         if lessons:
             parts.append(lessons)
-        if intent in ("coding", "work"):
-            project = ""
-            if self.project_index:
-                try:
-                    project = self.project_index.query(user_input, k=self.max_project_results) or ""
-                except Exception:
-                    pass
-            if project:
-                parts.append(f"\nRelevant project context:\n{project}")
+        if project_context:
+            parts.append(f"\nRelevant project context:\n{project_context}")
         if getattr(self, '_project_context', None):
             parts.append(f"\nProject context:\n{self._project_context}")
         if grounding:
@@ -557,24 +487,6 @@ class CozmoRuntime:
             for kind_value in self.retrieval_executor.execute(ctx, user_input):
                 yield kind_value
 
-            coord = RetrievalCoordinator()
-            if ctx.analysis is not None and ctx.analysis.retrieval_plan is not None:
-                plan_strat = ctx.analysis.retrieval_plan.strategy
-                if plan_strat == RetrievalStrategy.WEB_ONLY:
-                    coord.budget.max_web_searches = 1
-                    coord.budget.max_web_fetches = 1
-                elif plan_strat == RetrievalStrategy.KNOWLEDGE_THEN_WEB:
-                    coord.budget.max_web_searches = 1
-                    coord.budget.max_web_fetches = 1
-                elif plan_strat == RetrievalStrategy.KNOWLEDGE_ONLY:
-                    coord.budget.max_web_searches = 0
-                    coord.budget.max_web_fetches = 0
-            if ctx.grounding_text and ctx.grounding_quality:
-                coord.seed_cache(ctx.user_input, ctx.grounding_text)
-            ctx.retrieval_coordinator = coord
-            ctx.retrieval_budget = coord.budget
-            self._active_coordinator = coord
-
             if ctx.execution_plan is not None:
                 ctx.model_name = ctx.execution_plan.model_spec.get("model", "") or ctx.force_model or ""
                 ctx.role = self._intent_roles.get(intent_str, "chat")
@@ -684,40 +596,23 @@ class CozmoRuntime:
                 self.tracer.finalize(ctx.trace, "stopped")
                 return
 
-            plan = ctx.analysis.retrieval_plan if ctx.analysis is not None else None
-            if plan is not None and plan.strategy in (
-                RetrievalStrategy.WEB_ONLY,
-                RetrievalStrategy.KNOWLEDGE_THEN_WEB,
-            ):
+            recovery_decision = self.retrieval_executor.recommend_pre_loop(ctx)
+            if recovery_decision.action == RecoveryAction.UPGRADE_SEARCH:
                 search_tools = self._capability_registry.get_tool_names(["search"])
                 missing = set(search_tools) - set(ctx.allowed_tools)
                 if missing:
                     ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
-                    ctx.trace.recovery_attempts += 1
-                    ctx.trace.recovery_action = "upgrade_search"
+                if missing or not recovery_decision.commit_on_grant:
+                    state = self.retrieval_executor.commit_recovery(
+                        ctx, recovery_decision, recovery_decision.action.value)
                     if self.debug_trace and ctx.trace is not None:
                         ctx.trace.debug_events.append(DebugTraceEvent(
                             category="recovery",
                             data={
-                                "action": "upgrade_search",
-                                "reason": f"retrieval plan requires web: {plan.strategy.value}",
-                                "attempt": ctx.trace.recovery_attempts,
+                                "action": recovery_decision.action.value,
+                                "reason": recovery_decision.reason,
+                                "attempt": state.attempts_used,
                                 "added_tools": list(missing),
-                            },
-                        ))
-            elif ctx.grounding_quality and ctx.grounding_quality != "sufficient":
-                if ctx.trace.recovery_attempts < 1:
-                    search_tools = self._capability_registry.get_tool_names(["search"])
-                    ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
-                    ctx.trace.recovery_attempts += 1
-                    ctx.trace.recovery_action = "upgrade_search"
-                    if self.debug_trace and ctx.trace is not None:
-                        ctx.trace.debug_events.append(DebugTraceEvent(
-                            category="recovery",
-                            data={
-                                "action": "upgrade_search",
-                                "reason": f"pre-loop: retrieval quality={ctx.grounding_quality}",
-                                "attempt": ctx.trace.recovery_attempts,
                                 "allowed_tools": list(ctx.allowed_tools),
                             },
                         ))
@@ -742,7 +637,8 @@ class CozmoRuntime:
                 user_input, intent_str, full_grounding,
                 grounding_error=ctx.grounding_error,
                 attachments=ctx.attachments, activated_skills=ctx.activated_skills,
-                allowed_tools=ctx.allowed_tools, analysis=ctx.analysis, trace=ctx.trace))]
+                allowed_tools=ctx.allowed_tools, analysis=ctx.analysis, trace=ctx.trace,
+                memory_context=ctx.memory_context, project_context=ctx.project_context))]
             coord = ctx.retrieval_coordinator
             if coord is not None and coord.budget.max_web_searches > 0:
                 msgs.append(SystemMessage(
@@ -808,28 +704,9 @@ class CozmoRuntime:
                         for sk in newly:
                             msgs.append(SystemMessage(content=self._skill_block(sk)))
                         continue
-                    quality_str = ctx.grounding_quality
-                    if not quality_str:
-                        decision = RecoveryDecision(action=RecoveryAction.NONE, reason="no retrieval quality recorded")
-                    else:
-                        try:
-                            quality = RetrievalQuality(quality_str)
-                        except ValueError:
-                            decision = RecoveryDecision(action=RecoveryAction.NONE, reason="unrecognized quality")
-                        else:
-                            if quality == RetrievalQuality.SUFFICIENT:
-                                decision = RecoveryDecision(action=RecoveryAction.NONE, reason="retrieval was sufficient")
-                            else:
-                                needs_grounding = ctx.analysis is not None and ctx.analysis.grounding.needs_grounding
-                                had_plan = ctx.analysis is not None and ctx.analysis.retrieval_plan is not None and ctx.analysis.retrieval_plan.strategy not in (RetrievalStrategy.NONE,)
-                                if not needs_grounding and not had_plan:
-                                    decision = RecoveryDecision(action=RecoveryAction.NONE, reason="no retrieval was requested")
-                                elif ctx.trace.recovery_attempts >= 1:
-                                    decision = RecoveryDecision(action=RecoveryAction.NONE, reason="max recovery attempts reached")
-                                else:
-                                    decision = RecoveryDecision(action=RecoveryAction.UPGRADE_SEARCH, reason=f"retrieval quality={quality_str}, model answered without tools")
-                    if decision.action != RecoveryAction.NONE:
-                        if decision.action == RecoveryAction.UPGRADE_SEARCH:
+                    recovery_decision = self.retrieval_executor.recommend_when_model_answered(ctx)
+                    if recovery_decision.action != RecoveryAction.NONE:
+                        if recovery_decision.action == RecoveryAction.UPGRADE_SEARCH:
                             search_tools = self._capability_registry.get_tool_names(["search"])
                             ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
                             lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
@@ -839,12 +716,12 @@ class CozmoRuntime:
                                 content="[Web search tools (web_search, web_fetch) are now available. "
                                         "Use them if you need current information.]"
                             ))
-                            ctx.trace.recovery_attempts += 1
-                            ctx.trace.recovery_action = decision.action.value
+                            state = self.retrieval_executor.commit_recovery(
+                                ctx, recovery_decision, recovery_decision.action.value)
                             self.tracer.debug(ctx.trace, "recovery", {
-                                "action": decision.action.value,
-                                "reason": decision.reason,
-                                "attempt": ctx.trace.recovery_attempts,
+                                "action": recovery_decision.action.value,
+                                "reason": recovery_decision.reason,
+                                "attempt": state.attempts_used,
                                 "allowed_tools": list(ctx.allowed_tools),
                             })
                         continue
@@ -890,7 +767,7 @@ class CozmoRuntime:
                         seen_calls.add(sig)
                         result = self.tool_executor.execute(
                             c["name"], c["args"],
-                            coordinator=self._active_coordinator,
+                            coordinator=ctx.retrieval_coordinator,
                             step_idx=step, trace=ctx.trace,
                         )
                         out = result.output
@@ -905,18 +782,16 @@ class CozmoRuntime:
                             pass
                     msgs.append(ToolMessage(content=out, tool_call_id=c["id"]))
 
-                    # Post-tool recovery: search_knowledge returned empty → escalate to web
-                    if (c["name"] == "search_knowledge"
-                            and ("No matching knowledge found" in out or not out.strip())
-                            and ctx.trace.recovery_attempts < 1
+                    # Post-tool recovery: executor detects empty knowledge result → escalate to web
+                    recovery_decision = self.retrieval_executor.recommend_after_tool(ctx, c["name"], out)
+                    if (recovery_decision.action == RecoveryAction.ESCALATE_WEB
                             and not any(s in ctx.allowed_tools for s in
                                         self._capability_registry.get_tool_names(["search"]))):
                         search_tools = self._capability_registry.get_tool_names(["search"])
                         ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
                         new_lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
                         runnable = mm.bind_model(ctx.model_name, new_lc_tools, temperature=ctx.temperature)
-                        ctx.trace.recovery_attempts += 1
-                        ctx.trace.recovery_action = "post_tool_escalation"
+                        state = self.retrieval_executor.commit_recovery(ctx, recovery_decision, "post_tool_escalation")
                         msgs.append(SystemMessage(
                             content="[Knowledge base returned no results. Web search tools "
                                     "(web_search, web_fetch) are now available. Use them to find "
@@ -927,7 +802,8 @@ class CozmoRuntime:
                                 category="recovery",
                                 data={
                                     "action": "post_tool_escalation",
-                                    "reason": "search_knowledge returned empty in loop",
+                                    "reason": recovery_decision.reason,
+                                    "attempt": state.attempts_used,
                                     "step": step,
                                     "tool": c["name"],
                                 },
@@ -960,10 +836,8 @@ class CozmoRuntime:
             self.tracer.finalize(ctx.trace, stop_reason)
 
             self._remember(user_input, final)
-            self._active_coordinator = None
 
         except Exception as e:
-            self._active_coordinator = None
             self.tracer.finalize(ctx.trace, "error")
             msg = f"I hit an error: {e}"
             yield ("token", msg)

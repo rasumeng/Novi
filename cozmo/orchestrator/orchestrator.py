@@ -207,6 +207,8 @@ class Orchestrator:
             signal_strengths=signal_strengths,
             has_external=evidence.requirements.external,
             intent=intent.value,
+            needs_memory=evidence.needs_memory,
+            needs_project=evidence.needs_project,
         )
 
         cap_ids = self._resolve_capabilities(intent, evidence, complexity)

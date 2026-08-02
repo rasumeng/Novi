@@ -160,17 +160,27 @@ def search_knowledge(query: str, k: int = 5) -> str:
     ki = get_knowledge_index()
     if ki is None:
         return "[error] Knowledge index not initialized. Start a chat session first."
-    results = ki.search(query, k=min(k, 20))
-    if not results:
+
+    from ..runtime.evidence import RetrievalQuality
+    from ..runtime.retrieval_budget import ContextAllocation
+    from ..runtime.sources import KnowledgeRetrievalSource
+
+    # Phase 9 step 6: delegate store access + translation to the shared
+    # RetrievalSource adapter. k=min(k,20) matches the pre-unification call
+    # exactly (rerank=True is the index default); formatting is preserved below.
+    source = KnowledgeRetrievalSource(ki)
+    result = source.retrieve(query, ContextAllocation(max_results=min(k, 20)))
+    if result.quality == RetrievalQuality.FAILED:
+        raise RuntimeError(result.error or "knowledge retrieval failed")
+    if not result.items:
         return "[info] No matching knowledge found."
     lines = []
-    for r in results:
-        meta = r.get("metadata", {})
+    for item in result.items:
+        meta = item.metadata
         path = meta.get("path", "?")
         title = meta.get("title", path)
-        score = r.get("score", 0.0)
-        text = r.get("text", "")[:300].replace("\n", " ")
-        lines.append(f"- **{title}** ({path}, score={score:.2f}): {text}")
+        text = item.text[:300].replace("\n", " ")
+        lines.append(f"- **{title}** ({path}, score={item.score:.2f}): {text}")
     return "\n".join(lines)
 
 

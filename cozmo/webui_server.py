@@ -55,6 +55,8 @@ from .tools import TOOL_REGISTRY
 from .runtime.runtime import CozmoRuntime
 from .runtime.interface import RuntimeInterface
 from .runtime.event_bus import EventBus
+from .runtime.retrieval_budget import ContextAllocation
+from .runtime.sources import MemoryRetrievalSource
 from .services.context import CozmoContext
 from .runtime.tool_risk import get_tool_risk, risk_to_label
 from .webui import WebUIBackend
@@ -64,6 +66,26 @@ CHATS_DIR = Path.home() / ".cozmo" / "chats"
 ATTACHMENTS_DIR = Path.home() / ".cozmo" / "attachments"
 SKILLS_DIR = Path.home() / ".cozmo" / "skills"
 DEFAULT_SKILLS_DIR = Path(__file__).parent / "default_skills"
+
+
+def _memory_items_to_dicts(result) -> list[dict]:
+    """Translate a ``MemoryRetrievalSource`` result back to flat memory dicts.
+
+    The adapter normalizes ``distance`` into item metadata; restore the store's
+    flat shape (id/text/distance/score/metadata) so the frontend response
+    contract is unchanged.
+    """
+    out = []
+    for it in result.items:
+        meta = {k: v for k, v in it.metadata.items() if k != "distance"}
+        out.append({
+            "id": it.id,
+            "text": it.text,
+            "distance": it.metadata.get("distance", 0.5),
+            "score": it.score,
+            "metadata": meta,
+        })
+    return out
 
 # The expensive backend (models, tool registry, MCP connections, memory,
 # skills) is built exactly once and shared by every WebSocket session.
@@ -813,8 +835,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         if not mem:
             return []
         try:
-            results = mem.query(q, k=10, distance_threshold=1.0)
-            return results
+            src = MemoryRetrievalSource(mem, distance_threshold=1.0)
+            result = src.retrieve(q, ContextAllocation(max_results=10))
+            return _memory_items_to_dicts(result)
         except Exception:
             return []
 
@@ -1339,7 +1362,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         query = msg.get("query", "")
                         k = msg.get("k", 5)
                         if mem and query:
-                            results = mem.query(query, k=k)
+                            src = MemoryRetrievalSource(mem)
+                            result = src.retrieve(query, ContextAllocation(max_results=k))
+                            results = _memory_items_to_dicts(result)
                             await ws.send_text(json.dumps({"type": "agent_memory", "action": "results", "results": results}))
                         else:
                             await ws.send_text(json.dumps({"type": "agent_memory", "action": "results", "results": []}))

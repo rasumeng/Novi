@@ -39,7 +39,7 @@ class TestRetrievalCoordinatorToolClassification:
         c = RetrievalCoordinator()
         assert c.is_search_tool("web_search")
         assert c.is_search_tool("web_search_pipeline")
-        assert c.is_search_tool("search_web")
+        assert not c.is_search_tool("search_web")  # stale ref removed
         assert not c.is_search_tool("web_fetch")
 
     def test_fetch_tools(self):

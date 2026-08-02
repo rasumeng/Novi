@@ -338,10 +338,12 @@ class TestEvaluationRunner:
         ds = BenchmarkDataset.from_json(CORPUS_PATH)
         runner = EvaluationRunner(driver=AnalysisDriver())
         result = runner.run(ds)
-        # memory sources unresolved until Phase 9 — recall reflects real gap
+        # Phase 9 step 5: the memory source is now planned when evidence
+        # signals it — retrieval_sources reflects memory (strategy stays NONE
+        # for memory-only plans).
         mem = [r for r in result.per_case if "memory" in r.case.expected_sources]
         assert mem
-        assert all(r.retrieval_sources == [] for r in mem)
+        assert all("memory" in r.retrieval_sources for r in mem)
 
 
 # ── Runtime driver (fake runtime through RuntimeInterface) ───────────────

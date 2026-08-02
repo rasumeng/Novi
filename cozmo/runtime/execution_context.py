@@ -37,6 +37,7 @@ from ..orchestrator.task_types import (
 )
 from .retrieval_policy import RetrievalPlan
 from .retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
+from .retrieval import RetrievalRecoveryState
 from .trace import ExecutionTrace
 from .evidence import RetrievalQuality
 
@@ -97,8 +98,14 @@ class ExecutionContext:
     retrieval_budget: RetrievalBudget = field(default_factory=RetrievalBudget)
     retrieval_coordinator: Optional[RetrievalCoordinator] = None
 
+    # ── Retrieval Recovery (owned by RetrievalExecutor, Phase 9 step 7) ──
+    retrieval_recovery: Optional[RetrievalRecoveryState] = None
+
     # ── Memory ───────────────────────────────────────────────────────────
     memory_context: str = ""
+
+    # ── Project ──────────────────────────────────────────────────────────
+    project_context: str = ""
 
     # ── Planning ─────────────────────────────────────────────────────────
     plan_context: str = ""

@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-_SEARCH_TOOLS = frozenset({"web_search", "web_search_pipeline", "search_web"})
+_SEARCH_TOOLS = frozenset({"web_search", "web_search_pipeline"})
 _FETCH_TOOLS = frozenset({"web_fetch", "fetch_url", "webfetch"})
 _WEB_TOOLS = _SEARCH_TOOLS | _FETCH_TOOLS
 

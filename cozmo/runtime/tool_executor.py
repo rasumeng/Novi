@@ -41,7 +41,6 @@ _TOOL_CATEGORIES: dict[str, str] = {
     "calculator": "python",
     "web_search": "web",
     "web_search_pipeline": "web",
-    "search_web": "web",
     "web_fetch": "web",
     "fetch_url": "web",
     "webfetch": "web",

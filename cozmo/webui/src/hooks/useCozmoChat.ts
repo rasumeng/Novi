@@ -113,7 +113,6 @@ export function useCozmoChat() {
       case 'glob': return `Finding files${pt ? `: ${pt}` : '...'}`
       case 'grep': return `Searching code${q ? ` for "${q.slice(0, 40)}"` : '...'}`
       case 'bash': return `Running${cmd ? `: ${cmd.slice(0, 50)}` : ' command...'}`
-      case 'search_web': return `Searching web${q ? ` for "${q.slice(0, 40)}"` : '...'}`
       case 'web_fetch': return `Fetching ${url ?? 'page'}...`
       default: return `${tool.replace(/_/g, ' ')}...`
     }
@@ -124,7 +123,7 @@ export function useCozmoChat() {
       case 'read': case 'write_file': case 'edit_file': return 'FileText'
       case 'glob': case 'grep': return 'Search'
       case 'bash': return 'Terminal'
-      case 'search_web': case 'web_fetch': return 'Globe'
+      case 'web_fetch': return 'Globe'
       default: return 'Wrench'
     }
   }
@@ -142,7 +141,6 @@ export function useCozmoChat() {
       case 'bash': return `Tool: bash — ${cmd ?? '?'}`
       case 'grep': return `Tool: grep — Pattern: ${q ?? pt ?? '?'}`
       case 'glob': return `Tool: glob — Pattern: ${pt ?? '?'}`
-      case 'search_web': return `Tool: search_web — Query: ${q ?? '?'}`
       case 'web_fetch': return `Tool: web_fetch — URL: ${url ?? '?'}`
       default: return `Tool: ${tool}`
     }

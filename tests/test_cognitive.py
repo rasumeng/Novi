@@ -18,52 +18,98 @@ class TestMemoryContextAssembly:
     @pytest.fixture
     def runtime(self):
         from cozmo.runtime.runtime import CozmoRuntime
-        from cozmo.runtime.event_bus import EventBus
 
-        mm = MagicMock()
-        rt = CozmoRuntime(model_service=mm)
+        rt = CozmoRuntime(model_service=MagicMock())
         return rt
 
+    def _ctx(self, user_input="hello", needs_memory=True, intent="conversation"):
+        import types
+        from cozmo.runtime.execution_context import ExecutionContext
+        from cozmo.runtime.retrieval_policy import RetrievalPlan, SourceType
+        from cozmo.runtime.trace import ExecutionTrace
+
+        plan = RetrievalPlan()
+        if needs_memory:
+            plan.sources.append(SourceType.MEMORY)
+        if intent in ("coding", "work"):
+            plan.sources.append(SourceType.PROJECT)
+
+        ctx = ExecutionContext(user_input=user_input)
+        ctx.trace = ExecutionTrace(user_input=user_input)
+        ctx.analysis = types.SimpleNamespace(
+            intent=types.SimpleNamespace(value=intent),
+            capabilities=["conversation"],
+            evidence=types.SimpleNamespace(
+                signals=[], confidence=0.0, needs_memory=needs_memory
+            ),
+            grounding=types.SimpleNamespace(
+                needs_grounding=False, confidence=0.0, source="none", reason=""
+            ),
+            retrieval_plan=plan,
+            complexity=types.SimpleNamespace(score=1, plan_level=0),
+            strategy=types.SimpleNamespace(value="direct"),
+        )
+        return ctx
+
     def test_query_memory_empty_when_no_memory(self, runtime):
-        """Without a memory manager, query returns empty string."""
-        result = runtime._query_memory("hello")
-        assert result == ""
+        """Without a memory manager, executor leaves memory_context empty."""
+        ctx = self._ctx()
+        list(runtime.retrieval_executor.execute(ctx, "hello"))
+        assert ctx.memory_context == ""
 
     def test_query_memory_returns_formatted(self, runtime):
-        """With memory manager, query returns formatted sections."""
+        """With memory manager, executor populates formatted sections."""
+        from cozmo.runtime.runtime import CozmoRuntime
+
         mock_memory = MagicMock()
         mock_memory.query.return_value = [
             {"text": "User likes Python", "distance": 0.2,
              "metadata": {"type": "preference", "frequency": 3, "timestamp": ""}},
         ]
-        runtime.memory = mock_memory
-        result = runtime._query_memory("hello", intent="conversation")
-        assert "Preference" in result or "preference" in result
-        assert "likes Python" in result
+        rt = CozmoRuntime(model_service=MagicMock(), memory=mock_memory)
+        ctx = self._ctx()
+        list(rt.retrieval_executor.execute(ctx, "hello"))
+        assert "Preference" in ctx.memory_context or "preference" in ctx.memory_context
+        assert "likes Python" in ctx.memory_context
 
     def test_rank_memories_by_importance(self, runtime):
         """Memories are ranked by frequency x recency x distance."""
         from datetime import datetime, timedelta
 
+        from cozmo.runtime.retrieval import RetrievalExecutor
+        from cozmo.runtime.sources import RetrievedItem
+
         older = (datetime.now() - timedelta(hours=100)).isoformat()
         newer = datetime.now().isoformat()
-        results = [
-            {"text": "old frequent", "distance": 0.1,
-             "metadata": {"frequency": 10, "timestamp": older}},
-            {"text": "new rare", "distance": 0.3,
-             "metadata": {"frequency": 1, "timestamp": newer}},
+        items = [
+            RetrievedItem(
+                id="a", text="old frequent", source="memory",
+                metadata={"frequency": 10, "timestamp": older, "distance": 0.1},
+            ),
+            RetrievedItem(
+                id="b", text="new rare", source="memory",
+                metadata={"frequency": 1, "timestamp": newer, "distance": 0.3},
+            ),
         ]
-        ranked = runtime._rank_memories(results)
+        ranked = RetrievalExecutor._rank_memories(items)
         assert len(ranked) == 2
 
     def test_memory_filtered_by_intent(self, runtime):
-        """Memory query filters by types matching intent."""
+        """Executor filters memory by types matching intent."""
+        from cozmo.runtime.runtime import CozmoRuntime
+
         mock_memory = MagicMock()
-        runtime.memory = mock_memory
-        runtime._query_memory("refactor main.py", intent="coding")
+        rt = CozmoRuntime(model_service=MagicMock(), memory=mock_memory)
+        ctx = self._ctx(user_input="refactor main.py", intent="coding")
+        list(rt.retrieval_executor.execute(ctx, "refactor main.py"))
         call_kwargs = mock_memory.query.call_args[1]
         assert "memory_types" in call_kwargs
         assert call_kwargs["memory_types"] == ["project", "learning", "reference"]
+
+    def test_runtime_no_direct_memory_retrieval(self, runtime):
+        """Legacy memory retrieval methods removed from runtime."""
+        assert not hasattr(runtime, "_query_memory")
+        assert not hasattr(runtime, "_rank_memories")
 
 
 # ── Priority 2: ModelRouter with complexity ────────────────────────────────

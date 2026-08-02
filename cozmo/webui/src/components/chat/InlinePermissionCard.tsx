@@ -19,7 +19,6 @@ const TOOL_LABELS: Record<string, string> = {
   bash: 'Run command',
   grep: 'Search code',
   glob: 'Find files',
-  search_web: 'Search web',
   web_fetch: 'Fetch URL',
 }
 
@@ -43,7 +42,6 @@ function summarize(request: PermissionRequest): string {
   if (tool === 'write_file') return `Write to ${p ?? 'file'}`
   if (tool === 'edit_file') return `Edit ${p ?? 'file'}`
   if (tool === 'read') return `Read ${p ?? 'file'}`
-  if (tool === 'search_web') return `Search web for "${q ?? '?'}"`
   if (tool === 'web_fetch') return `Fetch ${url ?? 'page'}`
   if (tool === 'grep') return `Search code for "${q ?? '?'}"`
   if (tool === 'glob') return `Find files matching pattern`
