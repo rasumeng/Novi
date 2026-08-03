@@ -46,6 +46,9 @@ log = logging.getLogger("cozmo.brain")
 
 __all__ = ["Brain"]
 
+# Soft tags that mark an item as part of the accumulated Identity layer.
+_IDENTITY_TAGS = frozenset({"preference", "goal", "skill", "identity"})
+
 
 class Brain:
     """Facade exposing observe / recall / learn / resolve / reflect.
@@ -179,8 +182,17 @@ class Brain:
     def learn(self, statement: str, source: Optional[str] = None) -> None:
         """Explicitly acquire knowledge: user asks to remember, write_knowledge.
 
-        ``source`` is reserved for provenance (derived_from edges, Phase D).
+        ``source`` is reserved for provenance tagging (Phase D: derived_from
+        edges; Phase F: identity tag selection). When the knowledge layer is
+        wired, the statement persists directly as a verified knowledge item —
+        immediately discoverable by the resolver, closing the legacy
+        stale-index gap. Without layers it falls back to the legacy flat
+        writer.
         """
+        if self._knowledge_layer is not None and self._scenario_layer is not None:
+            tags = _tags_for_source(source)
+            self._knowledge_layer.write(statement, tags=tags)
+            return
         self._memory_manager().store_fact(statement)
 
     def resolve(self, query: str) -> ContextResolution:
@@ -194,14 +206,59 @@ class Brain:
         return ContextResolution(method="none")
 
     def reflect(self) -> ReflectionReport:
-        """Run a consolidation pass over knowledge.
+        """Run a consolidation + promotion pass over knowledge (Phase F).
 
-        Phase A maps reflection to the existing merge/consolidate pass;
-        promotion, verification, and supersession arrive with the reasoning
-        tier (Phase F).
+        With the knowledge layer, this verifies/corroborates accumulated
+        claims and supersedes stale verified items with history. Without it,
+        behaves exactly as Phase A (legacy consolidate pass).
         """
-        merges = self._memory_manager().consolidate()
-        return ReflectionReport(merges=merges)
+        if self._knowledge_layer is None or self._scenario_layer is None:
+            merges = self._memory_manager().consolidate()
+            return ReflectionReport(merges=merges)
+        return self._reflect_knowledge()
+
+    def _reflect_knowledge(self) -> ReflectionReport:
+        from .reasoning import promotion, verification
+        from .types import KnowledgeStatus
+
+        items = self._knowledge_layer.list_objects()
+        promotes = 0
+        corroborated = 0
+        superseded = 0
+        edges: list[Relationship] = []
+        for i, item in enumerate(items):
+            if item.status in (
+                KnowledgeStatus.VERIFIED,
+                KnowledgeStatus.SUPERSEDED,
+            ):
+                continue
+            count = verification.corroboration(items, i)
+            confirmed = verification.is_confirm(item.content)
+            existing = _find_related(item, items)
+            outcome = promotion.decide(
+                item, count, confirmed=confirmed, existing_verified=existing
+            )
+            if outcome.new_status == item.status:
+                continue
+            self._knowledge_layer.update_status(item.id, outcome.new_status)
+            if outcome.new_status == KnowledgeStatus.VERIFIED:
+                promotes += 1
+            else:
+                corroborated += 1
+            if outcome.supersedes is not None:
+                superseded += 1
+                self._knowledge_layer.update_status(
+                    outcome.supersedes.target_id, KnowledgeStatus.SUPERSEDED
+                )
+                edges.append(outcome.supersedes)
+        if edges and self._relationship_store is not None:
+            try:
+                self._relationship_store.add_many(edges)
+            except Exception:
+                log.warning("failed to write supersedes edges", exc_info=True)
+        return ReflectionReport(
+            promotions=promotes, corroborated=corroborated, superseded=superseded
+        )
 
     def _new_conversation_id(self, turn: Turn) -> str:
         """Brain-owned conversation identity.
@@ -331,3 +388,42 @@ class Brain:
                 "no memory manager wired; call set_memory_manager or pass memory= to Brain()"
             )
         return manager
+
+
+def _tags_for_source(source: Optional[str]) -> tuple[str, ...]:
+    """Map a ``source`` label to identity-seeding tags (Phase F)."""
+    if not source:
+        return ()
+    s = source.lower()
+    if "preference" in s:
+        return ("preference", "identity")
+    if "goal" in s:
+        return ("goal", "identity")
+    if "skill" in s:
+        return ("skill", "identity")
+    return ()
+
+
+def _find_related(item, items) -> Optional[Any]:
+    """Most recent VERIFIED item that overlaps this item (supersession target).
+
+    Identity change keeps history: a newly verified claim supersedes the most
+    recent verified item whose tags overlap the new one. Returns None when no
+    such item exists (e.g. the very first verified preference).
+    """
+    from .types import KnowledgeStatus
+
+    prospective = _IDENTITY_TAGS.intersection(item.tags)
+    best = None
+    for other in items:
+        if other.id == item.id:
+            continue
+        if other.status != KnowledgeStatus.VERIFIED:
+            continue
+        if not _IDENTITY_TAGS.intersection(other.tags):
+            continue
+        if prospective and not (set(prospective) & set(other.tags)):
+            continue
+        if best is None or other.created_at >= best.created_at:
+            best = other
+    return best

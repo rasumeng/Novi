@@ -481,6 +481,135 @@ def test_reflect_delegates_to_consolidate():
     assert mem.consolidations == 1
 
 
+class StubKnowledgeForPromotion:
+    def __init__(self, items=None):
+        self.items = items or []
+        self.status_updates = []
+        self.written = []
+
+    def write(self, statement, tags=()):
+        self.written.append((statement, tags))
+        return f"kn-{len(self.written)}"
+
+    def list_objects(self, limit=200):
+        return list(self.items)
+
+    def update_status(self, item_id, status):
+        self.status_updates.append((item_id, status))
+        return True
+
+
+class StubScenarioForPromotion:
+    class _Store:
+        def get(self, scenario_id):
+            return None
+
+    def __init__(self):
+        self.store = self._Store()
+
+
+def test_learn_with_layers_writes_knowledge_not_legacy():
+    mem = StubMemory()
+    layer = StubKnowledgeForPromotion()
+    brain = Brain(
+        memory=mem,
+        knowledge_layer=layer,
+        scenario_layer=StubScenarioForPromotion(),
+    )
+    brain.learn("The build uses uv", source="write_knowledge")
+    assert mem.facts == []
+    assert layer.written == [("The build uses uv", ())]
+
+
+def test_learn_with_preference_source_tags_identity():
+    layer = StubKnowledgeForPromotion()
+    brain = Brain(
+        memory=StubMemory(),
+        knowledge_layer=layer,
+        scenario_layer=StubScenarioForPromotion(),
+    )
+    brain.learn("prefers python over java", source="preference")
+    assert layer.written == [
+        ("prefers python over java", ("preference", "identity"))
+    ]
+
+
+def test_reflect_with_layers_promotes_corroborated_claims():
+    layer = StubKnowledgeForPromotion(
+        items=[
+            KnowledgeItem(
+                id="a",
+                form=KnowledgeForm.ATOMIC,
+                content="the user prefers python for builds",
+                confidence=0.9,
+                tags=("preference",),
+            ),
+            KnowledgeItem(
+                id="b",
+                form=KnowledgeForm.ATOMIC,
+                content="user prefers python builds",
+                confidence=0.9,
+                tags=("preference",),
+            ),
+            KnowledgeItem(
+                id="c",
+                form=KnowledgeForm.ATOMIC,
+                content="prefers python builds",
+                confidence=0.9,
+                tags=("preference",),
+            ),
+            KnowledgeItem(
+                id="d",
+                form=KnowledgeForm.ATOMIC,
+                content="user prefers python build tooling",
+                confidence=0.9,
+                tags=("preference",),
+            ),
+        ]
+    )
+    brain = Brain(
+        memory=StubMemory(),
+        knowledge_layer=layer,
+        scenario_layer=StubScenarioForPromotion(),
+    )
+    report = brain.reflect()
+    assert report.promotions >= 1
+    assert report.promotions + report.corroborated == 4
+    assert len(layer.status_updates) == 4
+
+
+def test_reflect_with_layers_writes_supersedes_edge():
+    old = KnowledgeItem(
+        id="old",
+        form=KnowledgeForm.ATOMIC,
+        content="prefers rust",
+        confidence=0.9,
+        status=KnowledgeStatus.VERIFIED,
+        tags=("preference",),
+    )
+    new = KnowledgeItem(
+        id="new",
+        form=KnowledgeForm.ATOMIC,
+        content="I prefer python now",
+        confidence=0.9,
+        tags=("preference",),
+    )
+    layer = StubKnowledgeForPromotion(items=[old, new])
+    rels = StubRelationshipStore()
+    brain = Brain(
+        memory=StubMemory(),
+        knowledge_layer=layer,
+        scenario_layer=StubScenarioForPromotion(),
+        relationship_store=rels,
+    )
+    report = brain.reflect()
+    assert report.promotions == 1
+    assert report.superseded == 1
+    assert ("old", KnowledgeStatus.SUPERSEDED) in layer.status_updates
+    supersede_edges = [e for e in rels.edges if e.kind.value == "supersedes"]
+    assert len(supersede_edges) == 1
+
+
 def test_knowledge_item_defaults():
     item = KnowledgeItem(
         id="k1", form=KnowledgeForm.ATOMIC, content="prefers python", confidence=0.7

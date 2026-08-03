@@ -180,6 +180,18 @@ class VectorStore:
         except Exception:
             return False
 
+    def update_status(self, item_id: str, status: KnowledgeStatus) -> bool:
+        """Promote/demote an item's lifecycle status (Phase F)."""
+        try:
+            self._table.update(
+                where=f"id = '{_esc(item_id)}'",
+                values={"status": status.value},
+            )
+            return True
+        except Exception:
+            log.warning("failed to update status for %s", item_id, exc_info=True)
+            return False
+
     def count(self) -> int:
         try:
             return self._table.count_rows()

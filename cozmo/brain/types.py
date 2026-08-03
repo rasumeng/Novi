@@ -198,3 +198,6 @@ class ReflectionReport:
     """Outcome of a reflect() consolidation pass."""
 
     merges: int = 0
+    promotions: int = 0
+    corroborated: int = 0
+    superseded: int = 0

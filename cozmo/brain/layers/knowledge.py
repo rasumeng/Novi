@@ -70,6 +70,39 @@ class KnowledgeLayer:
             text, k=k, distance_threshold=distance_threshold, tags=tags
         )
 
+    def list_items(self, limit: int = 200) -> list[dict]:
+        """All items, for reflection scans."""
+        return self._store.list_all(limit=limit)
+
+    def list_objects(self, limit: int = 200) -> list[KnowledgeItem]:
+        """All items as KnowledgeItem objects (reflection / promotion)."""
+        return [self._store.item_from_row(r) for r in self._store.list_all(limit=limit)]
+
+    def update_status(self, item_id: str, status: KnowledgeStatus) -> bool:
+        """Promote/demote an item's lifecycle status (Phase F)."""
+        return self._store.update_status(item_id, status)
+
+    def write(
+        self,
+        statement: str,
+        tags: tuple[str, ...] | list[str] = (),
+        source_kind: str = "explicit",
+    ) -> str:
+        """Explicit knowledge acquisition (Brain.learn).
+
+        Persists a verified atomic item directly — immediately discoverable by
+        the resolver/retrieval, closing the legacy stale-index gap.
+        """
+        item = KnowledgeItem(
+            id=f"kn-{uuid4().hex[:12]}",
+            form=KnowledgeForm.ATOMIC,
+            content=statement,
+            confidence=1.0,
+            status=KnowledgeStatus.VERIFIED,
+            tags=tuple(tags),
+        )
+        return self._store.add(item, source_kind=source_kind)
+
     def query_scoped(
         self,
         text: str,
