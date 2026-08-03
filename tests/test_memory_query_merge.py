@@ -8,7 +8,7 @@ seeing the new layer without touching the retrieval adapters.
 
 import pytest
 
-from cozmo.brain.storage.knowledge_store import KnowledgeStore
+from cozmo.brain.storage.vector_store import VectorStore
 from cozmo.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 from cozmo.memory.manager import MemoryManager
 from cozmo.services.embedding import EmbeddingService
@@ -44,7 +44,7 @@ def make_manager(tmp_path, with_knowledge=True):
         max_turns=100,
         max_short_term_pairs=10,
         knowledge_store=(
-            KnowledgeStore(persist_dir=tmp_path / "brain", embed_model=FakeEmbed())
+            VectorStore(persist_dir=tmp_path / "brain", embed_model=FakeEmbed())
             if with_knowledge
             else None
         ),

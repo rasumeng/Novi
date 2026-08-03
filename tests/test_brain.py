@@ -149,6 +149,17 @@ class StubProjectIndex:
         self.root = root
 
 
+class StubRelationshipStore:
+    def __init__(self, fail=False):
+        self.edges = []
+        self.fail = fail
+
+    def add_many(self, relationships):
+        if self.fail:
+            raise RuntimeError("edge write down")
+        self.edges.extend(relationships)
+
+
 def test_observe_does_not_write_legacy_memory():
     mem = StubMemory()
     Brain(memory=mem).observe(Turn(user="u", assistant="a"))
@@ -345,13 +356,63 @@ def test_observe_reuses_scenario_across_batches():
         scenario_layer=scenario,
     )
     for i in range(10):
-        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+        brain.observe(
+            Turn(user=f"u{i}", assistant=f"a{i}", conversation_id="conv-1")
+        )
 
     assert scenario.calls == ["create", "update"]
     extracted = [
         d["scenario_id"] for k, d in bus.events if k == "knowledge.extracted"
     ]
     assert extracted == ["scn-1", "scn-1"]
+
+
+def test_observe_writes_provenance_edges():
+    store = StubStore()
+    bus = RecordingBus()
+    rels = StubRelationshipStore()
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=store,
+        event_bus=bus,
+        extractor=StubExtractor(claims=2),
+        knowledge_layer=StubKnowledgeLayer(),
+        scenario_layer=StubScenarioLayer(),
+        relationship_store=rels,
+    )
+    for i in range(5):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+
+    assert len(rels.edges) == 4
+    derived = [e for e in rels.edges if e.kind.value == "derived_from"]
+    observed = [e for e in rels.edges if e.kind.value == "observed_in"]
+    assert len(derived) == 2
+    assert len(observed) == 2
+    conv_id = next(
+        d["conversation_id"] for k, d in bus.events if k == "knowledge.extracted"
+    )
+    assert all(e.target_id == conv_id for e in derived)
+    assert all(e.target_id == "scn-1" for e in observed)
+
+
+def test_observe_edge_failure_keeps_extraction():
+    store = StubStore()
+    bus = RecordingBus()
+    rels = StubRelationshipStore(fail=True)
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=store,
+        event_bus=bus,
+        extractor=StubExtractor(),
+        knowledge_layer=StubKnowledgeLayer(),
+        scenario_layer=StubScenarioLayer(),
+        relationship_store=rels,
+    )
+    for i in range(5):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+    kinds = [k for k, _ in bus.events]
+    assert "knowledge.extracted" in kinds
+    assert kinds.count("conversation.observed") == 5
 
 
 def test_recall_without_memory_raises():

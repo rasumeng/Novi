@@ -167,12 +167,16 @@ def test_model_resolution_ownership():
 def test_runtime_does_not_touch_storage_internals():
     """Rule #2: the Runtime reports events; the Brain decides persistence.
 
-    Storage implementation details (sqlite3, ConversationStore) may appear
+    Storage implementation details (sqlite3, the store classes) may appear
     only in cozmo/brain/ and in the composition root (services/context.py)
     that wires the Brain. Any other production module importing them is a
     Rule #2 violation.
     """
-    forbidden = ["sqlite3", "ConversationStore"]
+    forbidden = [
+        "sqlite3", "ConversationStore", "ScenarioStore", "VectorStore",
+        "RelationshipStore", "conversation_store", "scenario_store",
+        "vector_store", "relationship_store",
+    ]
     allowed_prefixes = ("cozmo/brain/",)
     allowed_files = {"cozmo/services/context.py"}
     violations = []
@@ -207,8 +211,9 @@ def test_reasoning_tier_has_no_storage_imports():
         return
     forbidden = [
         "sqlite3", "lancedb", "LanceStore", "ConversationStore",
-        "KnowledgeStore", "ScenarioStore", "lancedb_store",
-        "conversation_store", "knowledge_store", "scenario_store",
+        "KnowledgeStore", "ScenarioStore", "VectorStore", "RelationshipStore",
+        "lancedb_store", "conversation_store", "knowledge_store",
+        "scenario_store", "vector_store", "relationship_store",
     ]
     violations = []
     for pyfile in reasoning_dir.rglob("*.py"):

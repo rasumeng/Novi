@@ -221,7 +221,6 @@ class MemoryManager:
         memory_types: Optional[list[str]],
     ) -> list[dict]:
         if memory_types:
-            type_filter = " OR ".join(f"metadata LIKE '%\"type\": \"{t}\"%'" for t in memory_types)
             results = self.store.hybrid_search(text, k=k * 2, distance_threshold=distance_threshold)
             results = [r for r in results if r.get("metadata", {}).get("type") in memory_types]
         else:

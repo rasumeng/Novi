@@ -20,6 +20,7 @@ Phase G.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any, Optional
 
 from ..memory.manager import get_memory_manager
@@ -32,9 +33,11 @@ from .events import (
 from .storage.base import ConversationStore
 from .types import (
     ContextResolution,
+    EdgeKind,
     QueryContext,
     RecallItem,
     RecallResult,
+    Relationship,
     ReflectionReport,
     Turn,
 )
@@ -61,6 +64,9 @@ class Brain:
             the layers), observe() only persists + emits.
         knowledge_layer: knowledge domain manager (optional).
         scenario_layer: scenario domain manager (optional).
+        relationship_store: typed edge store (optional). When present, extracted
+            knowledge items get derived_from (conversation) and observed_in
+            (scenario) provenance edges.
         extract_every: number of buffered turns before extraction runs
             (legacy 5-turn cadence).
     """
@@ -75,6 +81,7 @@ class Brain:
         extractor: Any = None,
         knowledge_layer: Any = None,
         scenario_layer: Any = None,
+        relationship_store: Any = None,
         extract_every: int = 5,
     ) -> None:
         self._memory = memory
@@ -84,6 +91,7 @@ class Brain:
         self._extractor = extractor
         self._knowledge_layer = knowledge_layer
         self._scenario_layer = scenario_layer
+        self._relationship_store = relationship_store
         self._extract_every = max(1, extract_every)
         self._pending_turns: dict[str, list[Turn]] = {}
 
@@ -200,11 +208,47 @@ class Brain:
                         conversation_id, scenario_id
                     )
             if knowledge_ids:
+                self._write_provenance_edges(knowledge_ids, conversation_id, scenario_id)
                 self._emit_knowledge_extracted(
                     tuple(knowledge_ids), conversation_id, scenario_id, result.summary
                 )
         except Exception:
             log.warning("knowledge extraction failed", exc_info=True)
+
+    def _write_provenance_edges(
+        self, knowledge_ids: list[str], conversation_id: str, scenario_id: str
+    ) -> None:
+        """Provenance as first-class relationships (Phase D).
+
+        Each extracted item links to its source conversation (derived_from)
+        and its scenario (observed_in). Best-effort; edge failure never breaks
+        extraction or persistence.
+        """
+        if self._relationship_store is None:
+            return
+        try:
+            now = datetime.now()
+            relationships = []
+            for kid in knowledge_ids:
+                relationships.append(
+                    Relationship(
+                        source_id=kid,
+                        target_id=conversation_id,
+                        kind=EdgeKind.DERIVED_FROM,
+                        created_at=now,
+                    )
+                )
+                relationships.append(
+                    Relationship(
+                        source_id=kid,
+                        target_id=scenario_id,
+                        kind=EdgeKind.OBSERVED_IN,
+                        created_at=now,
+                    )
+                )
+            self._relationship_store.add_many(relationships)
+        except Exception:
+            log.warning("failed to write provenance edges", exc_info=True)
 
     def _emit_knowledge_extracted(
         self,

@@ -152,13 +152,14 @@ class CozmoContext:
         from ..brain.layers.scenarios import ScenarioLayer
         from ..brain.reasoning.extraction import KnowledgeExtractor, Summarizer
         from ..brain.storage.conversation_store import ConversationStore
-        from ..brain.storage.knowledge_store import KnowledgeStore
+        from ..brain.storage.relationship_store import RelationshipStore
         from ..brain.storage.scenario_store import ScenarioStore
+        from ..brain.storage.vector_store import VectorStore
         from ..runtime.event_bus import EventBus
 
         if self._brain is None:
             persist_dir = Path.home() / ".cozmo" / "brain"
-            knowledge_store = KnowledgeStore(
+            knowledge_store = VectorStore(
                 persist_dir=persist_dir, embed_model=self.embedding_service
             )
             self.memory.knowledge_store = knowledge_store
@@ -172,6 +173,7 @@ class CozmoContext:
                 extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.router_llm.invoke)),
                 knowledge_layer=KnowledgeLayer(knowledge_store),
                 scenario_layer=ScenarioLayer(scenario_store),
+                relationship_store=RelationshipStore(persist_dir=persist_dir),
             )
         return self._brain
 

@@ -1,13 +1,13 @@
-"""Phase C — KnowledgeStore (LanceDB) tests.
+"""Phase D — VectorStore (typed-column LanceDB) tests.
 
-Flat-schema storage of KnowledgeItems: add/query/delete round-trips, soft tag
-and form filters. Phase D migrates to typed columns; these pin current
-behavior only.
+KnowledgeItems persist with promoted typed columns; filters are column
+predicates (scenario_id, source_kind, form IN, list_contains on tags), not
+metadata string-matching. Rows still carry a metadata dict for consumers.
 """
 
 import pytest
 
-from cozmo.brain.storage.knowledge_store import KnowledgeStore
+from cozmo.brain.storage.vector_store import VectorStore
 from cozmo.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 from cozmo.services.embedding import EmbeddingService
 
@@ -31,7 +31,7 @@ class FakeEmbed(EmbeddingService):
 
 @pytest.fixture
 def store(tmp_path):
-    return KnowledgeStore(persist_dir=tmp_path, embed_model=FakeEmbed())
+    return VectorStore(persist_dir=tmp_path, embed_model=FakeEmbed())
 
 
 def item(**overrides):
@@ -59,7 +59,7 @@ def test_add_and_get_round_trip(store):
     assert meta["status"] == "candidate"
     assert meta["tags"] == ["preference"]
     assert meta["scenario_id"] == "scn-1"
-    assert meta["sources"] == ["conv-1"]
+    assert meta["source_kind"] == "extraction"
 
 
 def test_add_many_returns_ids(store):
@@ -82,7 +82,27 @@ def test_query_returns_matching_items(store):
     assert any(r["id"] == "kn-1" for r in results)
 
 
-def test_query_tag_filter(store):
+def test_query_scenario_column_predicate(store):
+    store.add_many(
+        [
+            item(id="kn-1", scenario_id="scn-1"),
+            item(id="kn-2", scenario_id="scn-2"),
+        ]
+    )
+    results = store.query("anything", k=5, scenario_id="scn-1")
+    assert [r["id"] for r in results] == ["kn-1"]
+
+
+def test_query_source_kind_column_predicate(store):
+    store.add_many(
+        [item(id="kn-1"), item(id="kn-2", content="Another claim here.")]
+    )
+    store.add(item(id="kn-3", content="Learned fact.", scenario_id="scn-9"), source_kind="learn")
+    results = store.query("anything", k=5, source_kind="learn")
+    assert [r["id"] for r in results] == ["kn-3"]
+
+
+def test_query_tag_list_contains(store):
     store.add_many(
         [
             item(id="kn-1", tags=("preference",)),
@@ -93,7 +113,7 @@ def test_query_tag_filter(store):
     assert [r["id"] for r in results] == ["kn-1"]
 
 
-def test_query_form_filter(store):
+def test_query_form_in_predicate(store):
     store.add_many(
         [
             item(id="kn-1", form=KnowledgeForm.ATOMIC),
@@ -106,6 +126,18 @@ def test_query_form_filter(store):
     )
     results = store.query("summary", k=5, forms=(KnowledgeForm.COMPOSITE,))
     assert [r["id"] for r in results] == ["kn-2"]
+
+
+def test_query_combined_predicates(store):
+    store.add_many(
+        [
+            item(id="kn-1", tags=("preference",), scenario_id="scn-1"),
+            item(id="kn-2", tags=("preference",), scenario_id="scn-2"),
+            item(id="kn-3", tags=("project",), scenario_id="scn-1"),
+        ]
+    )
+    results = store.query("anything", k=5, scenario_id="scn-1", tags=("preference",))
+    assert [r["id"] for r in results] == ["kn-1"]
 
 
 def test_get_unknown_returns_none(store):
@@ -127,23 +159,32 @@ def test_count(store):
 
 
 def test_reopen_retains_data(tmp_path):
-    dirpath = str(tmp_path / "convs")
-    store = KnowledgeStore(persist_dir=dirpath, embed_model=FakeEmbed())
+    dirpath = str(tmp_path / "brain")
+    store = VectorStore(persist_dir=dirpath, embed_model=FakeEmbed())
     store.add(item())
     store.close()
-    reopened = KnowledgeStore(persist_dir=dirpath, embed_model=FakeEmbed())
+    reopened = VectorStore(persist_dir=dirpath, embed_model=FakeEmbed())
     assert reopened.count() == 1
     assert reopened.get("kn-1") is not None
     reopened.close()
 
 
-def test_metadata_round_trip_via_item_from_row(store):
+def test_item_from_row_restores_item(store):
     store.add(item())
     row = store.get("kn-1")
-    restored = KnowledgeStore.item_from_row(row)
+    restored = VectorStore.item_from_row(row)
     assert restored.id == "kn-1"
     assert restored.form is KnowledgeForm.ATOMIC
     assert restored.status is KnowledgeStatus.CANDIDATE
     assert restored.tags == ("preference",)
     assert restored.sources == ("conv-1",)
     assert restored.scenario_id == "scn-1"
+
+
+def test_typed_columns_are_top_level(tmp_path):
+    store = VectorStore(persist_dir=tmp_path, embed_model=FakeEmbed())
+    store.add(item())
+    row = store.get("kn-1")
+    assert row["scenario_id"] == "scn-1"
+    assert row["form"] == "atomic"
+    assert row["tags"] == ["preference"]

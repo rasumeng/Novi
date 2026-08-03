@@ -10,7 +10,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from ..reasoning.extraction import ExtractionResult
-from ..storage.knowledge_store import KnowledgeStore
+from ..storage.vector_store import VectorStore
 from ..types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 
 _SCENARIO_SUMMARY_CONFIDENCE = 0.8
@@ -19,11 +19,11 @@ _SCENARIO_SUMMARY_CONFIDENCE = 0.8
 class KnowledgeLayer:
     """Domain manager for knowledge items."""
 
-    def __init__(self, store: KnowledgeStore):
+    def __init__(self, store: VectorStore):
         self._store = store
 
     @property
-    def store(self) -> KnowledgeStore:
+    def store(self) -> VectorStore:
         return self._store
 
     def store_extracted(
