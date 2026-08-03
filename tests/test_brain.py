@@ -1,8 +1,12 @@
-"""Phase A — Brain facade tests.
+"""Brain facade tests (Phases A + B).
 
-Asserts the facade establishes seams without adding behavior: every
-cognition method delegates to an injected component, and the knowledge
-model types match the blueprint.
+Phase A: facade establishes seams without adding behavior; every cognition
+method delegates to an injected component; knowledge model types match the
+blueprint.
+
+Phase B: observe() persists to the conversation store, keeps the legacy
+memory shim alive, then emits ConversationObserved — in that order, with the
+event describing only completed persistence.
 """
 
 import pytest
@@ -46,15 +50,146 @@ class StubMemory:
         return 2
 
 
+class StubStore:
+    def __init__(self):
+        self.appended = []
+        self.fail = False
+
+    def append(self, turn, conversation_id):
+        if self.fail:
+            raise RuntimeError("store down")
+        self.appended.append((turn, conversation_id))
+
+
+class RecordingBus:
+    def __init__(self, raise_on_emit=False):
+        self.events = []
+        self._raise_on_emit = raise_on_emit
+
+    def emit(self, event_type, **data):
+        if self._raise_on_emit:
+            raise RuntimeError("bus down")
+        self.events.append((event_type, data))
+
+
 class StubProjectIndex:
     def __init__(self, root):
         self.root = root
 
 
-def test_observe_delegates_to_memory():
+def test_observe_legacy_shim_writes_memory():
     mem = StubMemory()
     Brain(memory=mem).observe(Turn(user="u", assistant="a"))
     assert mem.interactions == [("u", "a")]
+
+
+def test_observe_persists_and_emits():
+    mem = StubMemory()
+    store = StubStore()
+    bus = RecordingBus()
+    brain = Brain(memory=mem, conversation_store=store, event_bus=bus)
+
+    brain.observe(Turn(user="u", assistant="a"))
+
+    assert len(store.appended) == 1
+    turn, cid = store.appended[0]
+    assert turn.user == "u"
+    assert turn.assistant == "a"
+    assert cid.startswith("conv-")
+    assert mem.interactions == [("u", "a")]
+    assert len(bus.events) == 1
+    kind, data = bus.events[0]
+    assert kind == "conversation.observed"
+    assert data["conversation_id"] == cid
+    assert data["user"] == "u"
+    assert data["assistant"] == "a"
+
+
+def test_observe_order_store_legacy_event():
+    order = []
+
+    class OrderedMemory(StubMemory):
+        def add_interaction(self, user, assistant):
+            order.append("memory")
+            super().add_interaction(user, assistant)
+
+    class OrderedStore(StubStore):
+        def append(self, turn, conversation_id):
+            order.append("store")
+            super().append(turn, conversation_id)
+
+    class OrderedBus(RecordingBus):
+        def emit(self, event_type, **data):
+            order.append("event")
+            super().emit(event_type, **data)
+
+    brain = Brain(
+        memory=OrderedMemory(),
+        conversation_store=OrderedStore(),
+        event_bus=OrderedBus(),
+    )
+    brain.observe(Turn(user="u", assistant="a"))
+    assert order == ["store", "memory", "event"]
+
+
+def test_observe_honors_turn_conversation_id():
+    store = StubStore()
+    brain = Brain(memory=StubMemory(), conversation_store=store)
+    brain.observe(Turn(user="u", assistant="a", conversation_id="conv-abc"))
+    assert store.appended[0][1] == "conv-abc"
+
+
+def test_observe_emitted_id_matches_turn_id():
+    bus = RecordingBus()
+    brain = Brain(
+        memory=StubMemory(), conversation_store=StubStore(), event_bus=bus
+    )
+    brain.observe(Turn(user="u", assistant="a", conversation_id="conv-xyz"))
+    assert bus.events[0][1]["conversation_id"] == "conv-xyz"
+
+
+def test_observe_without_store_or_bus():
+    mem = StubMemory()
+    brain = Brain(memory=mem)
+    brain.observe(Turn(user="u", assistant="a"))
+    assert mem.interactions == [("u", "a")]
+
+
+def test_observe_with_nothing_wired_is_noop():
+    brain = Brain()
+    brain.observe(Turn(user="u", assistant="a"))
+
+
+def test_observe_store_failure_does_not_emit():
+    store = StubStore()
+    store.fail = True
+    mem = StubMemory()
+    bus = RecordingBus()
+    brain = Brain(memory=mem, conversation_store=store, event_bus=bus)
+    brain.observe(Turn(user="u", assistant="a"))
+    assert mem.interactions == [("u", "a")]
+    assert bus.events == []
+
+
+def test_observe_event_failure_does_not_raise():
+    store = StubStore()
+    bus = RecordingBus(raise_on_emit=True)
+    brain = Brain(memory=StubMemory(), conversation_store=store, event_bus=bus)
+    brain.observe(Turn(user="u", assistant="a"))
+    assert len(store.appended) == 1
+
+
+def test_recall_without_memory_raises():
+    from cozmo.memory import manager as memory_module
+
+    saved = memory_module._memory_manager
+    memory_module._memory_manager = None
+    try:
+        brain = Brain()
+        with pytest.raises(RuntimeError):
+            brain.recall("what do i prefer")
+    finally:
+        memory_module._memory_manager = saved
 
 
 def test_recall_packages_query_results():
@@ -108,19 +243,6 @@ def test_reflect_delegates_to_consolidate():
     assert isinstance(report, ReflectionReport)
     assert report.merges == 2
     assert mem.consolidations == 1
-
-
-def test_missing_memory_raises():
-    from cozmo.memory import manager as memory_module
-
-    saved = memory_module._memory_manager
-    memory_module._memory_manager = None
-    try:
-        brain = Brain()
-        with pytest.raises(RuntimeError):
-            brain.observe(Turn(user="u", assistant="a"))
-    finally:
-        memory_module._memory_manager = saved
 
 
 def test_knowledge_item_defaults():
@@ -195,3 +317,15 @@ def test_facade_over_real_memory_manager(tmp_path):
     result = brain.recall("what do they prefer")
     assert len(result.items) >= 1
     assert result.items[0].source == "memory"
+
+
+def test_observe_with_real_conversation_store(tmp_path):
+    from cozmo.brain.storage.conversation_store import ConversationStore
+
+    store = ConversationStore(persist_dir=str(tmp_path / "convs"))
+    brain = Brain(memory=StubMemory(), conversation_store=store)
+    brain.observe(Turn(user="u", assistant="a", conversation_id="conv-1"))
+    rec = store.get("conv-1")
+    assert rec is not None
+    assert rec.turn_count == 1
+    assert len(store.turns("conv-1")) == 1

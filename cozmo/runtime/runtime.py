@@ -30,6 +30,7 @@ from .trace import DebugTraceEvent, ExecutionTrace, StepTrace, TraceAction
 from .execution_context import ExecutionContext
 from .retrieval import RecoveryAction, RetrievalExecutor
 from .sources import KnowledgeRetrievalSource
+from ..brain.types import Turn
 from ..memory.knowledge_index import get_knowledge_index
 from ..capabilities import CapabilityRegistry
 from ..capabilities.builtin import register_builtin_capabilities
@@ -201,11 +202,13 @@ class CozmoRuntime:
         event_bus=None,
         orchestrator=None,
         debug_trace: bool = False,
+        brain=None,
     ):
         self.model_manager = model_manager
         self.model_service = model_service
         self.router_llm = router_llm
         self.memory = memory
+        self.brain = brain
         self._registry = registry or ToolRegistry()
         self.project_index = project_index
         self.cfg = cfg or {}
@@ -852,6 +855,12 @@ class CozmoRuntime:
         self.history.append((user_input, final))
         if len(self.history) > self.max_history:
             self._compact()
+        if self.brain is not None:
+            try:
+                self.brain.observe(Turn(user=user_input, assistant=final))
+            except Exception:
+                pass
+            return
         if self.memory and hasattr(self.memory, "add_interaction"):
             try:
                 self.memory.add_interaction(user_input, final)

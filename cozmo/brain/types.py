@@ -142,12 +142,17 @@ class Relationship:
 
 @dataclass
 class Turn:
-    """Raw experience captured by observe(): one user/assistant exchange."""
+    """Raw experience captured by observe(): one user/assistant exchange.
+
+    ``conversation_id`` is a canonical Brain identifier. When absent, the
+    Brain assigns one; the store never generates identifiers.
+    """
 
     user: str
     assistant: str
     timestamp: datetime = field(default_factory=datetime.now)
     tool_outputs: tuple[str, ...] = ()
+    conversation_id: Optional[str] = None
 
 
 @dataclass

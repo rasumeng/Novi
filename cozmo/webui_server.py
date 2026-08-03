@@ -52,6 +52,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .tools import TOOL_REGISTRY
+from .brain.types import Turn
 from .runtime.runtime import CozmoRuntime
 from .runtime.interface import RuntimeInterface
 from .runtime.event_bus import EventBus
@@ -312,6 +313,7 @@ def build_runtime(cfg: dict):
         router_llm=b["router_llm"],
         skills=b["skills"],
         event_bus=event_bus,
+        brain=b.get("brain"),
         orchestrator=b.get("orchestrator"),
     )
     return runtime, b["orchestrator"], b["job_manager"], event_bus
@@ -1344,6 +1346,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 elif mtype == "agent_memory":
                     action = msg.get("action")
                     b = get_backend(cfg)
+                    brain = b.get("brain")
                     mem = b.get("memory")
                     if action == "save":
                         text = msg.get("text", "")
@@ -1354,7 +1357,10 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                             elif mem_type == "fact":
                                 mem.store_fact(text, msg.get("tags"))
                             else:
-                                mem.add_interaction(msg.get("user", ""), text)
+                                if brain is not None:
+                                    brain.observe(Turn(user=msg.get("user", ""), assistant=text))
+                                else:
+                                    mem.add_interaction(msg.get("user", ""), text)
                             await ws.send_text(json.dumps({"type": "agent_memory", "action": "saved"}))
                         else:
                             await ws.send_text(json.dumps({"type": "agent_memory", "action": "error", "error": "no text"}))

@@ -4,6 +4,10 @@ Prevent re-introduction of anti-patterns eliminated in Phase E:
   - Hardcoded model names in production code
   - Provider SDK imports outside provider boundaries
   - Model resolution outside ModelService
+
+Phase B rule guards:
+  - Runtime never writes to storage directly (Rule #2): storage
+    internals stay confined to cozmo/brain/ and the composition root.
 """
 
 import ast
@@ -151,4 +155,36 @@ def test_model_resolution_ownership():
             f"[INFO] Found {len(violations)} model resolution call(s) "
             f"outside ModelService:\n" +
             "\n".join(violations)
+        )
+
+
+# ── Test 4: Runtime never writes to storage directly ─────────────────────
+
+def test_runtime_does_not_touch_storage_internals():
+    """Rule #2: the Runtime reports events; the Brain decides persistence.
+
+    Storage implementation details (sqlite3, ConversationStore) may appear
+    only in cozmo/brain/ and in the composition root (services/context.py)
+    that wires the Brain. Any other production module importing them is a
+    Rule #2 violation.
+    """
+    forbidden = ["sqlite3", "ConversationStore"]
+    allowed_prefixes = ("cozmo/brain/",)
+    allowed_files = {"cozmo/services/context.py"}
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        if rel in allowed_files or any(rel.startswith(p) for p in allowed_prefixes):
+            continue
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for pat in forbidden:
+                if pat in line and ("import" in line or "from" in line):
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Storage internals leaked outside cozmo/brain/ (Rule #2):\n"
+            + "\n".join(violations)
         )

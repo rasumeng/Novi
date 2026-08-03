@@ -73,6 +73,7 @@ class WebUIBackend:
             "router_llm": ctx.router_llm,
             "memory": ctx.memory,
             "project_index": ctx.project_index,
+            "brain": ctx.brain,
             "registry": registry,
             "mcp": mcp,
             "skills": skills,

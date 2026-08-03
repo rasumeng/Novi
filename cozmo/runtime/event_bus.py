@@ -80,6 +80,9 @@ class EventType(str, Enum):
     REFLECTION_COMPLETED = "reflection_completed"
     REFLECTION_LESSON = "reflection.lesson"
 
+    # Brain
+    CONVERSATION_OBSERVED = "conversation.observed"
+
     # Capability
     CAPABILITIES_RESOLVED = "capabilities.resolved"
 

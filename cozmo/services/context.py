@@ -45,6 +45,8 @@ class CozmoContext:
         self._embedding: object | None = None
         self._reranker: object | None = None
         self._knowledge_inited: bool = False
+        self._brain: object | None = None
+        self._brain_event_bus: object | None = None
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -134,6 +136,30 @@ class CozmoContext:
         return self._project_index
 
     @property
+    def brain(self):
+        """Brain facade — the only abstraction the rest of the system
+        interacts with for knowledge (Architecture Rule #1).
+
+        Wired lazily with the shared services; carries its own EventBus for
+        Brain domain events.
+        """
+        from ..brain import Brain
+        from ..brain.storage.conversation_store import ConversationStore
+        from ..runtime.event_bus import EventBus
+
+        if self._brain is None:
+            self._brain_event_bus = EventBus()
+            self._brain = Brain(
+                memory=self.memory,
+                project_index=self.project_index,
+                conversation_store=ConversationStore(
+                    persist_dir=str(Path.home() / ".cozmo" / "brain")
+                ),
+                event_bus=self._brain_event_bus,
+            )
+        return self._brain
+
+    @property
     def scheduler(self):
         from ..scheduler import Scheduler
         from ..tools.scheduler_task import init_scheduler_tool
@@ -187,6 +213,7 @@ class CozmoContext:
             cfg=overrides.get("cfg", self.config),
             router_llm=overrides.get("router_llm", self.router_llm),
             event_bus=overrides.get("event_bus", EventBus()),
+            brain=overrides.get("brain", self.brain),
             skills=overrides.get("skills", None),
             registry=overrides.get("registry", None),
             orchestrator=overrides.get("orchestrator", self.orchestrator),
@@ -201,5 +228,6 @@ class CozmoContext:
         _ = self.project_index
         _ = self.embedding_service
         self.init_knowledge_index()
+        _ = self.brain
         _ = self.scheduler
         log.info("CozmoContext: all services initialized")
