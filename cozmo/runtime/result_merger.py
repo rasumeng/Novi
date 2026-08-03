@@ -58,10 +58,13 @@ _DEDUP_OVERLAP_RATIO = 0.5
 # Normalization method recorded on every merged item.
 _NORMALIZATION = "weighted_source_position_overlap"
 
-# Default source-kind priority. memory > project > knowledge > web.
+# Default source-kind priority. Layered tiers (Phase E) sit between project
+# and knowledge, mirroring identity → project → scenario → knowledge.
 _SOURCE_PRIOR = {
     "memory": 1.0,
+    "identity": 0.9,
     "project": 0.8,
+    "scenario": 0.7,
     "knowledge": 0.6,
     "web": 0.4,
     "file": 0.2,

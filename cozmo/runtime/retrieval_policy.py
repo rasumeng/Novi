@@ -43,14 +43,19 @@ from .retrieval_budget import ContextAllocation
 from .source_selector import RetrievalStrategy, SourceSelector, SourceType
 
 
-# Deterministic source order within a plan: context sources first, then
-# grounding sources. FILE reserved — never selected by a strategy yet.
+# Deterministic source order within a plan: context tiers first, then
+# grounding sources. Layered (Phase E): IDENTITY and SCENARIO sit between the
+# context memory tier and the competency/base tiers, mirroring the Brain's
+# identity → project → scenario → knowledge hierarchy. FILE reserved — never
+# selected by a strategy yet.
 _SOURCE_ORDER = {
     SourceType.MEMORY: 0,
-    SourceType.PROJECT: 1,
-    SourceType.KNOWLEDGE: 2,
-    SourceType.FILE: 3,
-    SourceType.WEB: 4,
+    SourceType.IDENTITY: 1,
+    SourceType.PROJECT: 2,
+    SourceType.SCENARIO: 3,
+    SourceType.KNOWLEDGE: 4,
+    SourceType.FILE: 5,
+    SourceType.WEB: 6,
 }
 
 
@@ -79,6 +84,8 @@ class RetrievalPolicy:
         intent: str,
         needs_memory: bool = False,
         needs_project: bool = False,
+        needs_scenario: bool = False,
+        needs_identity: bool = False,
     ) -> RetrievalPlan:
         """Decide the multi-source retrieval plan from existing signals.
 
@@ -90,10 +97,15 @@ class RetrievalPolicy:
             intent: Intent type string (e.g. "conversation", "research", "coding")
             needs_memory: EvidenceAnalysis.needs_memory — participate memory?
             needs_project: EvidenceAnalysis.needs_project — participate project?
+            needs_scenario: layered tier — scenario context participates
+            needs_identity: layered tier — identity context participates
 
         Memory/project are context sources: they join the plan whenever their
         signal is present, regardless of the grounding strategy. Strategy
-        reflects the primary grounding path the executor must run.
+        reflects the primary grounding path the executor must run. Scenario
+        and identity are the layered tiers (Phase E): they slot into the plan
+        between memory/project and the competency/base sources, mirroring the
+        Brain's identity → project → scenario → knowledge hierarchy.
         """
         selection = SourceSelector.select(
             needs_grounding=needs_grounding,
@@ -111,7 +123,11 @@ class RetrievalPolicy:
                 allocation=ContextAllocation(max_sources=0),
             )
         sources = RetrievalPolicy._with_context(
-            selection.sources, needs_memory, needs_project
+            selection.sources,
+            needs_memory,
+            needs_project,
+            needs_scenario,
+            needs_identity,
         )
         return RetrievalPolicy._plan(sources, selection.strategy, selection.reason)
 
@@ -122,14 +138,30 @@ class RetrievalPolicy:
         sources: list[SourceType] | tuple[SourceType, ...],
         needs_memory: bool,
         needs_project: bool,
+        needs_scenario: bool = False,
+        needs_identity: bool = False,
     ) -> list[SourceType]:
-        """Insert memory/project context sources at deterministic positions."""
+        """Insert context + layered tiers at deterministic positions."""
         result = list(sources)
         if needs_memory and SourceType.MEMORY not in result:
             result.insert(0, SourceType.MEMORY)
         if needs_project and SourceType.PROJECT not in result:
             idx = 1 if SourceType.MEMORY in result else 0
             result.insert(idx, SourceType.PROJECT)
+        if needs_identity and SourceType.IDENTITY not in result:
+            idx = 0 if SourceType.MEMORY not in result else 1
+            if SourceType.PROJECT in result:
+                idx = result.index(SourceType.PROJECT)
+            result.insert(idx, SourceType.IDENTITY)
+        if needs_scenario and SourceType.SCENARIO not in result:
+            idx = 0
+            if SourceType.MEMORY in result:
+                idx = result.index(SourceType.MEMORY) + 1
+            if SourceType.PROJECT in result:
+                idx = result.index(SourceType.PROJECT) + 1
+            if SourceType.IDENTITY in result:
+                idx = result.index(SourceType.IDENTITY) + 1
+            result.insert(idx, SourceType.SCENARIO)
         return result
 
     @staticmethod

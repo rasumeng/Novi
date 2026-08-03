@@ -32,10 +32,18 @@ class SourceType(str, Enum):
     ``FILE`` is reserved for workspace file indexing (Phase 9 step 5). No
     strategy selects it yet: ``FileRetrievalSource`` is a NoOp stub and the
     runtime has no file retrieval path to execute.
+
+    Phase E adds the layered brain tiers ``SCENARIO`` and ``IDENTITY``:
+    retrieval plans can carry the whole knowledge hierarchy (identity →
+    project → scenario → knowledge) instead of only a flat memory/competency
+    pair. They are context tiers inserted by ``RetrievalPolicy`` when the
+    corresponding signals are present, never base sources of a strategy.
     """
     MEMORY = "memory"
     KNOWLEDGE = "knowledge"
     PROJECT = "project"
+    SCENARIO = "scenario"
+    IDENTITY = "identity"
     FILE = "file"
     WEB = "web"
 

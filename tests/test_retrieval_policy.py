@@ -31,7 +31,8 @@ _SOURCE_ORDER = {
 
 def resolve(needs_grounding=False, signal_types=(), signal_strengths=None,
             has_external=False, intent="conversation",
-            needs_memory=False, needs_project=False):
+            needs_memory=False, needs_project=False,
+            needs_scenario=False, needs_identity=False):
     return RetrievalPolicy.resolve(
         needs_grounding=needs_grounding,
         signal_types=list(signal_types),
@@ -40,6 +41,8 @@ def resolve(needs_grounding=False, signal_types=(), signal_strengths=None,
         intent=intent,
         needs_memory=needs_memory,
         needs_project=needs_project,
+        needs_scenario=needs_scenario,
+        needs_identity=needs_identity,
     )
 
 
@@ -48,7 +51,27 @@ class TestSourceType:
         assert set(SourceType) == {
             SourceType.MEMORY, SourceType.KNOWLEDGE,
             SourceType.PROJECT, SourceType.FILE, SourceType.WEB,
+            SourceType.SCENARIO, SourceType.IDENTITY,
         }
+
+    def test_layered_identity_precedes_scenario(self):
+        plan = resolve(
+            intent="coding",
+            needs_project=True,
+            needs_scenario=True,
+            needs_identity=True,
+        )
+        assert plan.sources == [
+            SourceType.IDENTITY,
+            SourceType.PROJECT,
+            SourceType.SCENARIO,
+            SourceType.KNOWLEDGE,
+        ]
+
+    def test_layered_absent_when_signals_absent(self):
+        plan = resolve(intent="coding", needs_project=True)
+        assert SourceType.SCENARIO not in plan.sources
+        assert SourceType.IDENTITY not in plan.sources
 
     def test_strategy_covers_multi_source_variants(self):
         assert RetrievalStrategy.MEMORY_FIRST.value == "memory_first"

@@ -16,11 +16,14 @@ from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
 from cozmo.runtime.retrieval_budget import ContextAllocation
 from cozmo.runtime.sources import (
     FileRetrievalSource,
+    IdentityRetrievalSource,
     KnowledgeRetrievalSource,
     MemoryRetrievalSource,
     ProjectRetrievalSource,
     RetrievalResult,
     RetrievalSource,
+    RetrievedItem,
+    ScenarioRetrievalSource,
     WebRetrievalSource,
 )
 from cozmo.tools.search_pipeline import SearchResult
@@ -308,6 +311,84 @@ class TestFileRetrievalSource:
         assert result.quality == RetrievalQuality.EMPTY
         assert result.items == []
         assert result.error is None
+
+
+class _FakeSource:
+    """Implements the RetrievalSource contract from a fixed result."""
+
+    id = "base"
+
+    def __init__(self, items, fail=False):
+        self.items = items
+        self.fail = fail
+        self.calls = []
+
+    def retrieve(self, query, budget):
+        self.calls.append((query, budget))
+        if self.fail:
+            raise RuntimeError("base down")
+        return RetrievalResult(
+            source="base",
+            items=self.items,
+            quality=RetrievalQuality.SUFFICIENT if self.items else RetrievalQuality.EMPTY,
+        )
+
+
+class TestScenarioRetrievalSource:
+    def test_tags_items_with_scenario(self):
+        base = _FakeSource(
+            [RetrievedItem(id="k1", text="build uses uv", source="base", score=0.9)]
+        )
+        source = ScenarioRetrievalSource(base, scenario_id="scn-7")
+        result = source.retrieve("build", BUDGET)
+        assert result.source == "scenario"
+        assert len(result.items) == 1
+        assert result.items[0].source == "scenario"
+        assert result.items[0].metadata["scenario_id"] == "scn-7"
+
+    def test_empty_when_no_scenario(self):
+        source = ScenarioRetrievalSource(_FakeSource([]), scenario_id=None)
+        result = source.retrieve("q", BUDGET)
+        assert result.quality == RetrievalQuality.EMPTY
+        assert result.items == []
+
+    def test_error_propagates(self):
+        source = ScenarioRetrievalSource(_FakeSource([], fail=True), scenario_id="scn-1")
+        result = source.retrieve("q", BUDGET)
+        assert result.quality == RetrievalQuality.FAILED
+        assert result.error == "base down"
+
+
+class TestIdentityRetrievalSource:
+    def test_keeps_only_identity_tagged_items(self):
+        base = _FakeSource(
+            [
+                RetrievedItem(  # identity — preference
+                    "1", "prefers python", "identity", 0.9, {"tags": ["preference"]}
+                ),
+                RetrievedItem(
+                    "2", "compiler failed on prod", "identity", 0.8, {"tags": ["fact"]}
+                ),
+            ]
+        )
+        source = IdentityRetrievalSource(base)
+        result = source.retrieve("q", BUDGET)
+        assert result.source == "identity"
+        assert [i.id for i in result.items] == ["1"]
+
+    def test_empty_when_no_identity_items(self):
+        source = IdentityRetrievalSource(
+            _FakeSource(
+                [RetrievedItem("2", "compiler failed", "identity", 0.8, {"tags": ["fact"]})]
+            )
+        )
+        result = source.retrieve("q", BUDGET)
+        assert result.quality == RetrievalQuality.EMPTY
+
+    def test_error_propagates(self):
+        source = IdentityRetrievalSource(_FakeSource([], fail=True))
+        result = source.retrieve("q", BUDGET)
+        assert result.quality == RetrievalQuality.FAILED
 
     def test_returns_retrieval_result(self):
         assert isinstance(FileRetrievalSource().retrieve("query", BUDGET), RetrievalResult)

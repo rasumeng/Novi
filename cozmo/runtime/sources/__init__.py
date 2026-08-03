@@ -6,9 +6,11 @@ stores. No adapter is consumed by the runtime yet (migration step 4+).
 
 from .base import MergedRetrievalResult, RetrievedItem, RetrievalResult, RetrievalSource
 from .file import FileRetrievalSource
+from .identity import IdentityRetrievalSource
 from .knowledge import KnowledgeRetrievalSource
 from .memory import MemoryRetrievalSource
 from .project import ProjectRetrievalSource
+from .scenario import ScenarioRetrievalSource
 from .web import WebRetrievalSource
 
 __all__ = [
@@ -18,6 +20,8 @@ __all__ = [
     "MergedRetrievalResult",
     "MemoryRetrievalSource",
     "KnowledgeRetrievalSource",
+    "IdentityRetrievalSource",
+    "ScenarioRetrievalSource",
     "WebRetrievalSource",
     "ProjectRetrievalSource",
     "FileRetrievalSource",
