@@ -74,3 +74,22 @@ class RetrievalResult:
     score: float = 0.0
     quality: RetrievalQuality = RetrievalQuality.EMPTY
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class MergedRetrievalResult:
+    """Cross-source merge of one retrieval plan's results.
+
+    Produced by ``ResultMerger`` (cozmo.runtime.result_merger). Frozen so it
+    can be shared across subsystems and consumed by the ContextRenderer and
+    EvidenceProcessor without aliasing. ``items`` carry the normalized
+    cross-source ranking; ``metrics`` exposes evaluable signals (per-source
+    contribution, dedup counts, normalization method).
+    """
+
+    query: str
+    items: tuple[RetrievedItem, ...] = ()
+    source_results: tuple[RetrievalResult, ...] = ()
+    quality: RetrievalQuality = RetrievalQuality.EMPTY
+    allocation_used: ContextAllocation = field(default_factory=ContextAllocation)
+    metrics: dict = field(default_factory=dict)

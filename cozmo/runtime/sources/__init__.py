@@ -4,7 +4,7 @@ Public contracts live in ``base``; concrete source adapters wrap existing
 stores. No adapter is consumed by the runtime yet (migration step 4+).
 """
 
-from .base import RetrievedItem, RetrievalResult, RetrievalSource
+from .base import MergedRetrievalResult, RetrievedItem, RetrievalResult, RetrievalSource
 from .file import FileRetrievalSource
 from .knowledge import KnowledgeRetrievalSource
 from .memory import MemoryRetrievalSource
@@ -15,6 +15,7 @@ __all__ = [
     "RetrievalSource",
     "RetrievedItem",
     "RetrievalResult",
+    "MergedRetrievalResult",
     "MemoryRetrievalSource",
     "KnowledgeRetrievalSource",
     "WebRetrievalSource",
