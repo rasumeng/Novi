@@ -121,6 +121,7 @@ class CozmoContext:
             self._memory = MemoryManager(
                 self.router_llm,
                 persist_dir=str(Path.home() / ".cozmo" / "memory"),
+                embed_model=self.embedding_service,
                 max_turns=int(mem_cfg.get("max_turns_before_summary", 5)),
                 max_short_term_pairs=int(mem_cfg.get("max_short_term_pairs", 10)),
             )
@@ -141,21 +142,36 @@ class CozmoContext:
         interacts with for knowledge (Architecture Rule #1).
 
         Wired lazily with the shared services; carries its own EventBus for
-        Brain domain events.
+        Brain domain events. Phase C wires extraction + knowledge/scenario
+        layers: observe() persists turns, extracts atomic knowledge, and
+        maintains scenarios. MemoryManager.query merges the knowledge store so
+        retrieval sees the new layer.
         """
         from ..brain import Brain
+        from ..brain.layers.knowledge import KnowledgeLayer
+        from ..brain.layers.scenarios import ScenarioLayer
+        from ..brain.reasoning.extraction import KnowledgeExtractor, Summarizer
         from ..brain.storage.conversation_store import ConversationStore
+        from ..brain.storage.knowledge_store import KnowledgeStore
+        from ..brain.storage.scenario_store import ScenarioStore
         from ..runtime.event_bus import EventBus
 
         if self._brain is None:
+            persist_dir = Path.home() / ".cozmo" / "brain"
+            knowledge_store = KnowledgeStore(
+                persist_dir=persist_dir, embed_model=self.embedding_service
+            )
+            self.memory.knowledge_store = knowledge_store
+            scenario_store = ScenarioStore(persist_dir=persist_dir)
             self._brain_event_bus = EventBus()
             self._brain = Brain(
                 memory=self.memory,
                 project_index=self.project_index,
-                conversation_store=ConversationStore(
-                    persist_dir=str(Path.home() / ".cozmo" / "brain")
-                ),
+                conversation_store=ConversationStore(persist_dir=persist_dir),
                 event_bus=self._brain_event_bus,
+                extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.router_llm.invoke)),
+                knowledge_layer=KnowledgeLayer(knowledge_store),
+                scenario_layer=ScenarioLayer(scenario_store),
             )
         return self._brain
 

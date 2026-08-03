@@ -8,6 +8,10 @@ Prevent re-introduction of anti-patterns eliminated in Phase E:
 Phase B rule guards:
   - Runtime never writes to storage directly (Rule #2): storage
     internals stay confined to cozmo/brain/ and the composition root.
+
+Phase C rule guards:
+  - The reasoning tier is pure: cozmo/brain/reasoning/ imports no storage.
+  - Brain.observe no longer calls the legacy MemoryManager write path.
 """
 
 import ast
@@ -188,3 +192,56 @@ def test_runtime_does_not_touch_storage_internals():
             "Storage internals leaked outside cozmo/brain/ (Rule #2):\n"
             + "\n".join(violations)
         )
+
+
+# ── Test 5: Reasoning tier is pure ─────────────────────────────────────
+
+def test_reasoning_tier_has_no_storage_imports():
+    """Phase C: cozmo/brain/reasoning/ operates on Brain objects only.
+
+    No sqlite3, no LanceDB, no store classes, no storage module imports.
+    Persistence lives in layers/Brain, never in reasoning.
+    """
+    reasoning_dir = COZMO_SRC / "brain" / "reasoning"
+    if not reasoning_dir.exists():
+        return
+    forbidden = [
+        "sqlite3", "lancedb", "LanceStore", "ConversationStore",
+        "KnowledgeStore", "ScenarioStore", "lancedb_store",
+        "conversation_store", "knowledge_store", "scenario_store",
+    ]
+    violations = []
+    for pyfile in reasoning_dir.rglob("*.py"):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if ("import" in line or "from" in line) and any(
+                f in line for f in forbidden
+            ):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Reasoning tier imported storage (must be pure):\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Test 6: Brain no longer calls legacy memory write ──────────────────
+
+def test_brain_observe_does_not_call_legacy_memory():
+    """Phase C: the legacy add_interaction write is gone from Brain.
+
+    Only the brain=None runtime/WebUI fallbacks and MemoryManager itself may
+    reference add_interaction.
+    """
+    brain_file = COZMO_SRC / "brain" / "brain.py"
+    text = brain_file.read_text("utf-8", errors="replace")
+    for i, line in enumerate(text.splitlines(), 1):
+        if _is_comment(line):
+            continue
+        if "add_interaction" in line:
+            raise AssertionError(
+                f"cozmo/brain/brain.py:{i}: legacy add_interaction still called from Brain"
+            )

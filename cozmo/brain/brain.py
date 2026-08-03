@@ -1,18 +1,20 @@
 """Brain — cognition facade over Cozmo's knowledge system.
 
-Phase B establishes the write pipeline:
+Phase B established the write pipeline:
     Runtime reports events.
     Brain decides persistence.
     Storage executes persistence.
 
-observe() persists a turn to the ConversationStore, keeps the legacy
-MemoryManager write alive as a temporary compatibility shim, then emits
-ConversationObserved. No extraction, retrieval, summarization, or reasoning
-belongs here — later phases add those.
+Phase C adds extraction: observe() persists the turn, emits
+ConversationObserved, then runs extraction on a buffered batch (legacy 5-turn
+cadence). Extracted claims become atomic KnowledgeItems, a scenario is created
+or updated (1:1 with the conversation), the conversation is linked, and
+KnowledgeExtracted is emitted. All optional: without an extractor/layers, the
+Brain behaves exactly as Phase B.
 
-The legacy MemoryManager call inside observe() is a TEMPORARY compatibility
-shim, not part of Brain's design. It exists only until Phase C replaces the
-legacy memory pipeline with extraction, then it is removed.
+The legacy MemoryManager write pipeline is no longer called by observe(); it
+survives only as the brain=None fallback in the runtime and WebUI, removed in
+Phase G.
 """
 
 from __future__ import annotations
@@ -21,7 +23,12 @@ import logging
 from typing import Any, Optional
 
 from ..memory.manager import get_memory_manager
-from .events import CONVERSATION_OBSERVED, ConversationObserved
+from .events import (
+    CONVERSATION_OBSERVED,
+    KNOWLEDGE_EXTRACTED,
+    ConversationObserved,
+    KnowledgeExtracted,
+)
 from .storage.base import ConversationStore
 from .types import (
     ContextResolution,
@@ -50,6 +57,12 @@ class Brain:
             Brain owns conversation identity.
         event_bus: object with ``emit(event_type, **data)``. Brain domain
             events are emitted here after state is persisted.
+        extractor: reasoning KnowledgeExtractor (optional). When None (with
+            the layers), observe() only persists + emits.
+        knowledge_layer: knowledge domain manager (optional).
+        scenario_layer: scenario domain manager (optional).
+        extract_every: number of buffered turns before extraction runs
+            (legacy 5-turn cadence).
     """
 
     def __init__(
@@ -59,18 +72,27 @@ class Brain:
         project_index: Any = None,
         conversation_store: Optional[ConversationStore] = None,
         event_bus: Any = None,
+        extractor: Any = None,
+        knowledge_layer: Any = None,
+        scenario_layer: Any = None,
+        extract_every: int = 5,
     ) -> None:
         self._memory = memory
         self._project_index = project_index
         self._conversation_store = conversation_store
         self._event_bus = event_bus
+        self._extractor = extractor
+        self._knowledge_layer = knowledge_layer
+        self._scenario_layer = scenario_layer
+        self._extract_every = max(1, extract_every)
+        self._pending_turns: dict[str, list[Turn]] = {}
 
     def observe(self, turn: Turn) -> None:
         """Capture a completed turn.
 
-        Order: conversation persisted → legacy compatibility write → event
-        emitted. The event is emitted only after the turn is durably
-        persisted, and only when a conversation store is wired.
+        Order: conversation persisted → ConversationObserved → extraction
+        (buffered). Events are emitted only after the work they describe is
+        durably done; extraction failure never blocks persistence.
         """
         conversation_id = turn.conversation_id or self._new_conversation_id(turn)
         stored = False
@@ -80,9 +102,9 @@ class Brain:
                 stored = True
             except Exception:
                 log.warning("conversation store append failed", exc_info=True)
-        self._write_legacy_memory(turn)
         if stored:
             self._emit_conversation_observed(conversation_id, turn)
+        self._maybe_extract(conversation_id, turn)
 
     def recall(self, query: str, context: Optional[QueryContext] = None) -> RecallResult:
         """Retrieve knowledge relevant to a query.
@@ -143,17 +165,66 @@ class Brain:
         """
         return f"conv-{turn.timestamp.strftime('%Y%m%dT%H%M%S%f')}"
 
-    def _write_legacy_memory(self, turn: Turn) -> None:
-        """Temporary compatibility shim — NOT part of Brain's design.
+    def _maybe_extract(self, conversation_id: str, turn: Turn) -> None:
+        """Buffer turns; run extraction when the batch reaches extract_every.
 
-        Keeps the legacy MemoryManager write alive until Phase C replaces
-        the legacy memory pipeline with extraction. Removed in Phase C.
+        All optional deps. Extraction is best-effort: any failure is logged
+        and the buffered batch is dropped, never re-raising into observe().
         """
+        if (
+            self._extractor is None
+            or self._knowledge_layer is None
+            or self._scenario_layer is None
+        ):
+            return
+        batch = self._pending_turns.get(conversation_id, [])
+        batch.append(turn)
+        if len(batch) < self._extract_every:
+            self._pending_turns[conversation_id] = batch
+            return
+        self._pending_turns.pop(conversation_id, None)
         try:
-            manager = self._memory_manager()
-            manager.add_interaction(turn.user, turn.assistant)
+            result = self._extractor.extract(tuple(batch))
+            conversation = None
+            if self._conversation_store is not None:
+                conversation = self._conversation_store.get(conversation_id)
+            scenario_id = self._scenario_layer.ensure_for_conversation(
+                conversation, result
+            )
+            knowledge_ids = self._knowledge_layer.store_extracted(
+                conversation_id, scenario_id, result
+            )
+            if self._conversation_store is not None and conversation is not None:
+                if getattr(conversation, "scenario_id", None) != scenario_id:
+                    self._conversation_store.set_scenario_id(
+                        conversation_id, scenario_id
+                    )
+            if knowledge_ids:
+                self._emit_knowledge_extracted(
+                    tuple(knowledge_ids), conversation_id, scenario_id, result.summary
+                )
         except Exception:
-            log.warning("legacy memory write failed", exc_info=True)
+            log.warning("knowledge extraction failed", exc_info=True)
+
+    def _emit_knowledge_extracted(
+        self,
+        knowledge_ids: tuple[str, ...],
+        conversation_id: str,
+        scenario_id: str,
+        summary: str,
+    ) -> None:
+        event = KnowledgeExtracted(
+            knowledge_ids=knowledge_ids,
+            conversation_id=conversation_id,
+            scenario_id=scenario_id,
+            summary=summary,
+        )
+        if self._event_bus is None:
+            return
+        try:
+            self._event_bus.emit(KNOWLEDGE_EXTRACTED, **event.to_payload())
+        except Exception:
+            log.warning("failed to emit %s", KNOWLEDGE_EXTRACTED, exc_info=True)
 
     def _emit_conversation_observed(self, conversation_id: str, turn: Turn) -> None:
         event = ConversationObserved(

@@ -82,6 +82,7 @@ class EventType(str, Enum):
 
     # Brain
     CONVERSATION_OBSERVED = "conversation.observed"
+    KNOWLEDGE_EXTRACTED = "knowledge.extracted"
 
     # Capability
     CAPABILITIES_RESOLVED = "capabilities.resolved"

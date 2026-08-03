@@ -1,15 +1,20 @@
-"""Brain facade tests (Phases A + B).
+"""Brain facade tests (Phases A + B + C).
 
 Phase A: facade establishes seams without adding behavior; every cognition
 method delegates to an injected component; knowledge model types match the
 blueprint.
 
-Phase B: observe() persists to the conversation store, keeps the legacy
-memory shim alive, then emits ConversationObserved — in that order, with the
-event describing only completed persistence.
+Phase B: observe() persists to the conversation store, then emits
+ConversationObserved — in that order, with the event describing only completed
+persistence.
+
+Phase C: observe() additionally runs buffered extraction (every 5 turns) →
+KnowledgeItems + scenario → KnowledgeExtracted. The legacy MemoryManager shim
+is gone; without extractor/layers, observe() behaves as Phase B.
 """
 
 import pytest
+from types import SimpleNamespace
 
 from cozmo.brain import (
     Brain,
@@ -24,6 +29,7 @@ from cozmo.brain import (
     ReflectionReport,
     Turn,
 )
+from cozmo.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
 from cozmo.brain.types import Scenario, ScenarioStatus
 
 
@@ -54,11 +60,26 @@ class StubStore:
     def __init__(self):
         self.appended = []
         self.fail = False
+        self.links = {}
+        self._records = {}
 
     def append(self, turn, conversation_id):
         if self.fail:
             raise RuntimeError("store down")
         self.appended.append((turn, conversation_id))
+
+    def get(self, conversation_id):
+        record = self._records.get(conversation_id)
+        if record is None:
+            record = SimpleNamespace(scenario_id=self.links.get(conversation_id))
+            self._records[conversation_id] = record
+        return record
+
+    def set_scenario_id(self, conversation_id, scenario_id):
+        self.links[conversation_id] = scenario_id
+        record = self._records.get(conversation_id)
+        if record is not None:
+            record.scenario_id = scenario_id
 
 
 class RecordingBus:
@@ -72,15 +93,66 @@ class RecordingBus:
         self.events.append((event_type, data))
 
 
+class StubExtractor:
+    def __init__(self, fail=False, claims=1):
+        self.fail = fail
+        self.claims = claims
+        self.extracted = 0
+
+    def extract(self, turns):
+        self.extracted += 1
+        if self.fail:
+            raise RuntimeError("extract down")
+        return ExtractionResult(
+            claims=tuple(
+                ExtractedClaim(f"User prefers python {i}", 0.9, ("preference",))
+                for i in range(self.claims)
+            ),
+            summary="The user prefers python.",
+            name="Python preferences",
+        )
+
+
+class StubKnowledgeLayer:
+    def __init__(self, fail=False):
+        self.stored = []
+        self.fail = fail
+
+    def store_extracted(self, conversation_id, scenario_id, result):
+        if self.fail:
+            raise RuntimeError("knowledge write down")
+        ids = [f"kn-{i}" for i in range(len(result.claims))]
+        self.stored.append((conversation_id, scenario_id, result))
+        return ids
+
+
+class StubScenarioLayer:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.calls = []
+        self.n = 0
+
+    def ensure_for_conversation(self, conversation, result):
+        if self.fail:
+            raise RuntimeError("scenario down")
+        existing = getattr(conversation, "scenario_id", None)
+        if existing:
+            self.calls.append("update")
+            return existing
+        self.n += 1
+        self.calls.append("create")
+        return f"scn-{self.n}"
+
+
 class StubProjectIndex:
     def __init__(self, root):
         self.root = root
 
 
-def test_observe_legacy_shim_writes_memory():
+def test_observe_does_not_write_legacy_memory():
     mem = StubMemory()
     Brain(memory=mem).observe(Turn(user="u", assistant="a"))
-    assert mem.interactions == [("u", "a")]
+    assert mem.interactions == []
 
 
 def test_observe_persists_and_emits():
@@ -96,7 +168,7 @@ def test_observe_persists_and_emits():
     assert turn.user == "u"
     assert turn.assistant == "a"
     assert cid.startswith("conv-")
-    assert mem.interactions == [("u", "a")]
+    assert mem.interactions == []
     assert len(bus.events) == 1
     kind, data = bus.events[0]
     assert kind == "conversation.observed"
@@ -105,13 +177,8 @@ def test_observe_persists_and_emits():
     assert data["assistant"] == "a"
 
 
-def test_observe_order_store_legacy_event():
+def test_observe_order_store_then_event():
     order = []
-
-    class OrderedMemory(StubMemory):
-        def add_interaction(self, user, assistant):
-            order.append("memory")
-            super().add_interaction(user, assistant)
 
     class OrderedStore(StubStore):
         def append(self, turn, conversation_id):
@@ -124,12 +191,12 @@ def test_observe_order_store_legacy_event():
             super().emit(event_type, **data)
 
     brain = Brain(
-        memory=OrderedMemory(),
+        memory=StubMemory(),
         conversation_store=OrderedStore(),
         event_bus=OrderedBus(),
     )
     brain.observe(Turn(user="u", assistant="a"))
-    assert order == ["store", "memory", "event"]
+    assert order == ["store", "event"]
 
 
 def test_observe_honors_turn_conversation_id():
@@ -152,7 +219,7 @@ def test_observe_without_store_or_bus():
     mem = StubMemory()
     brain = Brain(memory=mem)
     brain.observe(Turn(user="u", assistant="a"))
-    assert mem.interactions == [("u", "a")]
+    assert mem.interactions == []
 
 
 def test_observe_with_nothing_wired_is_noop():
@@ -167,7 +234,7 @@ def test_observe_store_failure_does_not_emit():
     bus = RecordingBus()
     brain = Brain(memory=mem, conversation_store=store, event_bus=bus)
     brain.observe(Turn(user="u", assistant="a"))
-    assert mem.interactions == [("u", "a")]
+    assert mem.interactions == []
     assert bus.events == []
 
 
@@ -177,6 +244,114 @@ def test_observe_event_failure_does_not_raise():
     brain = Brain(memory=StubMemory(), conversation_store=store, event_bus=bus)
     brain.observe(Turn(user="u", assistant="a"))
     assert len(store.appended) == 1
+
+
+def test_observe_extracts_after_batch():
+    store = StubStore()
+    bus = RecordingBus()
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=store,
+        event_bus=bus,
+        extractor=StubExtractor(),
+        knowledge_layer=StubKnowledgeLayer(),
+        scenario_layer=StubScenarioLayer(),
+    )
+    for i in range(5):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+
+    kinds = [k for k, _ in bus.events]
+    assert kinds.count("conversation.observed") == 5
+    assert "knowledge.extracted" in kinds
+    extracted = next(d for k, d in bus.events if k == "knowledge.extracted")
+    assert extracted["knowledge_ids"] == ["kn-0"]
+    assert extracted["conversation_id"].startswith("conv-")
+    assert extracted["scenario_id"] == "scn-1"
+    assert len(store.links) == 1
+
+
+def test_observe_does_not_extract_before_batch_fills():
+    bus = RecordingBus()
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=StubStore(),
+        event_bus=bus,
+        extractor=StubExtractor(),
+        knowledge_layer=StubKnowledgeLayer(),
+        scenario_layer=StubScenarioLayer(),
+    )
+    for i in range(4):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+    assert "knowledge.extracted" not in [k for k, _ in bus.events]
+
+
+def test_observe_extraction_failure_keeps_persist():
+    store = StubStore()
+    bus = RecordingBus()
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=store,
+        event_bus=bus,
+        extractor=StubExtractor(fail=True),
+        knowledge_layer=StubKnowledgeLayer(),
+        scenario_layer=StubScenarioLayer(),
+    )
+    for i in range(5):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+
+    kinds = [k for k, _ in bus.events]
+    assert kinds.count("conversation.observed") == 5
+    assert "knowledge.extracted" not in kinds
+    assert len(store.appended) == 5
+
+
+def test_observe_knowledge_write_failure_keeps_persist():
+    store = StubStore()
+    bus = RecordingBus()
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=store,
+        event_bus=bus,
+        extractor=StubExtractor(),
+        knowledge_layer=StubKnowledgeLayer(fail=True),
+        scenario_layer=StubScenarioLayer(),
+    )
+    for i in range(5):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+    kinds = [k for k, _ in bus.events]
+    assert kinds.count("conversation.observed") == 5
+    assert "knowledge.extracted" not in kinds
+
+
+def test_observe_extractor_absent_is_phase_b():
+    store = StubStore()
+    bus = RecordingBus()
+    brain = Brain(memory=StubMemory(), conversation_store=store, event_bus=bus)
+    for i in range(6):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+    assert [k for k, _ in bus.events] == ["conversation.observed"] * 6
+
+
+def test_observe_reuses_scenario_across_batches():
+    store = StubStore()
+    bus = RecordingBus()
+    scenario = StubScenarioLayer()
+    brain = Brain(
+        memory=StubMemory(),
+        conversation_store=store,
+        event_bus=bus,
+        extractor=StubExtractor(),
+        knowledge_layer=StubKnowledgeLayer(),
+        scenario_layer=scenario,
+    )
+    for i in range(10):
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+
+    assert scenario.calls == ["create", "update"]
+    extracted = [
+        d["scenario_id"] for k, d in bus.events if k == "knowledge.extracted"
+    ]
+    assert extracted == ["scn-1", "scn-1"]
 
 
 def test_recall_without_memory_raises():

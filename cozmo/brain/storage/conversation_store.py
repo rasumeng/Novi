@@ -90,6 +90,15 @@ class ConversationStore:
             )
             self._conn.commit()
 
+    def set_scenario_id(self, conversation_id: str, scenario_id: str) -> None:
+        """Link a conversation to its scenario (ownership column)."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE conversations SET scenario_id = ? WHERE id = ?",
+                (scenario_id, conversation_id),
+            )
+            self._conn.commit()
+
     def get(self, conversation_id: str) -> Optional[ConversationRecord]:
         with self._lock:
             row = self._conn.execute(

@@ -17,11 +17,13 @@ from ..types import (
     ConversationRecord,
     EdgeKind,
     IdentityEntry,
+    KnowledgeForm,
     KnowledgeItem,
     KnowledgeStatus,
     Project,
     Relationship,
     Scenario,
+    ScenarioStatus,
     Turn,
 )
 
@@ -29,13 +31,20 @@ from ..types import (
 class KnowledgeStore(Protocol):
     """Persistence for knowledge items."""
 
-    def put(self, item: KnowledgeItem) -> None: ...
+    def add(self, item: KnowledgeItem) -> str: ...
 
-    def get(self, item_id: str) -> Optional[KnowledgeItem]: ...
+    def add_many(self, items: list[KnowledgeItem]) -> list[str]: ...
 
-    def search(
-        self, query: str, k: int = 5, *, scenario_id: Optional[str] = None
-    ) -> tuple[KnowledgeItem, ...]: ...
+    def query(
+        self,
+        text: str,
+        k: int = 5,
+        distance_threshold: Optional[float] = 0.5,
+        tags: Optional[tuple[str, ...]] = None,
+        forms: Optional[tuple[KnowledgeForm, ...]] = None,
+    ) -> list[dict]: ...
+
+    def get(self, item_id: str) -> Optional[dict]: ...
 
     def delete(self, item_id: str) -> bool: ...
 
@@ -45,13 +54,17 @@ class KnowledgeStore(Protocol):
 class ScenarioStore(Protocol):
     """Persistence for scenarios."""
 
-    def put(self, scenario: Scenario) -> None: ...
+    def create(self, scenario: Scenario) -> None: ...
 
     def get(self, scenario_id: str) -> Optional[Scenario]: ...
 
-    def list_active(self) -> tuple[Scenario, ...]: ...
+    def update(self, scenario: Scenario) -> None: ...
 
-    def list_by_project(self, project_id: str) -> tuple[Scenario, ...]: ...
+    def set_status(self, scenario_id: str, status: ScenarioStatus) -> None: ...
+
+    def list(self, limit: int = 100) -> tuple[Scenario, ...]: ...
+
+    def count(self) -> int: ...
 
 
 class ProjectStore(Protocol):
@@ -78,6 +91,8 @@ class ConversationStore(Protocol):
     """Persistence for raw turns and conversation records."""
 
     def append(self, turn: Turn, conversation_id: str) -> None: ...
+
+    def set_scenario_id(self, conversation_id: str, scenario_id: str) -> None: ...
 
     def get(self, conversation_id: str) -> Optional[ConversationRecord]: ...
 
