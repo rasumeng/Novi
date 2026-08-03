@@ -180,6 +180,7 @@ class RecallItem:
 class RecallResult:
     query: str
     items: tuple[RecallItem, ...] = ()
+    metrics: dict = field(default_factory=dict)
 
 
 @dataclass

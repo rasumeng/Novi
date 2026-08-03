@@ -69,3 +69,28 @@ class KnowledgeLayer:
         return self._store.query(
             text, k=k, distance_threshold=distance_threshold, tags=tags
         )
+
+    def query_scoped(
+        self,
+        text: str,
+        *,
+        scenario_id: str | None = None,
+        k: int = 5,
+        distance_threshold: float | None = 0.5,
+        forms: tuple | list | None = None,
+        tags: tuple[str, ...] | list[str] | None = None,
+    ) -> list[dict]:
+        """Layer-scoped query: score within the given scenario's neighborhood.
+
+        Without a scenario, skips the ownership predicate and searches the
+        whole knowledge graph (used by the resolver's expansion step).
+        """
+        return self._store.query(
+            text,
+            k=k,
+            distance_threshold=distance_threshold,
+            scenario_id=scenario_id,
+            source_kind=None,
+            forms=forms,
+            tags=tags,
+        )

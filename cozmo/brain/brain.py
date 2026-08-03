@@ -82,6 +82,7 @@ class Brain:
         knowledge_layer: Any = None,
         scenario_layer: Any = None,
         relationship_store: Any = None,
+        resolver: Any = None,
         extract_every: int = 5,
     ) -> None:
         self._memory = memory
@@ -92,6 +93,7 @@ class Brain:
         self._knowledge_layer = knowledge_layer
         self._scenario_layer = scenario_layer
         self._relationship_store = relationship_store
+        self._resolver = resolver
         self._extract_every = max(1, extract_every)
         self._pending_turns: dict[str, list[Turn]] = {}
 
@@ -117,11 +119,16 @@ class Brain:
     def recall(self, query: str, context: Optional[QueryContext] = None) -> RecallResult:
         """Retrieve knowledge relevant to a query.
 
-        Phase A serves memories via the existing manager; layered
-        project → scenario → knowledge → conversation retrieval arrives
-        with the resolver (Phase E).
+        Phase E: when the layered resolver is available, retrieval walks the
+        layers top-down — project → scenario → knowledge → conversation —
+        scoring knowledge inside the scenario neighborhood and expanding only
+        when the sufficiency gate fails. Without a resolver, behaves exactly
+        as Phase A (flat memory query).
         """
         ctx = context or QueryContext()
+        resolver = self._resolver or self._default_resolver()
+        if resolver is not None:
+            return resolver.recall(query, ctx)
         results = self._memory_manager().query(
             text=query,
             k=ctx.top_k,
@@ -138,6 +145,36 @@ class Brain:
             for item in results
         )
         return RecallResult(query=query, items=items)
+
+    def _default_resolver(self):
+        """Build the layered resolver from the injected layers, if present.
+
+        Pure wiring: composes the domain layers behind the resolver's read
+        callables. Returns None when the layers are absent, keeping recall
+        byte-identical to Phase A.
+        """
+        if self._knowledge_layer is None or self._scenario_layer is None:
+            return None
+        from .reasoning.resolver import LayeredRetrievalResolver
+
+        return LayeredRetrievalResolver(
+            load_scenario=self._scenario_layer.store.get,
+            query_knowledge=self._knowledge_layer.query_scoped,
+            query_memory=self._resolver_memory_query,
+        )
+
+    def _resolver_memory_query(
+        self, query: str, k: int, threshold: Optional[float]
+    ) -> list[dict]:
+        try:
+            return self._memory_manager().query(
+                text=query,
+                k=k,
+                distance_threshold=threshold,
+                memory_types=None,
+            )
+        except Exception:
+            return []
 
     def learn(self, statement: str, source: Optional[str] = None) -> None:
         """Explicitly acquire knowledge: user asks to remember, write_knowledge.
