@@ -199,6 +199,24 @@ class TestKnowledgeRetrievalSource:
         assert item.metadata["path"] == "guides/guide.md"
         assert item.metadata["title"] == "Guide"
 
+    def test_brain_backed_routes_through_brain_index(self):
+        from cozmo.brain import Brain
+
+        class _BrainIndex:
+            def __init__(self, rows):
+                self.rows = rows
+                self.calls = []
+            def search(self, query, k=5, rerank=True):
+                self.calls.append((query, k, rerank))
+                return self.rows
+        idx = _BrainIndex([_knowledge_result()])
+        brain = Brain(memory=MagicMock(), knowledge_index=idx)
+        source = KnowledgeRetrievalSource(brain)
+        result = source.retrieve("query", BUDGET)
+        assert idx.calls == [("query", BUDGET.max_results, True)]
+        assert result.source == "knowledge"
+        assert result.items[0].text == "knowledge chunk"
+
     def test_empty_results(self):
         source = KnowledgeRetrievalSource(_FakeKnowledgeIndex([]))
         result = source.retrieve("query", BUDGET)
@@ -279,6 +297,26 @@ class TestProjectRetrievalSource:
         assert store.calls == [("query", BUDGET.max_results)]
         assert result.source == "project"
         assert result.quality == RetrievalQuality.SUFFICIENT
+
+    def test_brain_backed_routes_through_brain_project(self):
+        from cozmo.brain import Brain
+
+        class _BrainProject:
+            def __init__(self, root, text):
+                self.root = root
+                self.text = text
+                self.calls = []
+            def query(self, text, k=5):
+                self.calls.append((text, k))
+                return self.text
+        idx = _BrainProject("/proj", "src/foo.py: def foo()")
+        brain = Brain(memory=MagicMock(), project_index=idx)
+        source = ProjectRetrievalSource(brain)
+        result = source.retrieve("query", BUDGET)
+        assert idx.calls == [("query", BUDGET.max_results)]
+        assert result.source == "project"
+        assert result.items[0].text == "src/foo.py: def foo()"
+        assert result.items[0].metadata == {"project_root": "/proj"}
 
     def test_item_translation_parity(self):
         store = _FakeProjectIndex("src/foo.py: def foo()")

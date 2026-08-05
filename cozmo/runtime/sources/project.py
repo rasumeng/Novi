@@ -20,11 +20,17 @@ from .base import RetrievedItem, RetrievalResult
 
 
 class ProjectRetrievalSource:
-    """Wraps ``ProjectIndex.query`` behind the ``RetrievalSource`` contract."""
+    """Wraps ``ProjectIndex.query`` behind the ``RetrievalSource`` contract.
+
+    Accepts either a ``ProjectIndex`` or a ``Brain`` (Architecture Rule #6):
+    when a Brain is wired it owns the project index, and the adapter asks the
+    Brain for context. Both produce the identical project string, so prompt
+    context remains byte-for-byte.
+    """
 
     id = "project"
 
-    def __init__(self, project_index: ProjectIndex):
+    def __init__(self, project_index: "ProjectIndex"):
         self._project = project_index
 
     def retrieve(
@@ -33,7 +39,7 @@ class ProjectRetrievalSource:
         budget: ContextAllocation,
     ) -> RetrievalResult:
         try:
-            text = self._project.query(text=query, k=budget.max_results)
+            text = self._query(query, budget.max_results)
         except Exception as e:
             return RetrievalResult(
                 source=self.id,
@@ -45,7 +51,7 @@ class ProjectRetrievalSource:
             return RetrievalResult(source=self.id, quality=RetrievalQuality.EMPTY)
 
         metadata: dict = {}
-        root = getattr(self._project, "root", None)
+        root = self._project_root()
         if root:
             metadata["project_root"] = str(root)
 
@@ -61,3 +67,18 @@ class ProjectRetrievalSource:
             ],
             quality=RetrievalQuality.SUFFICIENT,
         )
+
+    def _query(self, text: str, k: int) -> str:
+        """Delegate to the wrapped store or the Brain's internal project."""
+        from ...brain import Brain
+
+        if isinstance(self._project, Brain):
+            return self._project.retrieve_project(text, k=k)
+        return self._project.query(text=text, k=k)
+
+    def _project_root(self):
+        from ...brain import Brain
+
+        if isinstance(self._project, Brain):
+            return self._project.project_root
+        return getattr(self._project, "root", None)

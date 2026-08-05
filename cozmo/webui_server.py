@@ -1351,14 +1351,22 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     if action == "save":
                         text = msg.get("text", "")
                         mem_type = msg.get("memory_type", "fact")
-                        if mem and text:
-                            if mem_type == "preference":
-                                mem.store_preference(msg.get("key", "unknown"), text)
-                            elif mem_type == "fact":
-                                mem.store_fact(text, msg.get("tags"))
-                            else:
-                                if brain is not None:
-                                    brain.observe(Turn(user=msg.get("user", ""), assistant=text))
+                        if text:
+                            if brain is not None:
+                                try:
+                                    if mem_type == "preference":
+                                        brain.learn(text, source="preference")
+                                    elif mem_type == "fact":
+                                        brain.learn(text, source="fact")
+                                    else:
+                                        brain.observe(Turn(user=msg.get("user", ""), assistant=text))
+                                except Exception:
+                                    log.warning("brain.learn failed for agent_memory save", exc_info=True)
+                            elif mem:
+                                if mem_type == "preference":
+                                    mem.store_preference(msg.get("key", "unknown"), text)
+                                elif mem_type == "fact":
+                                    mem.store_fact(text, msg.get("tags"))
                                 else:
                                     mem.add_interaction(msg.get("user", ""), text)
                             await ws.send_text(json.dumps({"type": "agent_memory", "action": "saved"}))
@@ -1367,11 +1375,15 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     elif action == "recall":
                         query = msg.get("query", "")
                         k = msg.get("k", 5)
-                        if mem and query:
-                            src = MemoryRetrievalSource(mem)
-                            result = src.retrieve(query, ContextAllocation(max_results=k))
-                            results = _memory_items_to_dicts(result)
-                            await ws.send_text(json.dumps({"type": "agent_memory", "action": "results", "results": results}))
+                        if query:
+                            # Rule #6: reads go through the Brain when wired;
+                            # the memory source unwraps Brain.recall.
+                            backend = brain if brain is not None else mem
+                            if backend is not None:
+                                src = MemoryRetrievalSource(backend)
+                                result = src.retrieve(query, ContextAllocation(max_results=k))
+                                results = _memory_items_to_dicts(result)
+                                await ws.send_text(json.dumps({"type": "agent_memory", "action": "results", "results": results}))
                         else:
                             await ws.send_text(json.dumps({"type": "agent_memory", "action": "results", "results": []}))
                 elif mtype == "agent_tasks":

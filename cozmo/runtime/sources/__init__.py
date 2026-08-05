@@ -1,7 +1,9 @@
-"""Phase 9 unified retrieval layer.
+"""Unified retrieval layer.
 
 Public contracts live in ``base``; concrete source adapters wrap existing
-stores. No adapter is consumed by the runtime yet (migration step 4+).
+stores (Memory, Knowledge, Project, Web) and the layered tier adapters
+(Identity, Scenario). Memory/Knowledge/Project sources are Brain-aware:
+when a Brain is wired they delegate to it instead of the store.
 """
 
 from .base import MergedRetrievalResult, RetrievedItem, RetrievalResult, RetrievalSource

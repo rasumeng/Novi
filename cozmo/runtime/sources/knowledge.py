@@ -17,11 +17,17 @@ from .base import RetrievedItem, RetrievalResult
 
 
 class KnowledgeRetrievalSource:
-    """Wraps ``KnowledgeIndex.search`` behind the ``RetrievalSource`` contract."""
+    """Wraps ``KnowledgeIndex.search`` behind the ``RetrievalSource`` contract.
+
+    Accepts either a ``KnowledgeIndex`` or a ``Brain`` (Architecture Rule #6):
+    when a Brain is wired it owns the knowledge index, and the adapter asks the
+    Brain for context. Both return the identical row shape, so translation is
+    byte-for-byte.
+    """
 
     id = "knowledge"
 
-    def __init__(self, knowledge_index: KnowledgeIndex):
+    def __init__(self, knowledge_index: "KnowledgeIndex"):
         self._index = knowledge_index
 
     def retrieve(
@@ -30,11 +36,7 @@ class KnowledgeRetrievalSource:
         budget: ContextAllocation,
     ) -> RetrievalResult:
         try:
-            results = self._index.search(
-                query,
-                k=budget.max_results,
-                rerank=True,
-            )
+            results = self._search(query, budget.max_results)
         except Exception as e:
             return RetrievalResult(
                 source=self.id,
@@ -64,3 +66,11 @@ class KnowledgeRetrievalSource:
             items=items,
             quality=RetrievalQuality.SUFFICIENT,
         )
+
+    def _search(self, query: str, k: int) -> list:
+        """Delegate to the wrapped store or the Brain's internal index."""
+        from ...brain import Brain
+
+        if isinstance(self._index, Brain):
+            return self._index.retrieve_knowledge(query, k=k)
+        return self._index.search(query, k=k, rerank=True)

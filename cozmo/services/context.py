@@ -147,7 +147,6 @@ class CozmoContext:
         maintains scenarios. MemoryManager.query merges the knowledge store so
         retrieval sees the new layer.
         """
-        from ..brain import Brain
         from ..brain.layers.knowledge import KnowledgeLayer
         from ..brain.layers.scenarios import ScenarioLayer
         from ..brain.reasoning.extraction import KnowledgeExtractor, Summarizer
@@ -155,26 +154,31 @@ class CozmoContext:
         from ..brain.storage.relationship_store import RelationshipStore
         from ..brain.storage.scenario_store import ScenarioStore
         from ..brain.storage.vector_store import VectorStore
+        from ..memory.knowledge_index import get_knowledge_index
         from ..runtime.event_bus import EventBus
 
         if self._brain is None:
+            from ..brain import Brain, set_brain
+
             persist_dir = Path.home() / ".cozmo" / "brain"
             knowledge_store = VectorStore(
                 persist_dir=persist_dir, embed_model=self.embedding_service
             )
-            self.memory.knowledge_store = knowledge_store
             scenario_store = ScenarioStore(persist_dir=persist_dir)
             self._brain_event_bus = EventBus()
             self._brain = Brain(
                 memory=self.memory,
                 project_index=self.project_index,
+                knowledge_index=get_knowledge_index(),
                 conversation_store=ConversationStore(persist_dir=persist_dir),
                 event_bus=self._brain_event_bus,
                 extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.router_llm.invoke)),
                 knowledge_layer=KnowledgeLayer(knowledge_store),
                 scenario_layer=ScenarioLayer(scenario_store),
                 relationship_store=RelationshipStore(persist_dir=persist_dir),
+                tiered_resolver=True,
             )
+            set_brain(self._brain)
         return self._brain
 
     @property
@@ -213,7 +217,7 @@ class CozmoContext:
 
         if not self._knowledge_inited:
             init_knowledge_index(
-                knowledge_dir=self.config.get("knowledge_dir", "./knowledge"),
+                knowledge_dir=self.config.get("workspace", {}).get("knowledge", "~/.cozmo/knowledge"),
                 persist_dir=str(Path.home() / ".cozmo" / "knowledge_index"),
                 reranker=self.reranker_service,
             )

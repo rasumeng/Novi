@@ -145,6 +145,20 @@ class TestMemoryContextIntegration:
         _, _, threshold, _ = memory.query_calls[0]
         assert threshold == 0.7
 
+    def test_brain_routes_memory_source_through_brain(self):
+        from cozmo.brain import Brain
+
+        memory = _FakeMemory([
+            {"text": "via brain", "distance": 0.1,
+             "metadata": {"type": "fact", "frequency": 1, "timestamp": ""}}
+        ])
+        brain = Brain(memory=memory)
+        rt = CozmoRuntime(model_service=MagicMock(), memory=memory, brain=brain)
+        ctx = _ctx("q", intent="conversation", needs_memory=True)
+        list(rt.retrieval_executor.execute(ctx, "q"))
+        assert memory.query_calls and memory.query_calls[0][0] == "q"
+        assert "via brain" in ctx.memory_context
+
 
 class TestProjectContextIntegration:
     def _runtime(self, project):

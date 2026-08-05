@@ -1,18 +1,15 @@
 """
-MemoryManager — persistent memory with OKF classification and importance scoring.
-
-Replaces ChromaDB with LanceDB + Sentence Transformers.
+MemoryManager — persistent long-term memory with OKF classification and importance scoring.
 
 Architecture:
-  Conversation → LLM Summary → OKF Classifier → SentenceTransformer → LanceDB
-                                                                         │
-                                   ┌─────────────────────────────────────┤
-                                   ▼          ▼          ▼              ▼
-                               Semantic   Metadata   Hybrid       Structured
-                               Vector     Filter     Keyword      Queries
-                                   │          │          │              │
-                                   ▼          ▼          ▼              ▼
-                               Ranking (importance × recency × frequency)
+  Conversation → OKF Classifier → SentenceTransformer → LanceDB
+                                                              │
+                                   ┌──────────────────────────┘
+                                   ▼
+                               Vector / Hybrid Search
+                                   │
+                                   ▼
+                              Ranking (importance × recency × frequency)
                                    │
                                    ▼
                             Context injection into prompt
@@ -29,10 +26,6 @@ from .lancedb_store import LanceStore
 
 log = logging.getLogger("cozmo.memory.manager")
 
-
-def _norm_text(text: str) -> str:
-    """Normalized dedup key for merged query results."""
-    return " ".join((text or "").strip().lower().split())
 
 _memory_manager: "MemoryManager | None" = None
 
@@ -69,11 +62,9 @@ MEMORY_TYPES = {
 class MemoryManager:
     """Persistent memory with hybrid search, OKF classification, and importance scoring.
 
-    Phase C: this becomes a compatibility shim. The conversation→memory write
-    pipeline (_summarize_and_store) is replaced by Brain extraction; query()
-    merges legacy flat rows with knowledge-layer items when a knowledge_store
-    is injected. Internals survive only for the brain=None runtime fallback
-    and are removed in Phase G.
+    The conversation→memory write pipeline is owned by Brain extraction; this
+    class retains only the flat persistent-memory read/write API used by the
+    no-brain runtime/WebUI fallbacks.
     """
 
     def __init__(
@@ -83,14 +74,12 @@ class MemoryManager:
         embed_model: str | EmbeddingService | None = None,
         max_turns: int = 5,
         max_short_term_pairs: int = 10,
-        knowledge_store=None,
     ):
         self.llm = llm
         self.short_term: list[dict] = []
         self.max_turns = max_turns
         self.max_short_term_pairs = max_short_term_pairs
         self.turn_count = 0
-        self.knowledge_store = knowledge_store
 
         if isinstance(embed_model, EmbeddingService):
             embed_service = embed_model
@@ -198,10 +187,7 @@ class MemoryManager:
         distance_threshold: Optional[float] = 0.5,
         memory_types: Optional[list[str]] = None,
     ) -> list[dict]:
-        """Query memory using importance-weighted hybrid search.
-
-        Phase C: when a knowledge_store is injected, merges legacy flat rows
-        with knowledge-layer items; otherwise byte-identical to legacy.
+        """Query the flat memory store using importance-weighted hybrid search.
 
         Args:
             text: Query text
@@ -209,17 +195,6 @@ class MemoryManager:
             distance_threshold: Max cosine distance (lower = stricter)
             memory_types: Filter by type(s), e.g. ["preference", "fact"]
         """
-        if self.knowledge_store is not None:
-            return self._query_merged(text, k, distance_threshold, memory_types)
-        return self._query_legacy(text, k, distance_threshold, memory_types)
-
-    def _query_legacy(
-        self,
-        text: str,
-        k: int,
-        distance_threshold: Optional[float],
-        memory_types: Optional[list[str]],
-    ) -> list[dict]:
         if memory_types:
             results = self.store.hybrid_search(text, k=k * 2, distance_threshold=distance_threshold)
             results = [r for r in results if r.get("metadata", {}).get("type") in memory_types]
@@ -230,54 +205,6 @@ class MemoryManager:
             if "id" in item:
                 self.store.increment_frequency(item["id"])
         return results[:k]
-
-    def _query_merged(
-        self,
-        text: str,
-        k: int,
-        distance_threshold: Optional[float],
-        memory_types: Optional[list[str]],
-    ) -> list[dict]:
-        """Phase C shim: legacy flat rows + knowledge-layer items, deduped.
-
-        Knowledge rows carry tags (preference/fact/learning/project/conversation
-        ...). When memory_types is set, items match when their tags overlap the
-        requested types; scenario-summary composite items are tagged
-        "conversation" so legacy type-filtered retrieval still finds them.
-        """
-        legacy = self._query_legacy(
-            text, k=k * 2, distance_threshold=distance_threshold, memory_types=memory_types
-        )
-        knowledge = self.knowledge_store.query(
-            text, k=k * 2, distance_threshold=distance_threshold
-        ) or []
-
-        wanted = set(memory_types or ())
-        normalized = {}
-        for item in knowledge:
-            if wanted:
-                tags = set(item.get("metadata", {}).get("tags", ()))
-                if not (wanted & tags):
-                    continue
-            key = _norm_text(item.get("text", ""))
-            score = item.get("score")
-            if score is None:
-                score = 1.0 - item.get("distance", 1.0)
-            normalized[key] = item | {"score": score}
-
-        for item in legacy:
-            key = _norm_text(item.get("text", ""))
-            score = item.get("score")
-            if score is None:
-                score = 1.0 - item.get("distance", 1.0)
-            existing = normalized.get(key)
-            if existing is None or score > existing.get("score", -1.0):
-                normalized[key] = item | {"score": score}
-            if "id" in item:
-                self.store.increment_frequency(item["id"])
-
-        ranked = sorted(normalized.values(), key=lambda r: r.get("score", 0.0), reverse=True)
-        return ranked[:k]
 
     def consolidate(self) -> int:
         """Find and merge similar/duplicate memories. Returns count of merges."""

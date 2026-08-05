@@ -223,6 +223,18 @@ def write_knowledge(path: str, content: str, type: str = "Reference", title: str
         ki = get_knowledge_index()
         if ki is not None:
             ki.index_file(target)
+
+        # Architecture Rule #6: knowledge writes go through the Brain. The
+        # file knowledge base + index remain for backward compatibility with
+        # read_knowledge/search_knowledge; the Brain is additionally the
+        # canonical writer so the claim is immediately discoverable via recall.
+        from ..brain.brain import get_brain
+        brain = get_brain()
+        if brain is not None:
+            try:
+                brain.learn(content, source="knowledge")
+            except Exception:
+                pass
         return f"[ok] Written to knowledge/{path}"
     except Exception as e:
         return f"[error] {e}"

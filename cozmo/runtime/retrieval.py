@@ -110,6 +110,7 @@ class RetrievalExecutor:
         event_bus=None,
         debug_trace: bool = False,
         memory=None,
+        brain=None,
         project_index=None,
         max_memory_results: int = 3,
         memory_distance_threshold: float = 0.5,
@@ -120,6 +121,7 @@ class RetrievalExecutor:
         self.event_bus = event_bus
         self.debug_trace = debug_trace
         self._memory = memory
+        self._brain = brain
         self._project_index = project_index
         self.max_memory_results = max_memory_results
         self.memory_distance_threshold = memory_distance_threshold
@@ -132,8 +134,14 @@ class RetrievalExecutor:
         self._knowledge_source = knowledge_source
 
     def set_project_index(self, project_index):
-        """Update the project index (runtime set_config may swap it later)."""
+        """Update the project index (runtime set_config may swap it later).
+
+        When a Brain is wired it owns project retrieval, so the swapped index
+        is propagated there too (Architecture Rule #6).
+        """
         self._project_index = project_index
+        if self._brain is not None and hasattr(self._brain, "set_project_index"):
+            self._brain.set_project_index(project_index)
 
     # ── recovery ownership (moved from runtime, Phase 9 step 7) ──────────
 
@@ -465,7 +473,7 @@ class RetrievalExecutor:
         Source participation is plan-driven (Phase 9 step 5): the executor
         queries memory only when the policy's plan lists it as a source.
         """
-        if self._memory is None:
+        if self._memory is None and self._brain is None:
             return
         plan = self._retrieval_plan(ctx)
         if plan is not None:
@@ -480,8 +488,14 @@ class RetrievalExecutor:
         if not should_query:
             return
 
+        # Architecture Rule #4: the runtime asks the Brain for context; the
+        # Brain decides how that context is assembled. When a Brain is wired,
+        # the memory source asks it for flat rows (temporary RecallResult→row
+        # compat adapter). Legacy MemoryManager remains the no-brain fallback
+        # (WebUI/tools keep using it directly).
+        store = self._brain if self._brain is not None else self._memory
         source = MemoryRetrievalSource(
-            self._memory,
+            store,
             memory_types=_MEMORY_TYPE_FILTERS.get(ctx.intent_str),
             distance_threshold=self.memory_distance_threshold,
         )
@@ -551,7 +565,7 @@ class RetrievalExecutor:
         plan-driven (Phase 9 step 5): project context is queried when the
         policy's plan lists the project source.
         """
-        if self._project_index is None:
+        if self._project_index is None and self._brain is None:
             return
         plan = self._retrieval_plan(ctx)
         if plan is not None:
@@ -560,7 +574,11 @@ class RetrievalExecutor:
             should_query = ctx.intent_str in ("coding", "work")
         if not should_query:
             return
-        source = ProjectRetrievalSource(self._project_index)
+        # Architecture Rule #6: the runtime asks the Brain for context. When a
+        # Brain is wired, the project source queries it (which owns the project
+        # index internally). Legacy ProjectIndex remains the no-brain fallback.
+        store = self._brain if self._brain is not None else self._project_index
+        source = ProjectRetrievalSource(store)
         result = source.retrieve(
             user_input,
             ContextAllocation(max_results=self.max_project_results),

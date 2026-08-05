@@ -236,11 +236,16 @@ class CozmoRuntime:
             event_bus=event_bus,
             debug_trace=debug_trace,
             memory=memory,
+            brain=brain,
             project_index=project_index,
             max_memory_results=self.max_memory_results,
             memory_distance_threshold=self.memory_distance_threshold,
             max_project_results=self.max_project_results,
-            knowledge_source=KnowledgeRetrievalSource(get_knowledge_index()),
+            knowledge_source=(
+                KnowledgeRetrievalSource(brain)
+                if brain is not None
+                else KnowledgeRetrievalSource(get_knowledge_index())
+            ),
         )
         self._capability_registry = CapabilityRegistry()
         register_builtin_capabilities(self._capability_registry)
