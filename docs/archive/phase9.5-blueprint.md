@@ -2,7 +2,9 @@
 
 **Status:** Planned (read-only architecture approved, not yet implemented).
 
-**Source spec:** `PLAN.md` §5.5 (lines 680-815) deferred items + `docs/phase9-blueprint.md` §8 (steps deferred). This phase completes the Phase 9 deferred step 8 and the spec components `SourceSelector` / `ResultMerger`.
+**ARCHIVED:** Superseded by Phase E/F of the Brain (retrieval layers, resolver). Historical record.
+
+**Source spec:** `PLAN.md` §5.5 (lines 680-815) deferred items + `docs/archive/phase9-blueprint.md` §8 (steps deferred). This phase completes the Phase 9 deferred step 8 and the spec components `SourceSelector` / `ResultMerger`.
 
 **Baseline:** Commit `1f84e9c` — Phase 9 complete. 546 tests passing.
 

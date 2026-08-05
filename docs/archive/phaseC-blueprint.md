@@ -2,11 +2,13 @@
 
 **Status:** Planned (design approved 2026-08-03, not yet implemented).
 
-**Source spec:** `docs/brain-architecture.md` §459–481 (Phase C) + Part 3 (layered model, reasoning tier, events).
+**ARCHIVED:** Phase C shipped (2026-08-03). Superseded implementation record — see `docs/architecture/brain-evolution.md` for the current architecture. Cross-references point to the pre-restructure layout.
+
+**Source spec:** `docs/architecture/brain-architecture.md` §459–481 (Phase C) + Part 3 (layered model, reasoning tier, events).
 
 **Baseline:** Commit `f5b0cfa` — Phase B complete (ConversationStore + write pipeline). 634 tests passing.
 
-**Relation to other work:** `docs/phase9.5-blueprint.md` + retrieval merge work are an unrelated, uncommitted stream and are NOT part of this phase.
+**Relation to other work:** `docs/archive/phase9.5-blueprint.md` + retrieval merge work are an unrelated, uncommitted stream and are NOT part of this phase.
 
 ---
 

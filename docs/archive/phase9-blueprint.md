@@ -1,5 +1,7 @@
 # Phase 9 — Unified Retrieval Policy: Implementation Blueprint
 
+**ARCHIVED:** Implemented (2026-08-01), then absorbed by the layered Brain (Phase E/F). Historical record — see `docs/architecture/brain-evolution.md`.
+
 **Status:** Implemented (steps 1-7 landed; step 8 deferred). Adapter ownership boundaries closed by the hardening pass — executor no longer touches `EvidenceCollector` or the knowledge-index global; WebUI memory endpoints route through `MemoryRetrievalSource`.
 **Source spec:** `PLAN.md` §5.5 (lines 680-815).
 **Baseline:** Commit `dc70353` — Phase 7-8 + Pre-Phase 9 complete. 403 tests, ~5.4s, zero network/backend deps.
@@ -190,7 +192,7 @@ Step 5 is where retrieval quality may shift → gate with Phase 8 eval before/af
 **New:**
 - `cozmo/runtime/sources/` — protocol, result, 5 adapters
 - `cozmo/runtime/retrieval_budget.py` — `ContextAllocation`
-- `docs/phase9-blueprint.md` — this file
+- `docs/archive/phase9-blueprint.md` — this file
 
 **Wrapped, not modified:** `cozmo/code_indexer.py`, `cozmo/memory/manager.py`, `cozmo/memory/knowledge_index.py`
 

@@ -453,7 +453,7 @@ Brain.reflect()   (nightly / on trigger)
 ## Part 4 — Phased Migration Plan
 
 Constraints per phase: **compiles, tests pass, behavior preserved, no large rewrites.**
-Style matches `docs/phase9-blueprint.md` / `docs/phase9.5-blueprint.md`. Each phase is a
+Style matches `docs/archive/phase9-blueprint.md` / `docs/archive/phase9.5-blueprint.md`. Each phase is a
 separate commit.
 
 ### Phase A — Knowledge model + cognition facade (no behavior change)

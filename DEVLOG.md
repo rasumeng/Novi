@@ -1,369 +1,213 @@
-# Cozmo Devlog — Architecture Evolution
+# Cozmo — Development Log (DEVLOG)
 
-## Grounding Architecture Refactor
-
-### Problem
-Original grounding was ad-hoc: `TaskProfile.needs_grounding` boolean, no source tracking, no structured reasoning. The orchestrator had no dedicated grounding decision layer.
-
-### Solution
-Introduced `GroundingDecision` — a structured dataclass that captures the complete grounding decision:
-
-```python
-@dataclass
-class GroundingDecision:
-    needs_grounding: bool
-    confidence: float
-    reason: str
-    source: str  # "keyword" | "heuristic" | "llm" | "none"
-```
-
-### Separation of Responsibilities
-
-| Component | Responsibility |
-|-----------|---------------|
-| `IntentDetector` | Classifies task category (conversation, research, coding, planning, vision) |
-| `EvidenceDetector` | Detects external information signals only (temporal, dynamic, comparative, project, memory) |
-| `GroundingReasoner` | LLM-based reasoner for ambiguous cases (medium confidence, conflicting signals) |
-| `Orchestrator` | Owns grounding decisions — four-tier: keyword → heuristic → LLM → none |
-
-### Changes
-- `TaskProfile.needs_grounding` removed
-- `GroundingDecision` moved into `TaskAnalysis` as `.grounding`
-- Grounding decisions are now structured with `source` (how decided), `confidence` (how sure), `reason` (why)
-- Orchestrator's `_resolve_grounding()` implements the four-tier decision pipeline
-- Evidence pipeline detects signals → feeds grounding → runtime executes retrieval
+> **Chronological development log.** Records *what happened, when, and why* as the
+> project evolved. This is **not** an architecture reference (see `docs/architecture/`)
+> and **not** a feature catalog (see `CHANGELOG.md`). It answers one question:
+> *"What happened on this project over time?"*
+>
+> Entries are timestamped oldest-first. Estimate-dates are marked `~`.
 
 ---
 
-## Trace Architecture Rewrite
+## 2026-06 — Foundations: from zero to a first agent
 
-### Problem
-Previous trace system leaked internal state directly to users. Raw confidence values, heuristic names, and routing details were exposed. The UI had to interpret internal concepts it shouldn't know about.
+### 2026-06-15 — Repo seeded
+Initial import of the Cozmo project (`1fa4ab1`).
 
-### Solution
-Three-layer trace architecture:
-
-```
-Internal State
-    ↓
-Trace Event Layer    (action + category + summary)
-    ↓
-Trace Formatter      (maps to user-readable labels + icons)
-    ↓
-User UI
-```
-
-### TraceAction Enum
-```python
-class TraceAction(str, Enum):
-    UNDERSTANDING = "understanding"   # Analyzing request
-    RETRIEVING    = "retrieving"      # Finding information
-    PLANNING      = "planning"        # Building execution plan
-    EXECUTING     = "executing"       # Using tools
-    RESPONDING    = "responding"      # Preparing answer
-```
-
-Each action maps to a user-visible label and icon via `TraceActionMetadata`.
-
-### Dual Trace Streams
-
-**TraceEvent** (user-facing):
-- `action` — one of 5 user-understandable actions
-- `category` — broad topic (reasoning, information_retrieval, knowledge, planning, tool_use)
-- `summary` — one-line explanation
-
-**DebugTraceEvent** (debug-only):
-- `category` — internal phase name
-- `data` — raw dict with implementation details
-
-Stored separately: `trace.user_events` vs `trace.debug_events`.
-
-### Design principles
-- Trace events intentionally avoid leaking: confidence values, signal types, heuristic names, internal routing logic
-- Debug traces only emitted when `debug_trace=True`
-- The UI never sees `GroundingDecision`, `EvidenceAnalysis`, or `TaskProfile` internals
-
-### ExecutionTrace
-Single structured object emitted at end of every `run_stream()`:
-- request_id, user_input, timing
-- intent + confidence
-- memory query results
-- grounding quality + source count
-- recovery attempts
-- model selected + reason
-- step-by-step tool calls
-- final response metadata
+### 2026-06-29 — Phases 1–3; DEVLOG established
+- First milestone milestone phases (goal/vision + CLI agent) marked done.
+- DEVLOG introduced (per the `f7ca6d7` commit "1. Fixed DEVLOG 2. completed phase 2 and 3").
+- Prepared the project for open-source release (`1c9a315`).
 
 ---
 
-## Retrieval Architecture
+## 2026-07-01 → 07-08 — A real agent, not a classifier
 
-### Problem
-Previously, retrieval was a single `_grounding_search()` call triggered by `needs_grounding` boolean. No separation between "should I retrieve?" and "where should I retrieve from?" No source selection, no fallback chains, no strategy awareness.
+### 2026-07-02 — CozmoTUI merged in
+Adopted the TUI/code shell from its standalone repo and merged it into the full
+project (`eadc08e`, `30a8c97`). Cozmo's Code path became usable.
 
-### Solution
-Three-layer retrieval pipeline:
+### 2026-07-03 — The turn to an agentic loop
+Replaced the original **one-shot classify → generate** pipeline with a real
+**agentic (ReAct) loop** (`9d346d6`). This is the fork in the road: Cozmo stopped
+being a markdown classifier and became an orchestrator that decides intent,
+retrieval need, and tool execution at runtime.
 
-```
-User Query
-    ↓
-Grounding Decision     (should we retrieve?)
-    ↓
-Retrieval Policy       (where should we retrieve?)
-    ↓
-Retrieval Coordinator  (execute retrieval with budget)
-    ↓
-Evidence Bundle        (structured search results)
-    ↓
-Runtime Reasoning      (LLM synthesizes answer)
-```
+During this era the analysis layer matured:
 
-### RetrievalPolicy
-Pure decision logic. No runtime dependencies, no keyword matching.
+- **Grounding Architecture Refactor** — `GroundingDecision` (needs_grounding,
+  confidence, reason, source) replaced a bare `TaskProfile.needs_grounding`
+  boolean. Orchestrator owns grounding via a four-tier pipeline:
+  keyword → heuristic → LLM → none. `IntentDetector` classifies; `EvidenceDetector`
+  detects external-info signals only; `GroundingReasoner` LLM-judges ambiguity.
+- **Trace Architecture Rewrite** — three-layer traces (internal state → `TraceEvent`
+  → `TraceFormatter`) so the UI never sees raw confidence/heuristic/routing
+  internals. Dual streams: user-facing `TraceEvent` + debug-only `DebugTraceEvent`.
+  `ExecutionTrace` emitted once per `run_stream()`.
+- **Retrieval Architecture** (first pass) — separated *whether* (grounding) from
+  *where* (retrieval policy): `RetrievalPolicy` (pure decision) + `RetrievalCoordinator`
+  (budget/dedup gate). Strategies `NONE/KNOWLEDGE_ONLY/WEB_ONLY/KNOWLEDGE_THEN_WEB`.
+- **Retrieval Optimization** — stop `search→search→search→fetch→timeout`; enforced
+  max 1 web search + 1 web fetch, duplicate detection, strategy-aware budgets.
+- **Recovery** — `RetrievalQuality` (SUFFICIENT/WEAK/EMPTY/FAILED) drove two-phase
+  recovery (pre-loop tool upgrade + mid-loop retry).
+- **Evidence / Search** — `EvidenceCollector` + `EvidenceBundle`; SearXNG fixes;
+  source ranking (text over video/image, relevance overlap).
 
-```python
-class RetrievalSource(str, Enum):
-    KNOWLEDGE = "knowledge"  # Local knowledge base
-    WEB = "web"              # Web search
-
-class RetrievalStrategy(str, Enum):
-    NONE              = "none"               # No retrieval needed
-    KNOWLEDGE_ONLY    = "knowledge_only"     # Local KB only
-    WEB_ONLY          = "web_only"           # Web search only
-    KNOWLEDGE_THEN_WEB = "knowledge_then_web" # KB first, escalate to web
-
-@dataclass
-class RetrievalPlan:
-    sources: list[RetrievalSource]
-    strategy: RetrievalStrategy
-    reason: str
-```
-
-The policy uses existing structured signals only:
-- `GroundingDecision.needs_grounding`
-- Evidence signal types and strengths (temporal, dynamic, comparative)
-- Intent type
-
-### RetrievalCoordinator
-Execution control layer. Intercepts `web_search`/`web_fetch` tool calls during the ReAct loop to enforce rules:
-
-- **Budget tracking**: max 1 web search + 1 web fetch per execution
-- **Duplicate prevention**: exact match + semantic term overlap (>= 50% overlap with >= 2 common terms)
-- **Cache seeding**: pre-populated with pre-loop retrieval results
-- **Strategy-aware limits**: KNOWLEDGE_ONLY gets 0 search/fetch budget
-- **Phase guidance**: temporary system message when retrieval is active
-
-No global tool removal — the coordinator returns guidance messages when budget is exhausted or duplicates are detected.
-
-### Pre-loop Retrieval Execution
-`_execute_retrieval_plan()` in runtime:
-- WEB_ONLY: runs `_grounding_search()` (web via EvidenceCollector)
-- KNOWLEDGE_ONLY: runs `_retrieve_knowledge()` (local KB)
-- KNOWLEDGE_THEN_WEB: KB first, escalates to web if empty
-- NONE: traces "no retrieval needed"
-
-### Files
-- `cozmo/runtime/retrieval_policy.py` — RetrievalSource, RetrievalStrategy, RetrievalPlan, RetrievalPolicy
-- `cozmo/runtime/retrieval_coordinator.py` — RetrievalBudget, RetrievalCoordinator
+### 2026-07-08 — CozmoBrain integrated
+First integration of the standalone CozmoBrain component into the main repo
+(`be1a5c0`). This is the seed of the "Brain" reasoning component that later
+becomes `cozmo/brain/`.
 
 ---
 
-## Knowledge Assessment / Runtime Recovery
+## 2026-07-09 → 07-12 — WebUI maturation
 
-### Problem
-Previously, the system had no feedback on whether retrieved evidence was sufficient. The model decided whether it "knew enough" — leading to confident but wrong answers when retrieval failed silently.
+### 2026-07-09 — WebUI functional
+Cozmo WebUI works ("Cozmo WebUI works well"); settings, tabs, and mic wiring landed
+(`91dc333`, `340afd9`).
 
-### Solution
-Introduced `RetrievalQuality` — structured quality assessment for every retrieval attempt:
+### 2026-07-10 — Phase 1–3 feature set
+File attachments, vision routing, and projects (collab/project management).
+Cleanup and "entering the final phases" (`4f70624`, `99d9fa1`, `0476d70`).
 
-```python
-class RetrievalQuality(enum.Enum):
-    SUFFICIENT = "sufficient"  # Good results, model can answer
-    WEAK       = "weak"       # Partial results, low relevance
-    EMPTY      = "empty"      # No results found
-    FAILED     = "failed"     # Search API error
-```
-
-### Recovery System
-Two-phase recovery when retrieval quality is insufficient:
-
-**Phase 2 (pre-loop)**: Before the ReAct loop, if retrieval quality is not SUFFICIENT, upgrade capabilities to include web search tools. This ensures the model has the right tools before it starts reasoning.
-
-**Phase 3 (mid-loop)**: During the ReAct loop, if:
-1. Retrieval was attempted (quality recorded)
-2. Quality is not SUFFICIENT
-3. Model chose to answer without calling any tool
-4. Below recovery attempt limit (max 1)
-
-Then: add web search tools, rebind the runnable, inject a system message telling the model web search is available, continue the loop.
-
-### Escalation Paths
-- **KB empty, pre-loop**: KNOWLEDGE_THEN_WEB auto-escalates to web search before the ReAct loop starts
-- **KB empty, in-loop**: Post-tool recovery detects `search_knowledge` returning empty → adds web tools, injects system message
-- **Model answers without tools**: Phase 3 recovery upgrades capabilities and retries
-
-### Quality Tracing
-`RetrievalQuality` tracked on both `ExecutionContext` (runtime state) and `ExecutionTrace` (observability):
-- `grounding_quality` — the quality grade
-- `grounding_source_count` — number of sources returned
-- `grounding_relevance_score` — term relevance evaluation
-- `recovery_attempts` — count of recovery activations
-- `recovery_action` — what recovery did
+### 2026-07-12 — Code mode redesign + collab projects (Phase 7–8)
+Code-mode UI redesign; collaborative project management (`9e3c555`, `b0eb515`).
 
 ---
 
-## Evidence / Search Improvements
+## 2026-07-13 ⇒ 07-21 — Refactor call, then stability
 
-### EvidenceCollector
-Structured evidence acquisition pipeline replacing flat-string grounding:
+### 2026-07-13 ⇒ 07-14 — Separate Brain development; plan churn
+Era of plan updates and a pivot: CozmoBrain pursued separately to wire up the
+"fully functional Agent component" (`6781be2`, `4ea7ca3`). PLAN churned (`cebe14e`,
+`ae2b8a3`, `6bd65e8`, `5dd49a3`).
 
-```
-query → search → rank/filter → fetch → merge → EvidenceBundle
-                                     ↓
-                                sufficient? → yes → return
-                                     ↓ no
-                                reformulate → retry
-```
-
-### EvidenceBundle
-```python
-@dataclass
-class EvidenceBundle:
-    query: str
-    results: list
-    merged_text: str
-    source_count: int
-    error: str | None
-    quality: RetrievalQuality | None
-```
-
-### SearXNG Fixes
-- Time range mapping: `d/w/m/y` → `day/week/month/year` (native SearXNG params)
-- Search failure propagation: errors surface correctly through the pipeline
-- Relevance evaluation: results filtered by term overlap ratio
-- Reformulation: low-relevance results trigger query reformulation and retry
-
-### Source Ranking
-- Text results prioritized over video/image
-- Relevance scoring via key term overlap
-- Content fetching for top results
-- Merged into single evidence string for model consumption
-
-### File
-- `cozmo/runtime/evidence.py` — EvidenceBundle, EvidenceCollector, RetrievalQuality
-- `cozmo/tools/search_pipeline.py` — SearchConfig, SearchResult, search/fetch/rerank
+### 2026-07-21 — Stable; the refactor decision
+- Reached a stable state; changelog documented v0.2.0 (UI/settings) and v0.3.0
+  (agent events) (`ab57945`).
+- Acknowledge "time to refactor" (`1a94bb6`) — the prelude to the Phase 6.5 runtime
+  stabilization that follows.
 
 ---
 
-## Retrieval Optimization
+## 2026-07-24 — Dead-code purge
 
-### Goal
-Prevent wasteful search patterns:
-```
-search → search → search → fetch → timeout (17+ steps)
-```
-
-Promote efficient retrieval:
-```
-retrieve → understand → answer (5-8 steps)
-```
-
-### Implementation
-`RetrievalCoordinator` enforces:
-- **Max 1 web search** per execution (blocks duplicates and budget-exceeded calls)
-- **Max 1 web fetch** per execution
-- **Duplicate detection** via exact match + semantic term overlap
-- **Cache seeding** with pre-loop results so first in-loop web search is caught as duplicate
-- **Strategy-aware budgets**: KNOWLEDGE_ONLY gets 0 search/fetch; WEB_ONLY gets 1/1
-
-### Trace Metrics (debug-only)
-- `retrieval_search_count` — actual searches performed
-- `retrieval_fetch_count` — actual fetches performed
-- `retrieval_budget_exhausted` — whether budget was fully consumed
-
-Excluded from user-facing `to_dict()`.
+Removed unused archives: planners, reflection, session, workspace, policy,
+continuation, and stub tools (`2dc7e39`). Maintenance/doc sync + dead-code removal
++ version fix (`d36b982`). The **first** wave of the "kill the legacy, keep the
+lean" discipline that recurs through to Phase G.
 
 ---
 
-## Pre-Phase 9 — Memory & Knowledge Correctness Sprint
+## 2026-07-28 — Retrieval documented before it was unified
 
-### Context
-Phase 7 (Evidence Processing) and Phase 8 (Evaluation & Observability) are complete. The 2026-07-31 memory architectural audit found correctness defects in the existing foundations — duplicate knowledge indexing, broken WebUI memory endpoints, unregistered memory tools, dead reranking paths, and config values that did not control behavior. Unified retrieval (Phase 9) must not be built on unstable foundations.
-
-### Sprint Scope (reliability, not architecture)
-- **Knowledge index reliability**: deterministic chunk identifiers, idempotent re-indexing, stale-chunk removal, vector index support
-- **Memory system reliability**: config now actually controls behavior (`max_turns_before_summary`, `max_short_term_pairs`), active `MemoryManager` registered via `get/set_memory_manager` for tool access, `embed_model` stamped on stored records
-- **Embedding lifecycle**: `EmbeddingService.model_name` / `RerankerService.model_name` exposed; config values (memory, embedding, reranker) drive observed behavior
-- **Reranking**: `reranker` service wired into knowledge index initialization
-- **Memory tools**: `memory_ops` registered in the tool registry
-
-### Regression Coverage
-New `tests/test_memory_correctness.py` locks down: re-index idempotency, stale/legacy-row removal on file change, deterministic UUID replacement, and embedding-model change handling.
+Documented the retrieval architecture + agent pipeline improvements (`ffdc038`,
+`aa47b60`) — recording the pre-Phase-9 design before the unification that follows.
 
 ---
 
-## Test Suite Consolidation
+## 2026-07-30 — Phase 6.5: Runtime stabilization
 
-### Problem
-Suite was correct but slow and partly environment-dependent. ~73% of runtime was live-network/backend work, not assertions: 5 tests hit a real SearXNG server, and the `TestSession` fixture built the full production backend (11s one-time).
-
-### Changes
-- **Deterministic tests**: `test_search_pipeline.py` mocks `urllib.request.urlopen` (preserves the HTTP-400 contract); `test_evidence.py` mocks `_search_multi`; `test_v2_pipeline.py` `TestSession` mocks `build_runtime` (real EventBus + mocks); `test_execution_context.py` and `test_trace_boundary.py` stub the live search
-- **Dead/duplicate removal**: `test_next_character_grounding_true` (empty `pass` body), `test_memory_types_per_intent` and `test_research_python_history` (tautologies), duplicate run_stream backward-compat test
-- **Parameterization**: `TestGroundingDecision` 5 near-identical source tests → 1 parametrized; `TestEvidencePatterns` 9 near-identical detection tests → 2 parametrized; shared `orch_factory` fixture removed 6× orchestration boilerplate
-- **Bug found**: mocking the live search exposed an un-gated `DebugTraceEvent` append in `RetrievalExecutor.execute_search` (empty/failed branches leaked debug events when `debug_trace=False`). Fixed to gate on `self.debug_trace`, matching the pattern everywhere else.
-
-### Result
-- **403 tests, all passing** (was 408 — net -5 dead/duplicate; parametrize preserved all assertions)
-- **Suite: ~25s → ~5.4s** (~78% faster); only remaining slow test is the intentional 2s `test_timeout_guard`
-- No network dependency: suite runs without SearXNG or a live backend
+The runtime was the worst maintainability hotspot. Stabilized it:
+**1814 → ~1000 lines.** Extracted `ToolExecutor`, `RetrievalExecutor`,
+`RuntimeTracer`, and a `RuntimeInterface` protocol; architecture audit complete
+(`e7d6a84`). This de-god-objecting of `CozmoRuntime` is the runtime-side twin of
+the later Brain refactor.
 
 ---
 
-## Current Architecture State
+## 2026-07-31 — Phase 7–8 + Pre-Phase 9 correctness sprint
 
-```
-User Input
-    ↓
-Orchestrator
-├── IntentDetector          (classifies task type)
-├── EvidenceDetector        (detects info signals)
-├── ComplexityEstimator     (scores task complexity)
-├── Grounding Decision      (should we retrieve?)
-└── RetrievalPolicy         (where should we retrieve?)
-    ↓
-Runtime
-├── RetrievalCoordinator    (executes with budget/dedup)
-├── EvidenceCollector       (search → rank → fetch → merge)
-├── Recovery System         (Phase 2 pre-loop + Phase 3 mid-loop)
-├── Trace System            (user events + debug traces)
-└── Agent Execution Loop    (ReAct with tool calling)
-    ↓
-Response
-```
+Phase 7 (evidence processing) + Phase 8 (evaluation/observability) complete. The
+2026-07-31 memory architectural audit found correctness defects in the existing
+foundations: duplicate knowledge indexing, broken WebUI memory endpoints,
+unregistered memory tools, dead reranking/consolidation paths, and config values
+that did not control behavior. Unified retrieval (Phase 9) had to rest on stable
+ground, so a **reliability (not architecture) sprint** landed:
 
-### Test Suite
-- 403 total tests
-- All passing in ~5.4s (no network/backend dependencies)
-- Test files: `test_trace_boundary.py`, `test_evidence.py`, `test_grounding.py`, `test_retrieval_coordinator.py`, `test_search_pipeline.py`, `test_execution_context.py`, `test_regression.py`, `test_evidence_processing.py`, `test_evidence_ab.py`, `test_evaluation.py`, `test_memory_correctness.py`
+- Knowledge index reliability: deterministic chunk ids, idempotent re-index,
+  stale-chunk removal, vector-index support.
+- Memory correctness: config now actually drives behavior, active `MemoryManager`
+  registered for tool access, `embed_model` stamped on records.
+- Embedding/reranker lifecycle exposed; reranker wired into the index.
+- Memory tools registered; regression suite added.
 
-### Key Files
+### Test Suite Consolidation (same period)
+Killed the network/backend dependency: mocks replaced live SearXNG and the full
+backend fixture. Results: **403 tests, all passing, ~25s → ~5.4s**, no network.
+Also exposed an un-gated debug-trace append bug in `RetrievalExecutor`.
 
-```
-cozmo/
-├── runtime/
-│   ├── retrieval_policy.py      # RetrievalSource, RetrievalStrategy, RetrievalPolicy
-│   ├── retrieval_coordinator.py # RetrievalBudget, RetrievalCoordinator
-│   ├── evidence.py              # EvidenceBundle, EvidenceCollector, RetrievalQuality
-│   ├── trace.py                 # ExecutionTrace, TraceEvent, DebugTraceEvent
-│   ├── execution_context.py     # ExecutionContext — unified run state
-│   ├── runtime.py               # CozmoRuntime — unified execution loop
-├── orchestrator/
-│   ├── evidence.py              # EvidenceDetector, EvidenceSignal
-│   ├── task_types.py            # TaskAnalysis, GroundingDecision, EvidenceAnalysis
-│   ├── orchestrator.py          # Orchestrator — analysis pipeline
-│   ├── intent.py                # IntentDetector, classify_intent
-```
+---
 
-### Current Focus
-**Pre-Phase 9 Memory & Knowledge Correctness Sprint** — in progress. Phase 9 (Unified Retrieval Policy) is next.
+## 2026-08-01 — Phase 9: Unified retrieval policy
+
+Retrieval unified under **adapters** (each source owns its store access) with
+recovery owned by the executor, `SourceSelector` + `ResultMerger` (`1f84e9c`).
+This is the last commit of the *pre-Brain* retrieval architecture — and it becomes
+the baseline the Brain supersedes.
+
+---
+
+## 2026-08-02 — The Brain redesign blueprint
+
+`docs/brain-architecture.md` (`df3b1fa`): the framework reframing from
+**storage-centric** to **knowledge-centric**, the Reasoning tier, the form-axis
+knowledge model, bounded relationships, first-class scenarios, and a cognition API.
+Baseline stated: commit `1f84e9c`, 594 tests.
+
+---
+
+## 2026-08-03 — Brain Phases A–F land (the Brain V1 series)
+
+Ten commits build the Brain from scaffolding to layered retrieval to identity:
+
+| Commit | What it delivered |
+|---|---|
+| `b754a07` | Intro: `Brain` facade + `types.py` + `storage/base.py` protocols |
+| `f5b0cfa` | Route conversation writes through `Brain.observe` → ConversationStore |
+| `d833125` | Blueprint: Phase C extraction + scenario layer |
+| `569b616` | Replace the memory write pipeline with extraction (Phase C) |
+| `03af721` | Typed knowledge columns + provenance `derived_from`/`observed_in` edges (Phase D) |
+| `b9111a0` | Layered retrieval via the resolver (Phase E) |
+| `8269a33` | Pluggable `SourceSelector` + unified `ResultMerger` (Phase E) |
+| `8a10811` | Layered scenario/identity retrieval tiers (Phase E) |
+| `8b5dbd5` | Identity promotion + unified knowledge writer (Phase F) |
+
+Suites tracked: 594 → 634 (B) → ~740 (F). This is where the flat `MemoryManager`
+becomes a `brain=None` fallback rather than the live path.
+
+---
+
+## 2026-08-05 — Brain V1 finalization: Phase F tail + hardening + audits
+
+The working-tree tail of Phase F (consolidation, reflection, projection, tiering,
+trust surface) plus the audits and the wiring closure:
+
+- **Phase F tail landed and tested** — `reasoning/{reflection,tiering}.py`,
+  `projection.py`, `tools/memory_inspection.py`, `KnowledgeItem.last_seen_at`
+  and `importance`, `knowledge.promoted` events, and the trust surface
+  (`inspect_memory` / `correct_memory`, append-only).
+- **Audits** — `AUDIT-Brain-V1.md` (architecture/cognitive) and `HARDENING-Brain-V1.md`
+  (read/write path wiring) taken. Both flagged **three HIGH wiring gaps**:
+  1. tiered retrieval off by default;
+  2. the layered resolver not on the runtime read path (flat compat adapter was
+     load-bearing);
+  3. `Brain.learn` / unified writer disconnected (`write_knowledge` + `LessonStore`
+     bypassing the Brain).
+- **Hardening closed all three** — `tiered_resolver=True` default + wiring;
+  `MemoryRetrievalSource` now consumes `Brain.recall` → layered resolver;
+  `write_knowledge` → `brain.learn`; `search_memory` → `get_brain()`. These were
+  *wiring closures*, not re-architecture: point existing abstractions at their
+  intended callers.
+
+**Result:** **805/805 tests passing** (~8.7s, no network). The layered, tiered,
+unified-writer Brain is the actual production path. Brain V1 is declared feature
+complete, and focus shifts to the rest of the assistant.
+
+---
+
+## After Brain V1 — what's next
+
+See `docs/ROADMAP-phaseG.md` — legacy removal, cleanup, technical debt, migration
+completion. No new Brain features.
