@@ -43,3 +43,7 @@ node_modules/
 
 # Large files
 cozmo.zip
+
+# Tauri desktop
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

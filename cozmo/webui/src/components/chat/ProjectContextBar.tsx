@@ -27,10 +27,6 @@ export function ProjectContextBar({ project, branch, modifiedFiles }: Props) {
           {modifiedFiles} modified file{modifiedFiles !== 1 ? 's' : ''}
         </span>
       )}
-      <div className="ml-auto flex items-center gap-1.5 text-base-500">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400/70" />
-        Workspace active
-      </div>
     </div>
   )
 }

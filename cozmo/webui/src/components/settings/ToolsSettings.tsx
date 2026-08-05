@@ -12,7 +12,7 @@ export function ToolsSettings({ tools, config, updateToolPermission }: Props) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-base-500 mb-3">Set permission mode per tool. Denied tools won't be available to the agent.</p>
+      <p className="text-xs text-base-500 mb-3">Control what Cozmo can do on its own. "Ask" means Cozmo checks with you first each time; "Deny" turns a tool off entirely.</p>
       {tools.map((t) => {
         const raw = permissions[t.id]
         const mode = typeof raw === 'string' ? raw : 'ask'

@@ -3,7 +3,10 @@
 Eliminates the 3-way duplication of SentenceTransformer construction
 across memory/manager.py, memory/knowledge_index.py, and code_indexer.py.
 
-Model config read from [embedding] and [reranker] config sections.
+Model config read from [embedding] and [reranker] config sections. Both
+services are thin facades over the provider registry in
+``embedding_providers`` — backend selection happens once, by config, and
+the rest of the system never sees a provider.
 """
 
 from __future__ import annotations
@@ -11,11 +14,18 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from .embedding_providers import (
+    EMBEDDING_PROVIDERS,
+    RERANKER_PROVIDERS,
+    EmbeddingProvider,
+    RerankerProvider,
+)
+
 log = logging.getLogger("cozmo.services.embedding")
 
 
 class EmbeddingService:
-    """Shared embedding model.  Loaded once, reused everywhere.
+    """Shared embedding facade.  Backend chosen by ``embedding.backend``.
 
     Usage:
         embedder = EmbeddingService(config)
@@ -25,64 +35,74 @@ class EmbeddingService:
 
     def __init__(self, config: dict | None = None):
         self._config = config or {}
-        self._model = None
+        self._provider: Optional[EmbeddingProvider] = None
+
+    @property
+    def provider(self) -> EmbeddingProvider:
+        if self._provider is None:
+            backend = self._config.get("embedding", {}).get(
+                "backend", "ollama"
+            )
+            try:
+                provider_cls = EMBEDDING_PROVIDERS[backend]
+            except KeyError:
+                raise ValueError(
+                    f"unknown embedding backend '{backend}'; "
+                    f"choose from {sorted(EMBEDDING_PROVIDERS)}"
+                )
+            log.info("embedding backend: %s", backend)
+            self._provider = provider_cls(self._config)
+        return self._provider
 
     @property
     def model_name(self) -> str:
-        return self._config.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
-
-    @property
-    def model(self):
-        if self._model is None:
-            model_name = self.model_name
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(model_name)
-        return self._model
+        return self.provider.model_name
 
     def encode(self, text: str, normalize: bool = True) -> list[float]:
-        return self.model.encode(text, normalize_embeddings=normalize).tolist()
+        return self.provider.encode(text, normalize=normalize)
 
     @property
     def dimension(self) -> int:
-        return self.model.get_sentence_embedding_dimension() or 384
+        return self.provider.dimension
 
     def clear(self):
-        self._model = None
+        self._provider = None
 
 
 class RerankerService:
-    """Shared cross-encoder reranker.  Loaded once, reused everywhere."""
+    """Shared reranking facade.  Backend chosen by ``reranker.backend``.
+
+    ``backend = "none"`` disables reranking without needing the HuggingFace
+    cross-encoder.
+    """
 
     def __init__(self, config: dict | None = None):
         self._config = config or {}
-        self._model = None
+        self._provider: Optional[RerankerProvider] = None
+
+    @property
+    def provider(self) -> RerankerProvider:
+        if self._provider is None:
+            backend = self._config.get("reranker", {}).get(
+                "backend", "sentence_transformers"
+            )
+            try:
+                provider_cls = RERANKER_PROVIDERS[backend]
+            except KeyError:
+                raise ValueError(
+                    f"unknown reranker backend '{backend}'; "
+                    f"choose from {sorted(RERANKER_PROVIDERS)}"
+                )
+            log.info("reranker backend: %s", backend)
+            self._provider = provider_cls(self._config)
+        return self._provider
 
     @property
     def model_name(self) -> str:
-        return self._config.get("reranker", {}).get("model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
-
-    @property
-    def model(self):
-        if self._model is None:
-            model_name = self.model_name
-            from sentence_transformers import CrossEncoder
-            log.info("Loading reranker model: %s", model_name)
-            self._model = CrossEncoder(model_name)
-        return self._model
+        return self.provider.model_name
 
     def rerank(self, query: str, results: list[dict], k: int = 5) -> list[dict]:
-        if not results:
-            return results
-        try:
-            pairs = [(query, r.get("text", "")) for r in results]
-            scores = self.model.predict(pairs)
-            for i, s in enumerate(scores):
-                results[i]["score"] = round(float(s), 4)
-            results.sort(key=lambda x: x.get("score", 0), reverse=True)
-            return results[:k]
-        except Exception as e:
-            log.warning("reranker failed: %s", e)
-            return results[:k]
+        return self.provider.rerank(query, results, k=k)
 
     def clear(self):
-        self._model = None
+        self._provider = None

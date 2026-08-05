@@ -12,6 +12,7 @@ import { ProjectContextBar } from './ProjectContextBar'
 import { NotificationBell } from './NotificationBell'
 import { PromptInput } from './PromptInput'
 import { LandingPage } from './LandingPage'
+import { CONNECTION_LABEL } from './connectionStatus'
 
 interface PermissionRequest {
   tool: string
@@ -22,6 +23,7 @@ interface Props {
   conversation: ConversationType
   connection: ConnectionState
   generating: boolean
+  busyReason?: string | null
   inlineSteps: InlineStep[]
   plan: PlanData | null
   permission: PermissionRequest | null
@@ -37,16 +39,11 @@ interface Props {
   onOpenSettings?: (section: SectionId) => void
 }
 
-const CONNECTION_LABEL: Record<ConnectionState, { text: string; dot: string }> = {
-  connecting: { text: 'Connecting…', dot: 'bg-amber-400' },
-  open: { text: 'Connected', dot: 'bg-emerald-400' },
-  closed: { text: 'Disconnected — retrying', dot: 'bg-red-400' },
-}
-
 export function Conversation({
   conversation,
   connection,
   generating,
+  busyReason,
   inlineSteps,
   plan,
   permission,
@@ -105,7 +102,7 @@ export function Conversation({
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
           {conversation.messages.length === 0 ? (
-            <LandingPage onSuggestion={setSuggestionText} />
+            <LandingPage onSuggestion={setSuggestionText} connection={connection} />
           ) : (
             conversation.messages.map((m, i, arr) => (
               <div key={m.id}>
@@ -149,9 +146,12 @@ export function Conversation({
 
       <div className="border-t border-base-800 bg-base-950/80 backdrop-blur px-6 py-4">
         <div className="max-w-3xl mx-auto">
+          {busyReason && (
+            <div className="mb-2 text-[11px] text-base-500 px-1">{busyReason}</div>
+          )}
           <PromptInput
             generating={generating}
-            disabled={connection !== 'open'}
+            disabled={connection !== 'open' || !!busyReason}
             onSend={(content, attachments) => { setSuggestionText(''); onSend(content, attachments) }}
             onStop={onStop}
             onOpenSettings={onOpenSettings}

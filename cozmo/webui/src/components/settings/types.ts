@@ -1,4 +1,4 @@
-export type SectionId = 'general' | 'models' | 'memory' | 'knowledge' | 'tools' | 'mcp' | 'skills' | 'integrations' | 'appearance' | 'advanced'
+export type SectionId = 'general' | 'models' | 'memory' | 'tools' | 'mcp' | 'skills' | 'advanced'
 
 export interface ToolInfo {
   id: string
@@ -52,11 +52,12 @@ export interface SettingsData {
   llm?: LlmConfig
   models: Record<string, unknown>
   ollama?: { url?: string }
-  providers?: { default?: string; ollama?: { url?: string }; openai?: { api_key_env?: string } }
+  providers?: { default?: string; ollama?: { url?: string; reasoning?: boolean }; openai?: { api_key_env?: string } }
   runtime?: RuntimeConfig
   permissions?: Record<string, unknown>
   mcp?: { servers: Record<string, McpServerConfig> }
   memory?: { max_turns_before_summary?: number; max_short_term_pairs?: number }
+  embedding?: { model?: string }
   personality?: string
   agent?: AgentConfig
   workspace?: { path?: string; knowledge?: string; git_repo?: string }

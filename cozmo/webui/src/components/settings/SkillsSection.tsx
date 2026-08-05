@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { Plus, Upload, Edit3, Sparkles, Puzzle, Trash2 } from 'lucide-react'
 import { uploadSkill, createSkill, deleteSkill } from '@/services/cozmo'
 import type { Skill } from '@/types'
+import { useToast } from '@/hooks/useToast'
+import { useConfirm } from '@/hooks/useConfirm'
 
 interface Props {
   skills: Skill[]
@@ -11,6 +13,8 @@ interface Props {
 }
 
 export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Props) {
+  const { showError } = useToast()
+  const { confirm, dialog } = useConfirm()
   const [menuOpen, setMenuOpen] = useState(false)
   const [writeOpen, setWriteOpen] = useState(false)
   const [writeName, setWriteName] = useState('')
@@ -33,7 +37,8 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    await uploadSkill(file)
+    const result = await uploadSkill(file)
+    if (!result) showError(`Couldn't upload "${file.name}" as a skill.`)
     onRefresh()
     setMenuOpen(false)
   }
@@ -41,8 +46,12 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
   const handleWriteSubmit = async () => {
     if (!writeName.trim()) return
     setSaving(true)
-    await createSkill({ name: writeName.trim(), description: writeDesc.trim(), content: writeContent })
+    const result = await createSkill({ name: writeName.trim(), description: writeDesc.trim(), content: writeContent })
     setSaving(false)
+    if (!result) {
+      showError("Couldn't save this skill.")
+      return
+    }
     setWriteOpen(false)
     setWriteName('')
     setWriteDesc('')
@@ -51,8 +60,18 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
   }
 
   const handleDelete = async (name: string) => {
-    await deleteSkill(name)
-    onRefresh()
+    const ok = await confirm({
+      title: `Delete "${name}"?`,
+      description: "Cozmo won't be able to use this skill anymore. This can't be undone.",
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
+    try {
+      await deleteSkill(name)
+      onRefresh()
+    } catch {
+      showError(`Couldn't delete "${name}".`)
+    }
   }
 
   const handleCreateWithCozmo = () => {
@@ -63,6 +82,7 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
 
   return (
     <div className="space-y-4">
+      {dialog}
       <div className="flex items-center justify-between">
         <p className="text-xs text-base-500">Skills extend Cozmo with reusable instructions.</p>
         <div className="relative" ref={menuRef}>

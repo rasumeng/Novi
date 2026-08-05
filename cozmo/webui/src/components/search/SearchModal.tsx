@@ -24,6 +24,7 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
 
@@ -57,13 +58,20 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
   }, [open, onClose, onSelect, results])
 
   useEffect(() => {
-    if (!query.trim()) { setResults([]); return }
+    if (!query.trim()) { setResults([]); setError(false); return }
     setLoading(true)
+    setError(false)
     const timeout = setTimeout(() => {
       fetch(`${API_BASE}/api/conversations/search?q=${encodeURIComponent(query)}`)
-        .then((r) => r.json())
+        .then((r) => {
+          if (!r.ok) throw new Error('search request failed')
+          return r.json()
+        })
         .then((list) => setResults(list))
-        .catch(() => setResults([]))
+        .catch(() => {
+          setResults([])
+          setError(true)
+        })
         .finally(() => setLoading(false))
     }, 200)
     return () => clearTimeout(timeout)
@@ -107,7 +115,12 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
                   Searching...
                 </div>
               )}
-              {!loading && query && results.length === 0 && (
+              {!loading && error && (
+                <div className="flex items-center justify-center h-16 text-xs text-err">
+                  Search failed. Check your connection and try again.
+                </div>
+              )}
+              {!loading && !error && query && results.length === 0 && (
                 <div className="flex items-center justify-center h-16 text-xs text-base-500">
                   No results
                 </div>

@@ -1,0 +1,130 @@
+# Cozmo Desktop — Tauri Migration
+
+Design notes for wrapping the existing Cozmo WebUI in a native desktop app
+without touching the backend or the UI.
+
+## Goal and constraints
+
+- Thin wrapper only. No UI redesign.
+- No changes to Cozmo Brain, Runtime, Memory, Retrieval, Orchestrator, or
+  backend logic.
+- WebSocket protocol (`/ws/chat`) preserved byte-for-byte.
+- The desktop app launches the React frontend and connects to the existing
+  FastAPI backend exactly as the browser does.
+
+## How the browser workflow works today
+
+```
+cozmo webui (cli.py)  →  run_server (webui_server.py:1584)  →  uvicorn on 127.0.0.1:8765
+   ├─ /api/*          REST endpoints (config, conversations, projects, skills, memory, MCP…)
+   ├─ /ws/chat        WebSocket JSON protocol
+   └─ /               serves webui/dist when present (webui_server.py:1578)
+```
+
+Frontend (Vite, in `cozmo/webui/`):
+
+- Dev: uses `import.meta.env.DEV` → WS + API hard-pointed at
+  `http://localhost:8765` (`webui/src/services/cozmo.ts:40-46`).
+- Prod build: uses same-origin `location.host`.
+
+Key consequence: because the backend already serves the built frontend, a
+desktop shell that opens `http://127.0.0.1:8765` is **same-origin** — no CORS,
+no proxy, no environment variables, no source edits.
+
+## Desktop design
+
+```
+Tauri (Rust) shell
+  ├─ single-instance guard      (tauri-plugin-single-instance, registered first)
+  ├─ BackendLauncher            (src/backend/launcher.rs)
+  │    ├─ resolve python        venv/Scripts/python.exe (win) or venv/bin/python (unix)
+  │    ├─ spawn                 python -m cozmo webui --host --port   (child of the app)
+  │    ├─ logs                  stdout/stderr piped → Tauri stderr + ring buffer
+  │    ├─ health                poll GET /api/models until HTTP 200
+  │    └─ stop                  taskkill /PID /T /F (win) or kill (unix) on exit
+  ├─ splash screen               (src/splash.rs) — startup/error screens
+  └─ window                     loads http://127.0.0.1:8765 (prod) or http://localhost:5173 (dev)
+```
+
+No Tauri command/IPC is used; `withGlobalTauri: false`. The React app is
+completely unaware it runs inside a desktop window.
+
+**Startup UX (Phase 0):** the window opens immediately with a static
+`file://` loading screen (`splash::loading_url()`), rather than waiting for
+the backend health-check before creating any window at all. A background
+thread runs `wait_until_ready()` and calls `window.navigate(...)` to swap to
+the real app once the backend responds. On failure/timeout, it navigates to
+a static error screen (`splash::error_url(...)`) with the failure reason
+instead of silently `process::exit`-ing with no UI. Both screens are plain
+HTML files written to the OS temp dir at runtime — no bundling, no JS
+dependency on the backend being up.
+
+**Single instance:** `tauri-plugin-single-instance` is registered as the
+first plugin. A second launch focuses the existing window instead of
+spawning a second backend on the same port.
+
+## Dev vs prod
+
+| | dev (`tauri dev`, debug build) | prod (`tauri build`, release build) |
+| --- | --- | --- |
+| Frontend source | Vite HMR on :5173 | `tsc && vite build` → `webui/dist` |
+| Window URL | `http://localhost:5173` | `http://127.0.0.1:8765` |
+| Backend | spawned by Rust (venv) | spawned by Rust (venv) |
+| Hot reload | yes (Vite HMR) | no |
+
+The mode is chosen by `cfg!(debug_assertions)` in `main.rs`. Backend launch is
+identical in both — keep the same code path so sidecar migration is uniform.
+
+## Health / lifecycle
+
+- `BackendLauncher::start()` spawns the child and streams logs.
+- `wait_until_ready()` polls `GET /api/models` until HTTP 200 (default 60s
+  timeout), running in a background thread *after* the window is already
+  visible (showing the loading screen) rather than before it opens.
+- On success the window navigates to the real app URL; on failure/timeout it
+  navigates to a static error screen and the window stays open (no more
+  silent `process::exit`).
+- `stop()` runs on `RunEvent::Exit` (and the child is removed) — on Windows it
+  uses `taskkill /T` to reap the whole process tree, so Ollama/uvicorn cannot
+  be orphaned when the app closes.
+
+## Sidecar-ready launcher
+
+The abstraction in `launcher.rs` keeps the health-check and lifecycle generic
+(`is_running`, `is_ready`, `wait_until_ready`, `stop`) and only varies the
+command:
+
+- `Python` kind: `python -m cozmo webui --host --port`
+- `Sidecar` kind: `<executable> --host --port`, selected via `COZMO_BACKEND_BIN`
+
+Swapping in a frozen/bundled backend later requires no frontend or window code
+changes — only the launcher's command selection.
+
+## Configuration
+
+Environment variables honored by the shell: `COZMO_REPO_ROOT`,
+`COZMO_PYTHON`, `COZMO_BACKEND_PORT`, `COZMO_BACKEND_BIN`.
+
+## Windows packaging
+
+- Bundler targets: NSIS (recommended for end users) + MSI.
+- WebView2: Tauri Installer uses the OS WebView2 runtime; host machine must
+  have it (bundled remotely / via bootstrapper).
+- Icons generated by `icons/generate-icons.ps1` (PNG + PNG-in-ICO for 256).
+
+## Risks / notes
+
+- Rust toolchain required to build; not needed to run the browser app.
+- Port `8765` collisions with an already-running `cozmo webui` — mitigated
+  for the desktop app itself by the single-instance guard, but a manually
+  started browser-mode backend on the same port can still collide.
+- On Windows the release binary runs `windows_subsystem = "windows"` (no
+  console); backend logs go to the ring buffer only in release builds.
+  Startup/connection failures now surface in-window via the error screen
+  (`splash::error_url`) instead of only in those logs.
+- First release build downloads WebView2 bootstrapper — needs network.
+
+## Validation
+
+- `tauri dev` (requires rust + node).
+- `npm --prefix cozmo/webui run build` for the frontend build step.

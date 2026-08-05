@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Search, Settings, BookOpen, PuzzleIcon, Palette, Server } from 'lucide-react'
+import { X, Search, Settings } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/cozmo'
 import { fetchConfig, saveConfig, fetchOllamaModels, fetchAvailableModels } from './api'
+import { useToast } from '@/hooks/useToast'
+import { useProductConfig } from '@/hooks/useProductConfig'
 import { SECTIONS } from './constants'
 import { ModelsSettings } from './ModelsSettings'
 import { ToolsSettings } from './ToolsSettings'
@@ -10,6 +12,7 @@ import { MemorySettings } from './MemorySettings'
 import { SkillsSection } from './SkillsSection'
 import { ConnectorsSection } from './ConnectorsSection'
 import { GeneralSettings } from './GeneralSettings'
+import { AgentSettings } from './AgentSettings'
 import type { SectionId, SettingsData, ToolInfo } from './types'
 import type { Skill } from '@/types'
 
@@ -23,6 +26,7 @@ interface Props {
 }
 
 export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: Props) {
+  const { showError } = useToast()
   const [section, setSection] = useState<SectionId>('general')
   const [search, setSearch] = useState('')
   const [config, setConfig] = useState<SettingsData | null>(null)
@@ -30,17 +34,26 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [availableModels, setAvailableModels] = useState<{ name: string; provider: string }[]>([])
   const [dirty, setDirty] = useState(false)
-  const [lightweight, setLightweight] = useState(false)
   const [skills, setSkills] = useState<Skill[]>([])
   const modalRef = useRef<HTMLDivElement>(null)
+
+  const discoveredModels = useMemo(
+    () => [
+      ...ollamaModels.map((name) => ({ name, provider: 'ollama' })),
+      ...availableModels,
+    ],
+    [ollamaModels, availableModels]
+  )
+  const product = useProductConfig({ config, setConfig, setDirty, discoveredModels })
 
   useEffect(() => {
     if (!open) return
     if (initialSection) setSection(initialSection)
     fetchConfig().then((cfg) => {
       setConfig(cfg)
-      setLightweight(!!(cfg as any)?.runtime?.lightweight_mode)
-    }).catch(() => {})
+    }).catch(() => {
+      showError("Couldn't load settings. Is Cozmo's backend running?")
+    })
     fetchOllamaModels().then(setOllamaModels).catch(() => {})
     fetchAvailableModels().then(setAvailableModels).catch(() => {})
     fetchTools()
@@ -49,7 +62,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
     fetchSkills()
       .then(setSkills)
       .catch(() => {})
-  }, [open, initialSection])
+  }, [open, initialSection, showError])
 
   const updateToolPermission = (toolId: string, mode: string) => {
     if (!config) return
@@ -62,12 +75,15 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
     const patch: Record<string, unknown> = { models: config.models }
     if ((config as any).llm) patch.llm = (config as any).llm
     if (config.permissions) patch.permissions = config.permissions
-    patch.runtime = { ...((config as any).runtime ?? {}), lightweight_mode: lightweight }
+    patch.runtime = (config as any).runtime ?? { lightweight_mode: false }
     if ((config as any).agent) patch.agent = (config as any).agent
     if ((config as any).mcp) patch.mcp = (config as any).mcp
     if ((config as any).personality) patch.personality = (config as any).personality
     if ((config as any).memory) patch.memory = (config as any).memory
-    saveConfig(patch).catch(() => {})
+    if ((config as any).embedding) patch.embedding = (config as any).embedding
+    saveConfig(patch).catch(() => {
+      showError("Couldn't save settings — your changes weren't persisted.")
+    })
     setDirty(false)
   }
 
@@ -180,29 +196,23 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                   <GeneralSettings
                     config={config}
                     setConfig={setConfig}
-                    lightweight={lightweight}
-                    setLightweight={setLightweight}
                     setDirty={setDirty}
+                    profiles={product.profiles}
+                    activeProfileId={product.activeProfileId}
+                    profileSummaries={product.profileSummaries}
+                    onApplyProfile={product.applyProfile}
                   />
                 )}
                 {section === 'models' && (
                   <ModelsSettings
                     config={config}
-                    ollamaModels={ollamaModels}
+                    catalog={product.catalog}
                     availableModels={availableModels}
                     setConfig={setConfig}
                     setDirty={setDirty}
-                    lightweight={lightweight}
                   />
                 )}
-                {section === 'memory' && <MemorySettings config={config} />}
-                {section === 'knowledge' && (
-                  <div className="text-sm text-base-500 pt-8 text-center">
-                    <BookOpen size={32} className="mx-auto mb-3 text-base-600" />
-                    <p>Knowledge bases will appear here.</p>
-                    <p className="text-xs mt-1">Add documents, websites, or codebases for Cozmo to reference.</p>
-                  </div>
-                )}
+                {section === 'memory' && <MemorySettings config={config} setConfig={setConfig} setDirty={setDirty} />}
                 {section === 'tools' && (
                   <ToolsSettings
                     tools={tools}
@@ -219,26 +229,8 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     onClose={onClose}
                   />
                 )}
-                {section === 'integrations' && (
-                  <div className="text-sm text-base-500 pt-8 text-center">
-                    <PuzzleIcon size={32} className="mx-auto mb-3 text-base-600" />
-                    <p>Integrations will appear here.</p>
-                    <p className="text-xs mt-1">Connect Cozmo to third-party services.</p>
-                  </div>
-                )}
-                {section === 'appearance' && (
-                  <div className="text-sm text-base-500 pt-8 text-center">
-                    <Palette size={32} className="mx-auto mb-3 text-base-600" />
-                    <p>Appearance settings will appear here.</p>
-                    <p className="text-xs mt-1">Customize the theme, font size, and layout.</p>
-                  </div>
-                )}
                 {section === 'advanced' && (
-                  <div className="text-sm text-base-500 pt-8 text-center">
-                    <Server size={32} className="mx-auto mb-3 text-base-600" />
-                    <p>Advanced settings will appear here.</p>
-                    <p className="text-xs mt-1">Runtime configuration, debugging, and developer options.</p>
-                  </div>
+                  <AgentSettings config={config} setConfig={setConfig} setDirty={setDirty} />
                 )}
               </div>
             </div>

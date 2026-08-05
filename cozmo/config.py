@@ -34,11 +34,12 @@ DEFAULT_CONFIG = {
         },
     },
     "embedding": {
-        "backend": "sentence_transformers",
-        "model": "all-MiniLM-L6-v2",
+        "backend": "ollama",
+        "model": "nomic-embed-text",
+        "dimension": 768,
     },
     "reranker": {
-        "backend": "sentence_transformers",
+        "backend": "none",
         "model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
     },
     "ollama": {"url": "http://localhost:11434"},

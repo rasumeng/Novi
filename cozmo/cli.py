@@ -215,6 +215,9 @@ def main():
     migrate_parser = sub.add_parser("migrate", help="Migrate persistent data between versions")
     migrate_parser.add_argument("target", help="Target version (e.g. v1-to-v2)")
 
+    rebuild_parser = sub.add_parser("rebuild", help="Rebuild the memory database for the current embedding backend")
+    rebuild_parser.add_argument("--home", default=None, help="Profile directory to rebuild (default ~/.cozmo)")
+
     args = parser.parse_args()
 
     ctx = None
@@ -301,6 +304,15 @@ def main():
             migrate()
         else:
             print(f"Unknown migration target: {args.target}")
+
+    elif args.command == "rebuild":
+        from .memory.rebuild import rebuild
+        home = args.home or str(Path.home() / ".cozmo")
+        report = rebuild(home)
+        print(f"removed {len(report['removed'])} vector store(s)")
+        for r in report["removed"]:
+            print(f"  - {r}")
+        print(f"knowledge index rebuilt: {report['reindexed']} documents")
 
     elif args.command == "config":
         from .config_cli import handle_config

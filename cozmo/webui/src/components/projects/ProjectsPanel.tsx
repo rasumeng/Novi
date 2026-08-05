@@ -3,6 +3,7 @@ import { Plus, FolderKanban, Trash2 } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { ProjectForm } from './ProjectForm'
 import { ProjectDetail } from './ProjectDetail'
+import { useConfirm } from '@/hooks/useConfirm'
 
 interface Props {
   projects: Project[]
@@ -25,8 +26,18 @@ export function ProjectsPanel({
   onRemoveConversation,
   onSelectProject,
 }: Props) {
+  const { confirm, dialog } = useConfirm()
   const [showForm, setShowForm] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+
+  const handleDeleteProject = async (project: Project) => {
+    const ok = await confirm({
+      title: `Delete "${project.name}"?`,
+      description: `This removes the project. Its ${project.conversationIds.length} linked conversation${project.conversationIds.length !== 1 ? 's' : ''} won't be deleted. This can't be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (ok) onDeleteProject(project.id)
+  }
 
   const selectedProject = selectedProjectId ? projects.find(p => p.id === selectedProjectId) ?? null : null
 
@@ -55,6 +66,7 @@ export function ProjectsPanel({
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-base-950">
+      {dialog}
       <header className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-base-800">
         <h2 className="text-sm font-medium text-base-100">Projects</h2>
         <button
@@ -102,7 +114,7 @@ export function ProjectsPanel({
                   <p className="text-[11px] text-base-600 mt-0.5">{p.conversationIds.length} conversation{p.conversationIds.length !== 1 ? 's' : ''}</p>
                 </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); onDeleteProject(p.id) }}
+                  onClick={(e) => { e.stopPropagation(); handleDeleteProject(p) }}
                   className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-base-400 hover:text-err hover:bg-base-800 transition-all"
                   title="Delete project"
                 >

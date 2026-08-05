@@ -3,8 +3,10 @@ import { X, Search, Store, Plug, PackagePlus, Settings, Power, Trash2, ChevronDo
 import { fetchMcpCatalog, fetchMcpStatus, fetchServerDetail } from '@/services/cozmo'
 import type { McpCatalogEntry, McpStatusResponse, McpServerTool, McpServerDetail } from '@/types'
 import { API_BASE } from './api'
-import { CAPABILITY_DEFS } from './constants'
+import { CAPABILITY_DEFS, PERMISSION_DEFS } from './constants'
 import type { SettingsData } from './types'
+import { useConfirm } from '@/hooks/useConfirm'
+import { CapabilityBadge } from '@/components/common/CapabilityBadge'
 
 function formatTimeAgo(ms: number): string {
   const sec = Math.round(ms / 1000)
@@ -15,36 +17,6 @@ function formatTimeAgo(ms: number): string {
   return `${hr}h ago`
 }
 
-const PERMISSION_DEFS: Record<string, { label: string; key: string }[]> = {
-  files: [
-    { label: 'Read & Search', key: 'read' },
-    { label: 'Write Files', key: 'write' },
-    { label: 'Delete Files', key: 'delete' },
-  ],
-  git: [
-    { label: 'Read Repos', key: 'read' },
-    { label: 'Commit & Push', key: 'write' },
-  ],
-  github: [
-    { label: 'Read Issues & PRs', key: 'read' },
-    { label: 'Create & Edit', key: 'write' },
-    { label: 'Merge & Approve', key: 'approve' },
-    { label: 'Delete Branches', key: 'delete' },
-  ],
-  database: [
-    { label: 'Read Queries', key: 'read' },
-    { label: 'Write Queries', key: 'write' },
-  ],
-  browser: [
-    { label: 'Navigate', key: 'navigate' },
-    { label: 'Get Content', key: 'read' },
-    { label: 'Interact (click, type)', key: 'interact' },
-  ],
-  _default: [
-    { label: 'Allow Execution', key: 'execute' },
-  ],
-}
-
 interface Props {
   config: SettingsData | null
   setConfig: (c: SettingsData) => void
@@ -52,6 +24,7 @@ interface Props {
 }
 
 export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
+  const { confirm, dialog } = useConfirm()
   const [addOpen, setAddOpen] = useState(false)
   const [addName, setAddName] = useState('')
   const [addCommand, setAddCommand] = useState('')
@@ -166,12 +139,18 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
     clearForm()
   }
 
-  const handleDelete = (name: string) => {
-    if (!config) return
+  const handleDelete = async (name: string) => {
+    const ok = await confirm({
+      title: `Remove ${name}?`,
+      description: "Cozmo will lose access to any tools this connector provides. You can add it again later.",
+      confirmLabel: 'Remove',
+    })
+    if (!ok || !config) return false
     const mcp = (config.mcp as any) ?? { servers: {} }
     const { [name]: _, ...rest } = mcp.servers
     setConfig({ ...config, mcp: { ...mcp, servers: rest } })
     setDirty(true)
+    return true
   }
 
   const handleTest = async (name: string) => {
@@ -233,8 +212,9 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
 
   return (
     <div className="space-y-4">
+      {dialog}
       <div className="flex items-center justify-between">
-        <p className="text-xs text-base-500">MCP (Model Context Protocol) servers extend Cozmo with external tools like databases, APIs, and file systems.</p>
+        <p className="text-xs text-base-500">Connect Cozmo to external tools — databases, APIs, file systems, and more.</p>
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={openCatalog} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-accent/40 text-accent hover:bg-accent/10 text-xs font-medium transition-colors">
             <Store size={14} /> Browse
@@ -311,12 +291,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
                             {e.capabilities.map((c) => {
                               const cd = CAPABILITY_DEFS[c]
                               if (!cd) return null
-                              const CI = cd.icon
-                              return (
-                                <span key={c} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-base-800 text-[9px] text-base-400 border border-base-700/40">
-                                  <CI size={10} />{cd.label}
-                                </span>
-                              )
+                              return <CapabilityBadge key={c} icon={cd.icon} label={cd.label} />
                             })}
                           </div>
                           <div className="flex flex-wrap gap-1.5 mb-3">
@@ -386,7 +361,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
 
       {entries.length === 0 && !addOpen && !catalogOpen ? (
         <div className="flex flex-col items-center justify-center h-32 rounded-xl border-2 border-dashed border-base-700 text-base-500 text-sm">
-          No MCP servers configured
+          No connectors added yet
         </div>
       ) : (
         <div className="space-y-2">
@@ -425,12 +400,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
                     {caps.map((c) => {
                       const cd = CAPABILITY_DEFS[c]
                       if (!cd) return null
-                      const CI = cd.icon
-                      return (
-                        <span key={c} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-base-900/60 text-[9px] text-base-400 border border-base-700/40">
-                          <CI size={10} />{cd.label}
-                        </span>
-                      )
+                      return <CapabilityBadge key={c} icon={cd.icon} label={cd.label} />
                     })}
                     {st && st.tools.length > 0 && (
                       <button onClick={() => toggleTools(name)} className="flex items-center gap-0.5 text-[10px] text-base-500 hover:text-accent transition-colors ml-auto">
@@ -507,12 +477,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
                     {serverDetail.capabilities.map((c: string) => {
                       const cd = CAPABILITY_DEFS[c]
                       if (!cd) return null
-                      const CI = cd.icon
-                      return (
-                        <span key={c} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20">
-                          <CI size={12} /> {cd.label}
-                        </span>
-                      )
+                      return <CapabilityBadge key={c} icon={cd.icon} label={cd.label} size="md" />
                     })}
                   </div>
                 </div>
@@ -619,7 +584,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
 
               <div className="flex items-center gap-2 pt-2">
                 <button
-                  onClick={() => { handleDelete(serverDetail.name); closeDetail() }}
+                  onClick={async () => { const removed = await handleDelete(serverDetail.name); if (removed) closeDetail() }}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 border border-red-500/30 transition-colors"
                 >
                   <Trash2 size={13} /> Remove Connector

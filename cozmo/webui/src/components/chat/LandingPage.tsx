@@ -1,7 +1,10 @@
 import { Sparkles, Globe, FileSymlink, Mail, BarChart3, Search, GitBranch, Braces, Bug, Code2, Lightbulb, PenLine } from 'lucide-react'
+import { ConnectionState } from '@/services/cozmo'
+import { CONNECTION_LABEL } from './connectionStatus'
 
 interface Props {
   onSuggestion?: (text: string) => void
+  connection: ConnectionState
 }
 
 interface SuggestionItem {
@@ -24,7 +27,8 @@ const SUGGESTIONS: SuggestionItem[] = [
   { icon: PenLine, label: 'Write documentation', prompt: 'Write documentation for ' },
 ]
 
-export function LandingPage({ onSuggestion }: Props) {
+export function LandingPage({ onSuggestion, connection }: Props) {
+  const status = CONNECTION_LABEL[connection]
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6 py-16">
       <div className="w-14 h-14 rounded-2xl bg-accent/15 flex items-center justify-center mb-5">
@@ -52,8 +56,8 @@ export function LandingPage({ onSuggestion }: Props) {
       </div>
 
       <div className="mt-8 flex items-center gap-2 text-[11px] text-base-600">
-        <div className="w-1.5 h-1.5 rounded-full bg-accent/50" />
-        Connected and ready
+        <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+        {status.text}
       </div>
     </div>
   )

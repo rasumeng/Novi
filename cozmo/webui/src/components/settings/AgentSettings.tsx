@@ -26,7 +26,7 @@ export function AgentSettings({ config, setConfig, setDirty }: Props) {
 
   return (
     <div className="space-y-5">
-      <p className="text-xs text-base-500">Configure autonomous agent behavior. Changes saved with main settings.</p>
+      <p className="text-xs text-base-500">Fine-tune how Cozmo behaves when working autonomously. Most people won't need to change these.</p>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
@@ -49,7 +49,7 @@ export function AgentSettings({ config, setConfig, setDirty }: Props) {
             <MessageSquareText size={14} className="text-accent" />
             <p className="text-sm text-base-100 font-medium">System Prompt</p>
           </div>
-          <p className="text-xs text-base-500 mb-2">Extra instructions for the agent mode. These are appended to the agent mode prompt.</p>
+          <p className="text-xs text-base-500 mb-2">Extra instructions Cozmo follows whenever it's working autonomously.</p>
           <textarea
             value={agentCfg.system_prompt ?? ''}
             onChange={(e) => updateAgent({ system_prompt: e.target.value })}
@@ -64,7 +64,7 @@ export function AgentSettings({ config, setConfig, setDirty }: Props) {
             <ListOrdered size={14} className="text-accent" />
             <div>
               <p className="text-sm text-base-100 font-medium">Max Steps</p>
-              <p className="text-xs text-base-500">Maximum tool-call iterations before forced stop</p>
+              <p className="text-xs text-base-500">How many actions Cozmo can take in a row before it stops to check in</p>
             </div>
           </div>
           <div className="flex items-center gap-2">

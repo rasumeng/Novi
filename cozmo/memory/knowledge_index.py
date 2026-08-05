@@ -131,8 +131,10 @@ class KnowledgeIndex:
             embed_service = embed_model
         else:
             cfg = cozmo_config.load()
-            model_name = embed_model or cfg.get("embedding", {}).get("model", "all-MiniLM-L6-v2")
-            embed_service = EmbeddingService({"embedding": {"model": model_name}})
+            model_name = embed_model or cfg.get("embedding", {}).get("model", "nomic-embed-text")
+            embed_cfg = dict(cfg)
+            embed_cfg.setdefault("embedding", {})["model"] = model_name
+            embed_service = EmbeddingService(embed_cfg)
         self._embedder = embed_service
 
         def embed(text: str) -> list[float]:

@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo } from '@/types'
 import { CozmoClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations } from '@/services/cozmo'
+import { useToast } from '@/hooks/useToast'
+import { useNotificationCenter } from '@/hooks/useNotificationCenter'
+import { notifyIfUnfocused } from '@/native/tauri'
 
 export interface PermissionRequest {
   tool: string
   args: Record<string, unknown>
+}
+
+// The backend agent session is single-flight: only one generation can be in
+// progress at a time, and its streaming events (token/thinking/tool_call/...)
+// carry no conversation id of their own. `GenerationOwner` is the frontend's
+// record of *which* conversation those anonymous events belong to. Every
+// handler for a streaming event must resolve its target through this owner,
+// never through whatever conversation happens to be on screen — otherwise
+// switching conversations mid-stream reroutes the response into the wrong one.
+interface GenerationOwner {
+  conversationId: string
 }
 
 let idCounter = 0
@@ -13,24 +27,42 @@ const now = () =>
   new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 const DRAFT_ID = '__draft__'
+const STOP_FALLBACK_MS = 8000
 
 export function useCozmoChat() {
+  const { showError } = useToast()
+  const { push: pushNotification } = useNotificationCenter()
   const clientRef = useRef<CozmoClient | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState(() => '')
-  const [generating, setGenerating] = useState(false)
+
+  // The single generation owner. null when nothing is in flight. This is the
+  // only thing that decides where streaming events land — see module comment.
+  const [owner, setOwner] = useState<GenerationOwner | null>(null)
+
   const [inlineSteps, setInlineSteps] = useState<InlineStep[]>([])
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
   const [plan, setPlan] = useState<PlanData | null>(null)
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRunInfo[]>([])
   const currentModelRef = useRef('')
+  const stopTimeoutRef = useRef<number | null>(null)
 
   const [agentState, setAgentState] = useState<AgentStateInfo | null>(null)
   const [progress, setProgress] = useState<ProgressInfo | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
-  const dirtyRef = useRef(false)
+  // Id of the conversation with unsaved changes, or null. Deliberately not a
+  // boolean: persistence must save the conversation that actually changed
+  // (the generation owner), not whatever is currently on screen.
+  const dirtyIdRef = useRef<string | null>(null)
+
+  const clearStopFallback = () => {
+    if (stopTimeoutRef.current != null) {
+      window.clearTimeout(stopTimeoutRef.current)
+      stopTimeoutRef.current = null
+    }
+  }
 
   // Load conversations on mount
   useEffect(() => {
@@ -40,37 +72,51 @@ export function useCozmoChat() {
       })
       .catch(() => {
         setConversations([])
+        showError("Couldn't load your conversations. Is Cozmo's backend running?")
       })
     fetchProjects()
       .then((list) => setProjects(list))
-      .catch(() => {})
-  }, [])
+      .catch(() => {
+        showError("Couldn't load your projects.")
+      })
+  }, [showError])
 
-  // Persist when dirty (after message added)
+  useEffect(() => clearStopFallback, [])
+
+  // Persist whichever conversation was last marked dirty (never "the active one" —
+  // the active one may not be the conversation that actually changed).
   useEffect(() => {
-    if (!dirtyRef.current) return
-    dirtyRef.current = false
-    const active = conversations.find((c) => c.id === resolvedActiveId)
-    if (active && active.id) {
-      saveConversation(active).catch(() => {})
+    const id = dirtyIdRef.current
+    if (!id) return
+    dirtyIdRef.current = null
+    const conv = conversations.find((c) => c.id === id)
+    if (conv) {
+      saveConversation(conv).catch(() => {
+        showError("Couldn't save this conversation. Your changes may be lost if you close Cozmo.")
+      })
     }
   })
 
   // activeId resolves lazily; fall back to draft
   const resolvedActiveId = activeId || conversations[0]?.id || DRAFT_ID
 
-  const updateActive = useCallback(
-    (fn: (c: Conversation) => Conversation) => {
+  const updateConversation = useCallback(
+    (id: string, fn: (c: Conversation) => Conversation) => {
       setConversations((convs) =>
-        convs.map((c) => (c.id === resolvedActiveId ? fn(c) : c))
+        convs.map((c) => (c.id === id ? fn(c) : c))
       )
     },
-    [resolvedActiveId]
+    []
   )
 
+  // Appends a token to the conversation that OWNS the current generation,
+  // not to `resolvedActiveId`. If there is no owner (e.g. a stray event after
+  // stop/reset), the token is dropped rather than misattributed.
   const appendToken = useCallback(
     (text: string) => {
-      updateActive((c) => {
+      const ownerId = owner?.conversationId
+      if (!ownerId) return
+      updateConversation(ownerId, (c) => {
         const msgs = [...c.messages]
         const last = msgs[msgs.length - 1]
         if (last && last.role === 'assistant' && last.streaming) {
@@ -88,17 +134,19 @@ export function useCozmoChat() {
         return { ...c, messages: msgs, updatedAt: 'Just now' }
       })
     },
-    [updateActive]
+    [owner, updateConversation]
   )
 
   const finishStreaming = useCallback(() => {
+    const ownerId = owner?.conversationId
     currentModelRef.current = ''
-    updateActive((c) => ({
+    if (!ownerId) return
+    updateConversation(ownerId, (c) => ({
       ...c,
       messages: c.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
     }))
-    dirtyRef.current = true
-  }, [updateActive])
+    dirtyIdRef.current = ownerId
+  }, [owner, updateConversation])
 
   const toolLabel = (tool: string, args: Record<string, unknown>): string => {
     const p = args['path'] as string | undefined
@@ -252,16 +300,26 @@ export function useCozmoChat() {
           break
         case 'project_selected':
           break
-        case 'background_run_update':
+        case 'background_run_update': {
+          const isTerminal = ev.status === 'done' || ev.status === 'error' || ev.status === 'cancelled'
+          // Computed from the current committed state (not the setState updater's
+          // `prev`) so the transition check is a plain value, not a variable
+          // mutated inside a closure — only notify on the transition into
+          // done/error, never on repeated updates that are already terminal.
+          const existing = backgroundRuns.find(r => r.run_id === ev.run_id)
+          const wasTerminal = !!existing && ['done', 'error', 'cancelled'].includes(existing.status)
+          const justFinished = isTerminal && !wasTerminal
+            ? { status: ev.status, goal: existing?.goal || ev.goal || 'Background job' }
+            : null
+
           setBackgroundRuns(prev => {
             const idx = prev.findIndex(r => r.run_id === ev.run_id)
             const run: BackgroundRunInfo = {
               run_id: ev.run_id,
-              goal: ev.goal ?? '',
+              goal: ev.goal ?? prev[idx]?.goal ?? '',
               status: ev.status,
               created: prev[idx]?.created ?? new Date().toISOString(),
-              ended: ev.status === 'done' || ev.status === 'error' || ev.status === 'cancelled'
-                ? new Date().toISOString() : '',
+              ended: isTerminal ? new Date().toISOString() : '',
             }
             if (idx >= 0) {
               const next = [...prev]
@@ -270,7 +328,19 @@ export function useCozmoChat() {
             }
             return [run, ...prev]
           })
+
+          if (justFinished) {
+            const label = justFinished.goal.slice(0, 60)
+            if (justFinished.status === 'error') {
+              pushNotification({ kind: 'error', text: `Job failed: ${label}` })
+              notifyIfUnfocused('Cozmo', `Job failed: ${label}`)
+            } else if (justFinished.status === 'done') {
+              pushNotification({ kind: 'success', text: `Job completed: ${label}` })
+              notifyIfUnfocused('Cozmo', `Job completed: ${label}`)
+            }
+          }
           break
+        }
         case 'background_run_list':
           setBackgroundRuns(ev.runs)
           break
@@ -293,25 +363,50 @@ export function useCozmoChat() {
         case 'permission_request':
           setPermission({ tool: ev.tool, args: ev.args })
           break
-        case 'done':
+        case 'done': {
+          const finishedId = owner?.conversationId
+          const wasViewing = !!finishedId && finishedId === resolvedActiveId
+          clearStopFallback()
           finishStreaming()
-          setGenerating(false)
+          setOwner(null)
           setPermission(null)
           setPlan(null)
           setProgress(null)
           setInlineSteps(prev => prev.map(s =>
             s.status === 'running' ? { ...s, status: 'completed' as const, durationMs: Date.now() - s.startedAt } : s
           ))
+          if (finishedId) {
+            const title = conversations.find(c => c.id === finishedId)?.title || 'a conversation'
+            // In-app history only matters for what you didn't already see happen live.
+            if (!wasViewing) {
+              pushNotification({ kind: 'success', text: `Response ready in "${title}"`, conversationId: finishedId })
+            }
+            // Native OS notification is keyed on window focus, not which conversation
+            // was active — a minimized window still deserves a ping either way.
+            notifyIfUnfocused('Cozmo', `Response ready in "${title}"`)
+          }
           break
-        case 'error':
+        }
+        case 'error': {
+          const finishedId = owner?.conversationId
+          const wasViewing = !!finishedId && finishedId === resolvedActiveId
+          clearStopFallback()
           appendToken(`\n\n**Error:** ${ev.text}`)
           currentModelRef.current = ''
-          setGenerating(false)
+          setOwner(null)
           setProgress(null)
+          if (finishedId) {
+            const title = conversations.find(c => c.id === finishedId)?.title || 'a conversation'
+            if (!wasViewing) {
+              pushNotification({ kind: 'error', text: `Something went wrong in "${title}"`, conversationId: finishedId })
+            }
+            notifyIfUnfocused('Cozmo', `Something went wrong in "${title}"`)
+          }
           break
+        }
       }
     },
-    [appendToken, pushStep, pushReasoning, finishStreaming]
+    [appendToken, pushStep, pushReasoning, finishStreaming, owner, resolvedActiveId, conversations, pushNotification, backgroundRuns]
   )
 
   const handleEventRef = useRef(handleEvent)
@@ -329,7 +424,8 @@ export function useCozmoChat() {
   const sendMessage = useCallback(
     (content: string, attachments?: Attachment[]) => {
       const client = clientRef.current
-      if (!client || generating) return
+      // Single-flight: refuse a new generation while one is already owned.
+      if (!client || owner) return
       const trimmed = content.trim()
       if (!trimmed && (!attachments || attachments.length === 0)) return
       const textToSend = trimmed || '(attachment)'
@@ -350,12 +446,13 @@ export function useCozmoChat() {
         if (!client.sendChat(textToSend, newId, attachments, projectId)) return
         setConversations((convs) => [newConv, ...convs])
         setActiveId(newId)
-        dirtyRef.current = true
+        setOwner({ conversationId: newId })
+        dirtyIdRef.current = newId
         setInlineSteps([])
-        setGenerating(true)
       } else {
         if (!client.sendChat(textToSend, resolvedActiveId, attachments, projectId)) return
-        updateActive((c) => ({
+        const targetId = resolvedActiveId
+        updateConversation(targetId, (c) => ({
           ...c,
           title: c.messages.length === 0 ? (trimmed.slice(0, 48) || 'Attachments') : c.title,
           updatedAt: 'Just now',
@@ -364,17 +461,29 @@ export function useCozmoChat() {
             { id: nextId(), role: 'user', content: textToSend, createdAt: now(), attachments },
           ],
         }))
-        dirtyRef.current = true
+        setOwner({ conversationId: targetId })
+        dirtyIdRef.current = targetId
         setInlineSteps([])
-        setGenerating(true)
       }
     },
-    [generating, updateActive, resolvedActiveId, projects]
+    [owner, updateConversation, resolvedActiveId, projects]
   )
 
   const stop = useCallback(() => {
     clientRef.current?.stop()
-  }, [])
+    // If the backend never confirms (dropped connection, hung agent), don't
+    // leave the UI stuck showing a generation forever.
+    clearStopFallback()
+    stopTimeoutRef.current = window.setTimeout(() => {
+      finishStreaming()
+      setOwner(null)
+      setPermission(null)
+      setPlan(null)
+      setProgress(null)
+      setInlineSteps([])
+      stopTimeoutRef.current = null
+    }, STOP_FALLBACK_MS)
+  }, [finishStreaming])
 
   const answerPermission = useCallback((allowed: boolean) => {
     clientRef.current?.answerPermission(allowed)
@@ -404,13 +513,13 @@ export function useCozmoChat() {
   }, [])
 
   const newChat = useCallback(() => {
-    if (generating) return
+    if (owner) return
     clientRef.current?.reset()
     setActiveId(DRAFT_ID)
     setInlineSteps([])
     setAgentState(null)
     setProgress(null)
-  }, [generating])
+  }, [owner])
 
   const pinConversation = useCallback((id: string) => {
     setConversations((convs) =>
@@ -426,44 +535,62 @@ export function useCozmoChat() {
 
   const deleteConversation = useCallback((id: string) => {
     if (!id) return
-    deleteConversationApi(id).catch(() => {})
+    deleteConversationApi(id).catch(() => {
+      showError("Couldn't delete this conversation on the server — it may come back after a restart.")
+    })
     setConversations((convs) => convs.filter((c) => c.id !== id))
     setActiveId((prev) => prev === id ? DRAFT_ID : prev)
-  }, [])
+  }, [showError])
 
   const addConversationToProject = useCallback((convId: string, projId: string) => {
     const proj = projects.find(p => p.id === projId)
     if (!proj || proj.conversationIds.includes(convId)) return
     const updated = { ...proj, conversationIds: [...proj.conversationIds, convId] }
     setProjects(prev => prev.map(p => p.id === projId ? updated : p))
-    updateProject(projId, { conversationIds: updated.conversationIds }).catch(() => {})
-  }, [projects])
+    updateProject(projId, { conversationIds: updated.conversationIds }).catch(() => {
+      showError("Couldn't add this conversation to the project.")
+    })
+  }, [projects, showError])
 
   const removeConversationFromProject = useCallback((convId: string, projId: string) => {
     const proj = projects.find(p => p.id === projId)
     if (!proj) return
     const updated = { ...proj, conversationIds: proj.conversationIds.filter(id => id !== convId) }
     setProjects(prev => prev.map(p => p.id === projId ? updated : p))
-    updateProject(projId, { conversationIds: updated.conversationIds }).catch(() => {})
-  }, [projects])
+    updateProject(projId, { conversationIds: updated.conversationIds }).catch(() => {
+      showError("Couldn't remove this conversation from the project.")
+    })
+  }, [projects, showError])
 
   const handleCreateProject = useCallback(async (name: string, description?: string, sharedContext?: string) => {
     const p = await createProject({ name, description, sharedContext })
-    if (p) setProjects(prev => [p, ...prev])
+    if (p) {
+      setProjects(prev => [p, ...prev])
+    } else {
+      showError("Couldn't create the project.")
+    }
     return p
-  }, [])
+  }, [showError])
 
   const handleUpdateProject = useCallback(async (id: string, data: Partial<Project>) => {
     const p = await updateProject(id, data)
-    if (p) setProjects(prev => prev.map(pr => pr.id === id ? p : pr))
+    if (p) {
+      setProjects(prev => prev.map(pr => pr.id === id ? p : pr))
+    } else {
+      showError("Couldn't save changes to the project.")
+    }
     return p
-  }, [])
+  }, [showError])
 
   const handleDeleteProject = useCallback(async (id: string) => {
-    await deleteProjectApi(id)
+    try {
+      await deleteProjectApi(id)
+    } catch {
+      showError("Couldn't delete the project on the server — it may come back after a restart.")
+    }
     setProjects(prev => prev.filter(p => p.id !== id))
     if (activeProjectId === id) setActiveProjectId(null)
-  }, [activeProjectId])
+  }, [activeProjectId, showError])
 
   // Resolve project shared context for the active conversation
   const activeProject = activeProjectId
@@ -474,18 +601,40 @@ export function useCozmoChat() {
     ? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] }
     : conversations.find((c) => c.id === resolvedActiveId) ?? conversations[0] ?? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] }
 
+  // Whether the conversation currently on screen is the one actually
+  // generating. Everything below is gated on this, not on `owner` alone —
+  // that's what stops a switch from redirecting the trace/plan/permission/
+  // progress panels onto an unrelated conversation.
+  const activeIsGenerating = owner !== null && owner.conversationId === resolvedActiveId
+
+  const busyReason = owner !== null && owner.conversationId !== resolvedActiveId
+    ? `Cozmo is responding in "${conversations.find(c => c.id === owner.conversationId)?.title ?? 'another conversation'}"`
+    : null
+
+  // Raw, unconditional — unlike everything above, these are NOT gated to the
+  // active conversation. They're what a sidebar item, a global header pill,
+  // or the landing page needs to answer "is Cozmo doing anything right now,
+  // and where" regardless of what's currently on screen.
+  const generatingConversationId = owner?.conversationId ?? null
+  const generatingConversationTitle = generatingConversationId
+    ? conversations.find(c => c.id === generatingConversationId)?.title ?? null
+    : null
+
   return {
     connection,
     conversations,
     active,
     activeId: resolvedActiveId,
     setActiveId,
-    generating,
-    inlineSteps,
-    agentState,
-    progress,
-    plan,
-    permission,
+    generating: activeIsGenerating,
+    busyReason,
+    generatingConversationId,
+    generatingConversationTitle,
+    inlineSteps: activeIsGenerating ? inlineSteps : [],
+    agentState: activeIsGenerating ? agentState : null,
+    progress: activeIsGenerating ? progress : null,
+    plan: activeIsGenerating ? plan : null,
+    permission: activeIsGenerating ? permission : null,
     backgroundRuns,
     sendMessage,
     startBackgroundRun: handleStartBackgroundRun,

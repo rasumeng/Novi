@@ -2,12 +2,18 @@ import { useState, useEffect } from 'react'
 import { Trash2 } from 'lucide-react'
 import { API_BASE } from './api'
 import type { SettingsData } from './types'
+import { useToast } from '@/hooks/useToast'
+import { useConfirm } from '@/hooks/useConfirm'
 
 interface Props {
   config: SettingsData | null
+  setConfig: (c: SettingsData) => void
+  setDirty: (d: boolean) => void
 }
 
-export function MemorySettings({ config }: Props) {
+export function MemorySettings({ config, setConfig, setDirty }: Props) {
+  const { showError, showSuccess } = useToast()
+  const { confirm, dialog } = useConfirm()
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [allMemory, setAllMemory] = useState<any[]>([])
@@ -19,7 +25,9 @@ export function MemorySettings({ config }: Props) {
       const r = await fetch(`${API_BASE}/api/memory/list`)
       const data = await r.json()
       setAllMemory(data)
-    } catch {}
+    } catch {
+      showError("Couldn't load stored memories.")
+    }
   }
 
   const handleSearch = async () => {
@@ -32,16 +40,27 @@ export function MemorySettings({ config }: Props) {
       const r = await fetch(`${API_BASE}/api/memory/search?q=${encodeURIComponent(searchQuery)}`)
       const data = await r.json()
       setSearchResults(data)
-    } catch {}
+    } catch {
+      showError('Memory search failed.')
+    }
     setLoading(false)
   }
 
   const handleDelete = async (id: string) => {
+    const ok = await confirm({
+      title: 'Delete this memory?',
+      description: "Cozmo won't be able to recall this anymore. This can't be undone.",
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
     try {
-      await fetch(`${API_BASE}/api/memory/${id}`, { method: 'DELETE' })
+      const r = await fetch(`${API_BASE}/api/memory/${id}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error('request failed')
       setAllMemory(prev => prev.filter(m => m.id !== id))
       setSearchResults(prev => prev.filter(m => m.id !== id))
-    } catch {}
+    } catch {
+      showError("Couldn't delete this memory.")
+    }
   }
 
   const openFolder = async () => {
@@ -50,8 +69,17 @@ export function MemorySettings({ config }: Props) {
       const data = await r.json()
       if (data.path) {
         navigator.clipboard.writeText(data.path)
+        showSuccess('Memory folder path copied to clipboard.')
       }
-    } catch {}
+    } catch {
+      showError("Couldn't get the memory folder path.")
+    }
+  }
+
+  const setMemoryPref = (key: 'max_turns_before_summary' | 'max_short_term_pairs', value: number) => {
+    if (!config) return
+    setConfig({ ...config, memory: { ...config.memory, [key]: value } })
+    setDirty(true)
   }
 
   useEffect(() => {
@@ -60,7 +88,8 @@ export function MemorySettings({ config }: Props) {
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-base-500">Long-term memory stores conversation summaries and learned facts using vector embeddings.</p>
+      {dialog}
+      <p className="text-xs text-base-500">Cozmo remembers useful details from past conversations, so it doesn't have to be told twice.</p>
 
       <div className="flex gap-1 p-0.5 bg-base-800 rounded-lg">
         <button
@@ -77,7 +106,7 @@ export function MemorySettings({ config }: Props) {
             tab === 'config' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
           }`}
         >
-          Config
+          Preferences
         </button>
       </div>
 
@@ -132,17 +161,29 @@ export function MemorySettings({ config }: Props) {
         <div className="space-y-3">
           <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
             <div>
-              <p className="text-sm text-base-100">Max turns before summary</p>
-              <p className="text-xs text-base-500">Conversation turns before memory is summarized</p>
+              <p className="text-sm text-base-100">How long before Cozmo summarizes</p>
+              <p className="text-xs text-base-500">Turns in a conversation before older parts get condensed into a memory</p>
             </div>
-            <span className="text-sm font-mono text-base-200">{config?.memory?.max_turns_before_summary ?? 5}</span>
+            <input
+              type="number"
+              min={1}
+              value={config?.memory?.max_turns_before_summary ?? 5}
+              onChange={(e) => setMemoryPref('max_turns_before_summary', Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-16 bg-base-900 border border-base-700 rounded-lg px-2 py-1.5 text-sm text-base-200 text-right outline-none focus:border-accent/40"
+            />
           </div>
           <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
             <div>
-              <p className="text-sm text-base-100">Max short-term pairs</p>
-              <p className="text-xs text-base-500">Recent conversation pairs kept in context</p>
+              <p className="text-sm text-base-100">Recent context Cozmo keeps handy</p>
+              <p className="text-xs text-base-500">How many recent exchanges stay immediately available, without needing to be recalled</p>
             </div>
-            <span className="text-sm font-mono text-base-200">{config?.memory?.max_short_term_pairs ?? 10}</span>
+            <input
+              type="number"
+              min={1}
+              value={config?.memory?.max_short_term_pairs ?? 10}
+              onChange={(e) => setMemoryPref('max_short_term_pairs', Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-16 bg-base-900 border border-base-700 rounded-lg px-2 py-1.5 text-sm text-base-200 text-right outline-none focus:border-accent/40"
+            />
           </div>
         </div>
       )}
@@ -172,7 +213,7 @@ function MemoryCard({ item, onDelete }: { item: any; onDelete: (id: string) => v
               <span className="text-[10px] text-base-500">{new Date(meta.timestamp).toLocaleDateString()}</span>
             )}
             {distance != null && (
-              <span className="text-[10px] text-base-600">score: {(1 - distance).toFixed(2)}</span>
+              <span className="text-[10px] text-base-600">{Math.round((1 - distance) * 100)}% match</span>
             )}
             {meta.turns && (
               <span className="text-[10px] text-base-600">{meta.turns} turns</span>

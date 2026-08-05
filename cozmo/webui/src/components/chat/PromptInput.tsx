@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { Paperclip, ArrowUp, Square, Mic, Plus, Folder, X } from 'lucide-react'
 import { Attachment } from '@/types'
 import type { SectionId } from '@/components/settings/SettingsModal'
@@ -54,14 +54,21 @@ interface Props {
   suggestion?: string
 }
 
-export function PromptInput({
+export interface PromptInputHandle {
+  /** Lets a drop target elsewhere in the conversation view (e.g. the whole
+   * message pane) feed files into the exact same upload path the paperclip
+   * button and paste-an-image flow already use — no separate upload logic. */
+  attachFiles: (files: FileList | File[]) => void
+}
+
+export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptInput({
   generating,
   disabled,
   onSend,
   onStop,
   onOpenSettings,
   suggestion,
-}: Props) {
+}, ref) {
   const [value, setValue] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [micState, setMicState] = useState<'idle' | 'listening' | 'recording'>('idle')
@@ -213,6 +220,8 @@ export function PromptInput({
     setAttachments(prev => [...prev, ...uploaded])
     setUploading(false)
   }, [])
+
+  useImperativeHandle(ref, () => ({ attachFiles: handleAttachFiles }), [handleAttachFiles])
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) {
@@ -424,4 +433,4 @@ export function PromptInput({
       </div>
     </div>
   )
-}
+})

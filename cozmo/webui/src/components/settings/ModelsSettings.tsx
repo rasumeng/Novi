@@ -1,14 +1,16 @@
-import { Plus, Trash2, Server, KeyRound, Brain } from 'lucide-react'
-import { BUILTIN_ROLES, PRESET_META } from './constants'
+import { Server, KeyRound } from 'lucide-react'
 import type { SettingsData } from './types'
+import type { ModelCatalogEntry } from '@/product/types'
+import { roleModelPatch, embeddingModelPatch } from '@/product/configLayer'
+import { ModelRolePicker } from './ModelRolePicker'
+import { ExpertModelConfig } from './ExpertModelConfig'
 
 interface Props {
   config: SettingsData | null
-  ollamaModels: string[]
+  catalog: ModelCatalogEntry[]
   availableModels: { name: string; provider: string }[]
   setConfig: (c: SettingsData) => void
   setDirty: (d: boolean) => void
-  lightweight: boolean
 }
 
 const allModelOptions = (models: { name: string; provider: string }[]): string[] => {
@@ -23,98 +25,102 @@ const allModelOptions = (models: { name: string; provider: string }[]): string[]
   return out
 }
 
-export function ModelsSettings({ config, ollamaModels, availableModels, setConfig, setDirty, lightweight }: Props) {
+export function ModelsSettings({ config, catalog, availableModels, setConfig, setDirty }: Props) {
   if (!config) return null
 
-  const llm = (config as any).llm || {}
-  const defaultModel = llm.default_model || ''
-  const llmRoles: Record<string, any> = llm.roles || {}
+  const llmRoles: Record<string, any> = config.llm?.roles || {}
+  const roleModel = (role: string) => {
+    const spec = llmRoles[role]
+    return (typeof spec === 'string' ? spec : spec?.model) || ''
+  }
 
-  const modelOptions = allModelOptions(availableModels)
-  const modelSet = new Set(modelOptions)
-
-  const setDefaultModel = (model: string) => {
-    setConfig({ ...config, llm: { ...llm, default_model: model } } as any)
+  const setRoleModel = (role: string, modelId: string) => {
+    setConfig({ ...config, ...roleModelPatch(config, role, modelId) })
     setDirty(true)
   }
 
-  const setRoleModel = (role: string, model: string) => {
-    const newRoles = { ...llmRoles }
-    if (model) {
-      newRoles[role] = { model }
-    } else {
-      delete newRoles[role]
-    }
-    setConfig({ ...config, llm: { ...llm, roles: newRoles }, models: { ...config.models, [role]: model } } as any)
+  const setEmbeddingModel = (modelId: string) => {
+    setConfig({ ...config, ...embeddingModelPatch(config, modelId) })
     setDirty(true)
   }
+
+  const providers = config.providers || {}
+  const ollamaUrl = providers.ollama?.url || config.ollama?.url || 'http://localhost:11434'
+  const openaiKeyEnv = providers.openai?.api_key_env || 'OPENAI_API_KEY'
+  const ollamaReasoning = (providers.ollama as { reasoning?: boolean } | undefined)?.reasoning !== false
 
   const setOllamaUrl = (url: string) => {
     setConfig({
       ...config,
       ollama: { ...(config.ollama || {}), url },
-      providers: { ...(config.providers || {}), default: config.providers?.default || 'ollama', ollama: { ...((config.providers as any)?.ollama || {}), url } },
-    } as any)
+      providers: { ...providers, default: providers.default || 'ollama', ollama: { ...providers.ollama, url } },
+    })
+    setDirty(true)
+  }
+
+  const setOllamaReasoning = (enabled: boolean) => {
+    setConfig({
+      ...config,
+      providers: { ...providers, default: providers.default || 'ollama', ollama: { ...providers.ollama, url: ollamaUrl, reasoning: enabled } },
+    })
     setDirty(true)
   }
 
   const setOpenaiKeyEnv = (env: string) => {
     setConfig({
       ...config,
-      providers: { ...(config.providers || {}), default: config.providers?.default || 'ollama', openai: { api_key_env: env } },
-    } as any)
+      providers: { ...providers, default: providers.default || 'ollama', openai: { api_key_env: env } },
+    })
     setDirty(true)
   }
 
   const setDefaultProvider = (provider: string) => {
-    setConfig({
-      ...config,
-      providers: { ...(config.providers || {}), default: provider },
-    } as any)
-    setDirty(true)
-  }
-
-  const providers = (config as any).providers || {}
-  const ollamaUrl = providers.ollama?.url || config.ollama?.url || 'http://localhost:11434'
-  const openaiKeyEnv = providers.openai?.api_key_env || 'OPENAI_API_KEY'
-  const ollamaReasoning = providers.ollama?.reasoning !== false
-
-  const setOllamaReasoning = (enabled: boolean) => {
-    setConfig({
-      ...config,
-      providers: { ...(config.providers || {}), default: config.providers?.default || 'ollama', ollama: { ...((config.providers as any)?.ollama || {}), url: ollamaUrl, reasoning: enabled } },
-    } as any)
+    setConfig({ ...config, providers: { ...providers, default: provider } })
     setDirty(true)
   }
 
   return (
     <div className="space-y-6">
-      {/* Default Model */}
-      <div>
-        <p className="text-sm text-base-100 font-medium mb-1">Default Model</p>
-        <p className="text-xs text-base-500 mb-2">Used for all roles unless overridden below.</p>
-        <select
-          value={defaultModel}
-          onChange={(e) => setDefaultModel(e.target.value)}
-          disabled={lightweight}
-          className="w-full bg-base-900 border border-base-700 rounded-lg px-3 py-2 text-sm text-base-200 outline-none focus:border-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <option value="">Select a model...</option>
-          {modelOptions.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-          {defaultModel && !modelSet.has(defaultModel) && (
-            <option value={defaultModel}>{defaultModel} (not found)</option>
-          )}
-        </select>
+      <div className="space-y-5">
+        <ModelRolePicker
+          label="Conversation Model"
+          description="Used for everyday chat and questions."
+          capability="chat"
+          currentModelId={roleModel('chat')}
+          catalog={catalog}
+          onChange={(id) => setRoleModel('chat', id)}
+        />
+        <ModelRolePicker
+          label="Coding Model"
+          description="Used when Cozmo writes or edits code."
+          capability="coding"
+          currentModelId={roleModel('coder')}
+          catalog={catalog}
+          onChange={(id) => setRoleModel('coder', id)}
+        />
+        <ModelRolePicker
+          label="Vision Model"
+          description="Used to understand images you share."
+          capability="vision"
+          currentModelId={roleModel('vision')}
+          catalog={catalog}
+          onChange={(id) => setRoleModel('vision', id)}
+        />
+        <ModelRolePicker
+          label="Embedding Model"
+          description="Powers Cozmo's memory and search in the background."
+          capability="embeddings"
+          currentModelId={(config.embedding as { model?: string } | undefined)?.model || ''}
+          catalog={catalog}
+          onChange={setEmbeddingModel}
+        />
       </div>
 
       {/* Providers */}
       <div>
         <p className="text-sm text-base-100 font-medium mb-1">Providers</p>
-        <p className="text-xs text-base-500 mb-2">Configure model backends.</p>
+        <p className="text-xs text-base-500 mb-2">Where Cozmo gets its models from.</p>
         <div className="space-y-2">
-          {/* Default provider selector */}
           <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
             <span className="text-sm text-base-200">Default Provider</span>
             <select
@@ -122,16 +128,15 @@ export function ModelsSettings({ config, ollamaModels, availableModels, setConfi
               onChange={(e) => setDefaultProvider(e.target.value)}
               className="bg-base-900 border border-base-700 rounded-lg px-2.5 py-1.5 text-xs text-base-200 outline-none focus:border-accent/40"
             >
-              {Object.keys(providers).filter(k => k !== 'default').map((p) => (
+              {Object.keys(providers).filter((p) => p !== 'default').map((p) => (
                 <option key={p} value={p}>{p}</option>
               ))}
-              {!Object.keys(providers).some(k => k !== 'default') && (
+              {!Object.keys(providers).some((p) => p !== 'default') && (
                 <option value="ollama">ollama</option>
               )}
             </select>
           </div>
 
-          {/* Ollama */}
           <div className="space-y-2 p-3 rounded-xl bg-base-800/50 border border-base-700">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -146,10 +151,7 @@ export function ModelsSettings({ config, ollamaModels, availableModels, setConfi
               />
             </div>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Brain size={14} className="text-base-500" />
-                <span className="text-xs text-base-400">Reasoning (thinking tokens)</span>
-              </div>
+              <span className="text-xs text-base-400">Show its thinking before answering</span>
               <button
                 type="button"
                 role="switch"
@@ -168,7 +170,6 @@ export function ModelsSettings({ config, ollamaModels, availableModels, setConfi
             </div>
           </div>
 
-          {/* OpenAI */}
           <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
             <div className="flex items-center gap-2">
               <KeyRound size={14} className="text-base-500" />
@@ -184,39 +185,12 @@ export function ModelsSettings({ config, ollamaModels, availableModels, setConfi
         </div>
       </div>
 
-      {/* Per-Role Overrides */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-sm text-base-100 font-medium">Per-Role Overrides</p>
-          <span className="text-xs text-base-500">Optional — leave as "Use default" to inherit</span>
-        </div>
-        <p className="text-xs text-base-500 mb-2">Pin specific models to roles when needed.</p>
-        <div className="space-y-1.5">
-          {BUILTIN_ROLES.map((role) => {
-            const roleSpec = llmRoles[role]
-            const currentModel = roleSpec?.model || roleSpec || ''
-            return (
-              <div key={role} className="flex items-center justify-between p-2.5 rounded-xl bg-base-800/30 border border-base-700">
-                <div>
-                  <p className="text-sm text-base-100">{PRESET_META[role]?.label ?? role}</p>
-                  <p className="text-xs text-base-500">{PRESET_META[role]?.desc ?? ''}</p>
-                </div>
-                <select
-                  value={currentModel}
-                  onChange={(e) => setRoleModel(role, e.target.value)}
-                  disabled={lightweight}
-                  className="min-w-[180px] bg-base-900 border border-base-700 rounded-lg px-2.5 py-1.5 text-xs text-base-200 font-mono outline-none focus:border-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="">Use default</option>
-                  {modelOptions.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </div>
-            )
-          })}
-        </div>
-      </div>
+      <ExpertModelConfig
+        config={config}
+        modelOptions={allModelOptions(availableModels)}
+        setConfig={setConfig}
+        setDirty={setDirty}
+      />
     </div>
   )
 }

@@ -1,22 +1,20 @@
-import { Cpu, Wrench, Brain, BookOpen, Puzzle, Cable, Settings, Shield, PuzzleIcon, Palette, Server, CpuIcon, Lightbulb, FileText, GitBranch, Globe, Database, Calendar, Mail, MessageSquare, Map, Search, Activity, Image, Cloud } from 'lucide-react'
+import { Cpu, Wrench, Brain, Puzzle, Cable, Settings, Server, Lightbulb, FileText, GitBranch, Globe, Database, Calendar, Mail, MessageSquare, Map, Search, Activity, Image, Cloud } from 'lucide-react'
 import type { SectionId } from './types'
 
+// Every section here renders real content — no placeholders. (Knowledge,
+// Integrations, and Appearance were removed rather than shipped as dead ends;
+// re-add them once there's an actual feature behind them.)
 export const SECTIONS: { id: SectionId; label: string; icon: React.ElementType }[] = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'models', label: 'Models', icon: Cpu },
   { id: 'memory', label: 'Memory', icon: Brain },
-  { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
   { id: 'tools', label: 'Tools', icon: Wrench },
-  { id: 'mcp', label: 'MCP Servers', icon: Cable },
+  { id: 'mcp', label: 'Connectors', icon: Cable },
   { id: 'skills', label: 'Skills', icon: Puzzle },
-  { id: 'integrations', label: 'Integrations', icon: PuzzleIcon },
-  { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'advanced', label: 'Advanced', icon: Server },
 ]
 
 export const BUILTIN_ROLES = ['classifier', 'router', 'orchestrator', 'chat', 'coder', 'planner', 'vision'] as const
-
-export const INTERNAL_KEYS = ['max_tokens'] as const
 
 export const PRESET_META: Record<string, { label: string; desc: string }> = {
   classifier: { label: 'Classifier', desc: 'Intent detection & message classification' },

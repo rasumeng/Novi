@@ -18,6 +18,7 @@ from pathlib import Path
 
 import lancedb
 
+from ... import config as cozmo_config
 from ...memory.lancedb_store import LanceStore
 from ...services.embedding import EmbeddingService
 from ..types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
@@ -59,10 +60,12 @@ def migrate(persist_dir: str | Path, embed_model: str | EmbeddingService | None 
     Returns {"migrated": n, "dropped_flat": bool}.
     """
     persist_dir = Path(persist_dir)
+    embed_cfg = dict(cozmo_config.load())
+    embed_cfg.setdefault("embedding", {})["model"] = embed_model or "nomic-embed-text"
     embed_service = (
         embed_model
         if isinstance(embed_model, EmbeddingService)
-        else EmbeddingService({"embedding": {"model": embed_model or "all-MiniLM-L6-v2"}})
+        else EmbeddingService(embed_cfg)
     )
 
     def embed(text: str) -> list[float]:

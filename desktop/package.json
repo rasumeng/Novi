@@ -1,0 +1,14 @@
+{
+  "name": "cozmo-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "webui": "npm --prefix ../cozmo/webui run dev",
+    "backend": "python -m cozmo webui"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

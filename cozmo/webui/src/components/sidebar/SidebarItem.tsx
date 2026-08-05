@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import clsx from 'clsx'
 import { Pin, PinOff, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import { Conversation } from '@/types'
+import { useConfirm } from '@/hooks/useConfirm'
 
 export function SidebarItem({
   conversation,
@@ -18,6 +19,7 @@ export function SidebarItem({
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
 }) {
+  const { confirm, dialog } = useConfirm()
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState(conversation.title)
@@ -44,8 +46,18 @@ export function SidebarItem({
     setRenaming(false)
   }
 
+  const handleDelete = async () => {
+    const ok = await confirm({
+      title: 'Delete this conversation?',
+      description: `"${conversation.title}" will be permanently deleted. This can't be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (ok) onDelete(conversation.id)
+  }
+
   return (
     <div className="relative group">
+      {dialog}
       <button
         onClick={onClick}
         className={clsx(
@@ -113,7 +125,7 @@ export function SidebarItem({
           </button>
           <div className="border-t border-base-700 my-1" />
           <button
-            onClick={(e) => { e.stopPropagation(); onDelete(conversation.id); setMenuOpen(false) }}
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); handleDelete() }}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-err hover:bg-base-800"
           >
             <Trash2 size={14} />

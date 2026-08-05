@@ -64,6 +64,7 @@ export default function App() {
             conversation={chat.active}
             connection={chat.connection}
             generating={chat.generating}
+            busyReason={chat.busyReason}
             inlineSteps={chat.inlineSteps}
             plan={chat.plan}
             permission={chat.permission}
