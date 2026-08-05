@@ -89,7 +89,7 @@ export function Conversation({
           <span className="text-base-100 font-medium">{conversation.title}</span>
         </div>
         <div className="flex items-center gap-1">
-          <NotificationBell runs={backgroundRuns} />
+          <NotificationBell/>
           <div className="flex items-center gap-1.5 text-[11px] text-base-500 ml-1">
             <span className={`w-1.5 h-1.5 rounded-full ${conn.dot}`} />
             {conn.text}
