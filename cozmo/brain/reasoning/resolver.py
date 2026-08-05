@@ -8,7 +8,7 @@ global knowledge, then raw conversations/memory.
     Brain.recall(query, context)
       1. resolve context      project → scenario        (Brain.resolve)
       2. load scenario        goal, status, summary, participants
-      3. traverse edges       scenario → its knowledge  (derived_from / contains)
+      3. traverse edges       scenario → its knowledge  (derived_from)
       4. score neighborhood   vector similarity within that subgraph
       5. sufficiency gate     conversations retrieved ONLY if steps 2-4 fail
 
@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from ..types import QueryContext, RecallItem, RecallResult, Scenario
+from ..types import KnowledgeHit, QueryContext, RecallItem, RecallResult, Scenario
 
 log = logging.getLogger("cozmo.brain.reasoning.resolver")
 
@@ -57,8 +57,8 @@ class LayeredRetrievalResolver:
     Args:
         load_scenario: ``(scenario_id) -> Scenario | None``
         query_knowledge: ``(query, scenario_id | None, k, distance_threshold)
-            -> list[dict]`` — scores knowledge within a scenario neighborhood
-            when ``scenario_id`` is given, whole-graph otherwise.
+            -> list[KnowledgeHit]`` — scores knowledge within a scenario
+            neighborhood when ``scenario_id`` is given, whole-graph otherwise.
         query_memory: ``(query, k, distance_threshold) -> list[dict]`` — raw
             conversation-derived retrieval used only when the gate fails.
         sufficiency: minimum best similarity score required to stop expanding.
@@ -69,16 +69,18 @@ class LayeredRetrievalResolver:
         self,
         *,
         load_scenario: Callable[[str], Optional[Scenario]],
-        query_knowledge: Callable[[str, Optional[str], int, Optional[float]], list[dict]],
+        query_knowledge: Callable[[str, Optional[str], int, Optional[float]], list[KnowledgeHit]],
         query_memory: Callable[[str, int, Optional[float]], list[dict]],
         sufficiency: float = 0.4,
         default_k: int = 5,
+        tiered: bool = False,
     ) -> None:
         self._load_scenario = load_scenario
         self._query_knowledge = query_knowledge
         self._query_memory = query_memory
         self._sufficiency = sufficiency
         self._default_k = default_k
+        self._tiered = tiered
 
     # ── public ──────────────────────────────────────────────────────────
 
@@ -120,6 +122,7 @@ class LayeredRetrievalResolver:
         scoped = self._query_knowledge(
             query, scenario_id=scenario_id, k=k, distance_threshold=threshold
         )
+        scoped = self._tier(scoped, scenario_id)
         best = _best_score(scoped)
         plan = _replace_plan(
             plan,
@@ -134,6 +137,7 @@ class LayeredRetrievalResolver:
             expanded = self._query_knowledge(
                 query, scenario_id=None, k=k, distance_threshold=threshold
             )
+            expanded = self._tier(expanded, scenario_id)
             best_global = _best_score(expanded)
             plan = _replace_plan(
                 plan,
@@ -178,16 +182,32 @@ class LayeredRetrievalResolver:
             log.warning("conversation/memory fallback failed", exc_info=True)
             return []
 
+    def _tier(
+        self, hits: list[KnowledgeHit], scenario_id: Optional[str]
+    ) -> list[KnowledgeHit]:
+        """Apply §5 lexicographic tiering when enabled (back-compat flag)."""
+        if not self._tiered:
+            return hits
+        from .tiering import tier_hits
 
-def _knowledge_items(rows: list[dict]) -> list[RecallItem]:
+        active = {scenario_id} if scenario_id else set()
+        return tier_hits(hits, active_scenario_ids=active)
+
+
+def _knowledge_items(hits: list[KnowledgeHit]) -> list[RecallItem]:
     return [
         RecallItem(
-            text=r.get("text", ""),
-            score=float(r.get("score", 0.0)),
+            text=hit.item.content,
+            score=float(hit.score),
             source="knowledge",
-            metadata=dict(r.get("metadata", {})),
+            metadata={
+                "kind": "knowledge",
+                "id": hit.item.id,
+                "scenario_id": hit.item.scenario_id,
+                "tags": hit.item.tags,
+            },
         )
-        for r in rows
+        for hit in hits
     ]
 
 
@@ -203,10 +223,10 @@ def _memory_items(rows: list[dict]) -> list[RecallItem]:
     ]
 
 
-def _best_score(rows: list[dict]) -> float:
-    if not rows:
+def _best_score(hits: list[KnowledgeHit]) -> float:
+    if not hits:
         return 0.0
-    return max(float(r.get("score", 0.0)) for r in rows)
+    return max(float(hit.score) for hit in hits)
 
 
 def _dedup_text(items: list[RecallItem]) -> list[RecallItem]:

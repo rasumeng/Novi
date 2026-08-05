@@ -47,7 +47,6 @@ class EdgeKind(str, Enum):
     SUPERSEDES = "supersedes"
     REFERENCES = "references"
     CONFLICTS_WITH = "conflicts_with"
-    CONTAINS = "contains"
 
 
 @dataclass
@@ -67,7 +66,8 @@ class KnowledgeItem:
     sources: tuple[str, ...] = ()
     scenario_id: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
-    embedding: Optional[list[float]] = None
+    last_seen_at: Optional[datetime] = None
+    importance: float = 0.0
 
 
 @dataclass
@@ -85,36 +85,6 @@ class Scenario:
     started_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
-
-
-@dataclass
-class Project:
-    """A project organizes scenarios and knowledge."""
-
-    id: str
-    name: str
-    root: Optional[str] = None
-    summary: str = ""
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-
-
-@dataclass
-class IdentityEntry:
-    """Accumulated, confidence-weighted evidence about the user.
-
-    Change is a ``supersedes`` edge, never an overwrite.
-    """
-
-    id: str
-    content: str
-    status: KnowledgeStatus = KnowledgeStatus.CANDIDATE
-    corroborations: int = 0
-    confirmed: bool = False
-    tags: tuple[str, ...] = ()
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-    superseded_by: Optional[str] = None
 
 
 @dataclass
@@ -167,6 +137,16 @@ class QueryContext:
 
 
 @dataclass
+class KnowledgeHit:
+    """A KnowledgeItem plus its retrieval score — what the knowledge layer
+    returns instead of flat dicts (Architecture Rule #5 object contract)."""
+
+    item: KnowledgeItem
+    score: float = 0.0
+    distance: float = 1.0
+
+
+@dataclass
 class RecallItem:
     """One retrieved item, source-tagged for transparent provenance."""
 
@@ -201,3 +181,6 @@ class ReflectionReport:
     promotions: int = 0
     corroborated: int = 0
     superseded: int = 0
+    conflicts: int = 0
+    decays: int = 0
+    touched_ids: tuple[str, ...] = ()

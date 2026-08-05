@@ -22,12 +22,15 @@ class PromotionOutcome:
     ``new_status`` is the status to write (equal to the current one when
     unchanged). ``supersedes`` is the edge to add when a newly verified claim
     replaces an older verified item (old → new, with the old marked
-    ``superseded``).
+    ``superseded``). ``conflicts`` is the parallel ``conflicts_with`` edge for
+    the same pair — written whenever a verified claim supersedes a different
+    prior verified claim, so contradictions are traceable as typed edges.
     """
 
     item: KnowledgeItem
     new_status: KnowledgeStatus
     supersedes: Optional[Relationship] = None
+    conflicts: Optional[Relationship] = None
 
 
 # Corroboration count required to verify without an explicit confirmation.
@@ -48,8 +51,9 @@ def decide(
       - any corroboration → ``corroborated``
       - otherwise the item keeps its current status (usually ``candidate``)
       - when an item reaches ``verified`` and replaces an older verified claim
-        with different content, the old item is marked ``superseded`` and a
-        ``supersedes`` edge is written from the new item to the old one.
+        with different content, the old item is marked ``superseded`` and two
+        edges are written from the new item to the old one: ``supersedes`` and
+        ``conflicts_with``.
     """
     current = item.status
     if confirmed or corroborations >= _VERIFY_CORROBORATIONS:
@@ -60,6 +64,7 @@ def decide(
         new_status = current
 
     supersedes: Optional[Relationship] = None
+    conflicts: Optional[Relationship] = None
     if (
         new_status == KnowledgeStatus.VERIFIED
         and existing_verified is not None
@@ -73,8 +78,13 @@ def decide(
                 target_id=existing_verified.id,
                 kind=relationship_kind,
             )
+            conflicts = Relationship(
+                source_id=item.id,
+                target_id=existing_verified.id,
+                kind=EdgeKind.CONFLICTS_WITH,
+            )
 
-    return PromotionOutcome(item=item, new_status=new_status, supersedes=supersedes)
+    return PromotionOutcome(item=item, new_status=new_status, supersedes=supersedes, conflicts=conflicts)
 
 
 def _tokens(text: str) -> frozenset[str]:

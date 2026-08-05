@@ -100,6 +100,12 @@ def _tag_sentence(sentence: str) -> tuple[str, ...]:
 
 
 def _dedup(claims: list["ExtractedClaim"]) -> list["ExtractedClaim"]:
+    """Drop exact/near duplicates *within one batch*.
+
+    Batch-scoped only: cross-batch consolidation (a claim restating an existing
+    corpus item corroborates it instead of inserting a sibling) lives in the
+    KnowledgeLayer, not here.
+    """
     seen: dict[str, ExtractedClaim] = {}
     for claim in claims:
         key = _normalize(claim.statement)

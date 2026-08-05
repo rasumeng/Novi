@@ -11,16 +11,15 @@ storage migration phases.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, Protocol
 
 from ..types import (
     ConversationRecord,
     EdgeKind,
-    IdentityEntry,
     KnowledgeForm,
     KnowledgeItem,
     KnowledgeStatus,
-    Project,
     Relationship,
     Scenario,
     ScenarioStatus,
@@ -29,19 +28,28 @@ from ..types import (
 
 
 class KnowledgeStore(Protocol):
-    """Persistence for knowledge items."""
+    """Persistence for knowledge items — the single contract VectorStore implements.
 
-    def add(self, item: KnowledgeItem) -> str: ...
+    The layer depends on this protocol only. It returns flat rows (
+    ``list[dict]`` via ``add_many``/``query``/``list_all``) so the layer decides
+    the object boundary (KnowledgeHit); storage never owns domain objects.
+    """
 
-    def add_many(self, items: list[KnowledgeItem]) -> list[str]: ...
+    def add(self, item: KnowledgeItem, source_kind: str = "extraction") -> str: ...
+
+    def add_many(
+        self, items: list[KnowledgeItem], source_kind: str = "extraction"
+    ) -> list[str]: ...
 
     def query(
         self,
         text: str,
         k: int = 5,
         distance_threshold: Optional[float] = 0.5,
-        tags: Optional[tuple[str, ...]] = None,
-        forms: Optional[tuple[KnowledgeForm, ...]] = None,
+        scenario_id: Optional[str] = None,
+        source_kind: Optional[str] = None,
+        forms: Optional[tuple[KnowledgeForm, ...] | list[KnowledgeForm]] = None,
+        tags: Optional[tuple[str, ...] | list[str]] = None,
     ) -> list[dict]: ...
 
     def get(self, item_id: str) -> Optional[dict]: ...
@@ -49,6 +57,15 @@ class KnowledgeStore(Protocol):
     def delete(self, item_id: str) -> bool: ...
 
     def count(self) -> int: ...
+
+    def list_all(self, limit: int = 100) -> list[dict]: ...
+
+    def update_status(self, item_id: str, status: KnowledgeStatus) -> bool: ...
+
+    def update_last_seen(self, item_id: str, last_seen_at: datetime) -> bool: ...
+
+    @classmethod
+    def item_from_row(cls, row: dict) -> KnowledgeItem: ...
 
 
 class ScenarioStore(Protocol):
@@ -65,26 +82,6 @@ class ScenarioStore(Protocol):
     def list(self, limit: int = 100) -> tuple[Scenario, ...]: ...
 
     def count(self) -> int: ...
-
-
-class ProjectStore(Protocol):
-    """Persistence for projects."""
-
-    def put(self, project: Project) -> None: ...
-
-    def get(self, project_id: str) -> Optional[Project]: ...
-
-    def list(self) -> tuple[Project, ...]: ...
-
-
-class IdentityStore(Protocol):
-    """Persistence for accumulated identity evidence."""
-
-    def put(self, entry: IdentityEntry) -> None: ...
-
-    def get(self, entry_id: str) -> Optional[IdentityEntry]: ...
-
-    def list(self, status: Optional[KnowledgeStatus] = None) -> tuple[IdentityEntry, ...]: ...
 
 
 class ConversationStore(Protocol):

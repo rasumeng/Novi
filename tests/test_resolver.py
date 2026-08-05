@@ -2,7 +2,14 @@
 
 from cozmo.brain.brain import Brain
 from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
-from cozmo.brain.types import QueryContext, Scenario, ScenarioStatus
+from cozmo.brain.types import (
+    KnowledgeForm,
+    KnowledgeHit,
+    KnowledgeItem,
+    QueryContext,
+    Scenario,
+    ScenarioStatus,
+)
 
 
 class FakeBackend:
@@ -10,7 +17,7 @@ class FakeBackend:
 
     def __init__(self):
         self.scenarios = {}
-        self.knowledge = []  # dict rows with scenario_id key
+        self.knowledge = []  # KnowledgeHit rows with scenario_id key
         self.memory = []
         self.knowledge_calls = []
         self.memory_calls = []
@@ -22,7 +29,7 @@ class FakeBackend:
 
     def query_scoped(self, query, scenario_id=None, k=5, distance_threshold=0.5):
         self.knowledge_calls.append((query, scenario_id, k, distance_threshold))
-        return [r for r in self.knowledge if r.get("scenario_id") == scenario_id]
+        return [h for h in self.knowledge if h.item.scenario_id == scenario_id]
 
     def query_memory(self, query, k, threshold):
         self.memory_calls.append((query, k, threshold))
@@ -41,13 +48,17 @@ def make_scenario(sid="scn-1", summary="Working on the Cozmo build."):
 
 
 def knowledge_row(sid, score, text):
-    return {
-        "id": f"kn-{score}",
-        "text": text,
-        "score": score,
-        "scenario_id": sid,
-        "metadata": {},
-    }
+    return KnowledgeHit(
+        item=KnowledgeItem(
+            id=f"kn-{score}",
+            content=text,
+            form=KnowledgeForm.ATOMIC,
+            confidence=score,
+            scenario_id=sid,
+        ),
+        score=score,
+        distance=1.0 - score,
+    )
 
 
 def memory_row(text, score=0.3):
@@ -184,7 +195,7 @@ class FakeKnowledgeLayer:
         self.rows = rows
 
     def query_scoped(self, text, *, scenario_id=None, k=5, distance_threshold=0.5, forms=None, tags=None):
-        return [r for r in self.rows if r.get("scenario_id") == scenario_id]
+        return [h for h in self.rows if h.item.scenario_id == scenario_id]
 
 
 class FakeScenarioLayer:

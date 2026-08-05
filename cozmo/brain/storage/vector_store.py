@@ -4,9 +4,8 @@ Phase D: metadata is no longer the filter medium. KnowledgeItems are stored
 with promoted typed columns (form, status, confidence, tags, sources,
 scenario_id, source_kind, created_at). Filters are column predicates
 (scenario_id equality, source_kind equality, form IN, list_contains on tags)
-plus vector similarity. Rows are still returned with a ``metadata`` dict so
-existing consumers (MemoryManager merge shim, MemoryRetrievalSource) keep
-working unchanged.
+plus vector similarity. Query rows still carry a ``metadata`` dict only for
+legacy consumers (runtime MemoryRetrievalSource, webui, tools).
 """
 
 from __future__ import annotations
@@ -26,6 +25,10 @@ from ..types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 log = logging.getLogger("cozmo.brain.storage.vector")
 
 _TABLE_NAME = "knowledge_items"
+
+# Columns added after initial table creation; _ensure_columns migrates
+# existing tables by adding any absent column with null values.
+_NEW_COLUMNS = {"last_seen_at": "null::string", "importance": "null::string"}
 
 
 class VectorStore:
@@ -66,7 +69,7 @@ class VectorStore:
     def _open_or_create(self):
         try:
             table = self._db.open_table(self._table_name)
-            return table
+            return self._ensure_columns(table)
         except Exception:
             schema = pa.schema(
                 [
@@ -80,10 +83,28 @@ class VectorStore:
                     pa.field("scenario_id", pa.string()),
                     pa.field("source_kind", pa.string()),
                     pa.field("created_at", pa.string()),
+                    pa.field("last_seen_at", pa.string()),
+                    pa.field("importance", pa.string()),
                     pa.field("vector", pa.list_(pa.float32(), self._embed_dim)),
                 ]
             )
             return self._db.create_table(self._table_name, schema=schema)
+
+    @staticmethod
+    def _ensure_columns(table) -> object:
+        """Add any new typed columns to an existing table (Phase F migration).
+
+        Backward-compatible: opens tables created before a column existed and
+        adds the absent column with null values. Returns the table.
+        """
+        existing = set(table.schema.names)
+        add = {name: dtype for name, dtype in _NEW_COLUMNS.items() if name not in existing}
+        if add:
+            try:
+                table.add_columns(add)
+            except Exception:
+                log.warning("failed to add columns %s to existing table", sorted(add), exc_info=True)
+        return table
 
     # ── writes ─────────────────────────────────────────────────────────
 
@@ -112,6 +133,8 @@ class VectorStore:
                     "scenario_id": item.scenario_id,
                     "source_kind": source_kind,
                     "created_at": item.created_at.isoformat(),
+                    "last_seen_at": (item.last_seen_at or item.created_at).isoformat(),
+                    "importance": f"{item.importance:.6f}",
                     "vector": self._embed(item.content),
                 }
             )
@@ -192,6 +215,22 @@ class VectorStore:
             log.warning("failed to update status for %s", item_id, exc_info=True)
             return False
 
+    def update_last_seen(self, item_id: str, last_seen_at: datetime) -> bool:
+        """Record a re-observation of an item (consolidation, Phase F).
+
+        Append-only corroboration: advances ``last_seen_at`` without creating a
+        sibling row. Returns False when the update or the item is absent.
+        """
+        try:
+            self._table.update(
+                where=f"id = '{_esc(item_id)}'",
+                values={"last_seen_at": last_seen_at.isoformat()},
+            )
+            return True
+        except Exception:
+            log.warning("failed to update last_seen for %s", item_id, exc_info=True)
+            return False
+
     def count(self) -> int:
         try:
             return self._table.count_rows()
@@ -208,6 +247,7 @@ class VectorStore:
 
     def _row(self, r: dict) -> dict:
         dist = r.get("_distance", 1.0)
+        last_seen = r.get("last_seen_at") or r.get("created_at", "")
         return {
             "id": r.get("id", ""),
             "text": r.get("text", ""),
@@ -217,6 +257,8 @@ class VectorStore:
             "sources": list(r.get("sources", ()) or ()),
             "scenario_id": r.get("scenario_id"),
             "source_kind": r.get("source_kind", ""),
+            "last_seen_at": last_seen,
+            "importance": r.get("importance", "0.0"),
             "metadata": {
                 "kind": "knowledge",
                 "form": r.get("form", KnowledgeForm.ATOMIC.value),
@@ -227,6 +269,8 @@ class VectorStore:
                 "scenario_id": r.get("scenario_id"),
                 "source_kind": r.get("source_kind", ""),
                 "created_at": r.get("created_at", ""),
+                "last_seen_at": last_seen,
+                "importance": r.get("importance", "0.0"),
             },
             "distance": dist,
             "score": 1.0 - dist,
@@ -255,18 +299,31 @@ class VectorStore:
 
     @classmethod
     def item_from_row(cls, row: dict) -> KnowledgeItem:
-        meta = row.get("metadata", {})
-        created = meta.get("created_at")
+        created = row.get("created_at")
+        if created is None:
+            created = row.get("metadata", {}).get("created_at")
+        last_seen = row.get("last_seen_at") or created
+        if last_seen is None:
+            last_seen = row.get("metadata", {}).get("last_seen_at")
+        imp = row.get("importance")
+        if imp is None:
+            imp = row.get("metadata", {}).get("importance", "0.0")
+        try:
+            importance = float(imp or 0.0)
+        except (TypeError, ValueError):
+            importance = 0.0
         return KnowledgeItem(
             id=row.get("id", ""),
-            form=KnowledgeForm(meta.get("form", KnowledgeForm.ATOMIC.value)),
+            form=KnowledgeForm(row.get("form", KnowledgeForm.ATOMIC.value)),
             content=row.get("text", ""),
-            confidence=float(meta.get("confidence", 0.0)),
-            status=KnowledgeStatus(meta.get("status", KnowledgeStatus.CANDIDATE.value)),
-            tags=tuple(meta.get("tags", ())),
-            sources=tuple(meta.get("sources", ())),
-            scenario_id=meta.get("scenario_id"),
+            confidence=float(row.get("confidence", 0.0)),
+            status=KnowledgeStatus(row.get("status", KnowledgeStatus.CANDIDATE.value)),
+            tags=tuple(row.get("tags", ()) or ()),
+            sources=tuple(row.get("sources", ()) or ()),
+            scenario_id=row.get("scenario_id"),
             created_at=datetime.fromisoformat(created) if created else None,
+            last_seen_at=datetime.fromisoformat(last_seen) if last_seen else None,
+            importance=importance,
         )
 
 

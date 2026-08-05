@@ -20,6 +20,7 @@ from datetime import datetime
 
 CONVERSATION_OBSERVED = "conversation.observed"
 KNOWLEDGE_EXTRACTED = "knowledge.extracted"
+KNOWLEDGE_PROMOTED = "knowledge.promoted"
 
 
 @dataclass(frozen=True)
@@ -60,4 +61,27 @@ class KnowledgeExtracted:
             "conversation_id": self.conversation_id,
             "scenario_id": self.scenario_id,
             "summary": self.summary,
+        }
+
+
+@dataclass(frozen=True)
+class KnowledgePromoted:
+    """Emitted after a reflection pass promotes/demotes knowledge.
+
+    Carries canonical Brain identifiers only — never storage rows or ids.
+    """
+
+    item_ids: tuple[str, ...]
+    promotions: int = 0
+    corroborated: int = 0
+    superseded: int = 0
+    conflicts: int = 0
+
+    def to_payload(self) -> dict:
+        return {
+            "item_ids": list(self.item_ids),
+            "promotions": self.promotions,
+            "corroborated": self.corroborated,
+            "superseded": self.superseded,
+            "conflicts": self.conflicts,
         }

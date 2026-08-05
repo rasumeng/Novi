@@ -149,6 +149,17 @@ class StubProjectIndex:
         self.root = root
 
 
+class StubQueryableProject:
+    def __init__(self, root, text):
+        self.root = root
+        self.text = text
+        self.queries = []
+
+    def query(self, text, k=5):
+        self.queries.append((text, k))
+        return self.text
+
+
 class StubRelationshipStore:
     def __init__(self, fail=False):
         self.edges = []
@@ -269,14 +280,14 @@ def test_observe_extracts_after_batch():
         scenario_layer=StubScenarioLayer(),
     )
     for i in range(5):
-        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}", conversation_id="conv-batch"))
 
     kinds = [k for k, _ in bus.events]
     assert kinds.count("conversation.observed") == 5
     assert "knowledge.extracted" in kinds
     extracted = next(d for k, d in bus.events if k == "knowledge.extracted")
     assert extracted["knowledge_ids"] == ["kn-0"]
-    assert extracted["conversation_id"].startswith("conv-")
+    assert extracted["conversation_id"] == "conv-batch"
     assert extracted["scenario_id"] == "scn-1"
     assert len(store.links) == 1
 
@@ -308,7 +319,7 @@ def test_observe_extraction_failure_keeps_persist():
         scenario_layer=StubScenarioLayer(),
     )
     for i in range(5):
-        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}", conversation_id="conv-fail1"))
 
     kinds = [k for k, _ in bus.events]
     assert kinds.count("conversation.observed") == 5
@@ -328,7 +339,7 @@ def test_observe_knowledge_write_failure_keeps_persist():
         scenario_layer=StubScenarioLayer(),
     )
     for i in range(5):
-        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}", conversation_id="conv-fail2"))
     kinds = [k for k, _ in bus.events]
     assert kinds.count("conversation.observed") == 5
     assert "knowledge.extracted" not in kinds
@@ -381,7 +392,7 @@ def test_observe_writes_provenance_edges():
         relationship_store=rels,
     )
     for i in range(5):
-        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}", conversation_id="conv-provenance"))
 
     assert len(rels.edges) == 4
     derived = [e for e in rels.edges if e.kind.value == "derived_from"]
@@ -409,7 +420,7 @@ def test_observe_edge_failure_keeps_extraction():
         relationship_store=rels,
     )
     for i in range(5):
-        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}"))
+        brain.observe(Turn(user=f"u{i}", assistant=f"a{i}", conversation_id="conv-edge"))
     kinds = [k for k, _ in bus.events]
     assert "knowledge.extracted" in kinds
     assert kinds.count("conversation.observed") == 5
@@ -448,6 +459,78 @@ def test_recall_packages_query_results():
     assert item.score == 0.8
     assert item.source == "memory"
     assert item.metadata == {"type": "preference"}
+
+
+def test_recall_memory_compat_adapter_flat_rows():
+    mem = StubMemory()
+    mem._results = [
+        {"id": "1", "text": "prefers python", "metadata": {"type": "preference"}, "score": 0.8}
+    ]
+    brain = Brain(memory=mem)
+    rows = brain.retrieve_memory_rows(
+        "what do i prefer", k=3, distance_threshold=0.4, memory_types=["fact"]
+    )
+    assert len(rows) == 1
+    assert rows[0]["text"] == "prefers python"
+    assert rows[0]["score"] == 0.8
+    assert rows[0]["metadata"] == {"type": "preference"}
+    assert rows[0]["distance"] == pytest.approx(0.2)
+    assert mem.queries == [("what do i prefer", 3, 0.4, ["fact"])]
+
+
+def test_recall_compat_adapter_none_memory_types_is_none():
+    mem = StubMemory()
+    Brain(memory=mem).retrieve_memory_rows("hello")
+    assert mem.queries == [("hello", 5, 0.5, None)]
+
+
+def test_recall_without_resolver_routes_through_query():
+    mem = StubMemory()
+    mem._results = [{"text": "prefers go", "score": 0.9, "metadata": {"type": "preference"}}]
+    brain = Brain(memory=mem)
+    result = brain.recall("what do i prefer")
+    assert mem.queries == [("what do i prefer", 5, 0.5, None)]
+    assert result.items[0].source == "memory"
+
+
+def test_retrieve_knowledge_delegates_to_index():
+    class _Index:
+        def __init__(self):
+            self.calls = []
+        def search(self, query, k=5, rerank=True):
+            self.calls.append((query, k, rerank))
+            return [{"id": "kb-1", "text": "chunk", "score": 0.9}]
+    index = _Index()
+    brain = Brain(memory=StubMemory(), knowledge_index=index)
+    rows = brain.retrieve_knowledge("build", k=4)
+    assert rows == [{"id": "kb-1", "text": "chunk", "score": 0.9}]
+    assert index.calls == [("build", 4, True)]
+
+
+def test_retrieve_knowledge_empty_without_index():
+    assert Brain(memory=StubMemory()).retrieve_knowledge("build") == []
+
+
+def test_retrieve_project_delegates_to_index():
+    idx = StubQueryableProject("/root", "src/foo.py: def foo()")
+    brain = Brain(memory=StubMemory(), project_index=idx)
+    text = brain.retrieve_project("how does foo work", k=3)
+    assert text == "src/foo.py: def foo()"
+    assert idx.queries == [("how does foo work", 3)]
+    assert brain.project_root == "/root"
+
+
+def test_retrieve_project_empty_without_index():
+    brain = Brain(memory=StubMemory())
+    assert brain.retrieve_project("q") == ""
+    assert brain.project_root == ""
+
+
+def test_set_project_index_propagates_retrieval():
+    idx = StubProjectIndex("/old")
+    brain = Brain(memory=StubMemory(), project_index=idx)
+    brain.set_project_index(StubProjectIndex("/new"))
+    assert brain.project_root == "/new"
 
 
 def test_learn_delegates_to_memory():
@@ -618,7 +701,6 @@ def test_knowledge_item_defaults():
     assert item.tags == ()
     assert item.sources == ()
     assert item.scenario_id is None
-    assert item.embedding is None
 
 
 def test_edge_kinds_bounded():
@@ -628,7 +710,6 @@ def test_edge_kinds_bounded():
         "supersedes",
         "references",
         "conflicts_with",
-        "contains",
     }
 
 

@@ -233,7 +233,50 @@ def test_reasoning_tier_has_no_storage_imports():
         )
 
 
-# ── Test 6: Brain no longer calls legacy memory write ──────────────────
+# ── Test 6: Rule #5 — knowledge is append-only ──────────────────────────
+
+def test_brain_documents_append_only_rule():
+    """Rule #5: KnowledgeItems are immutable historical observations.
+
+    Change is a supersedes edge, never an overwrite. The Brain module
+    docstring must state this contract so future retrieval/brain-intelligence
+    work builds against frozen semantics.
+    """
+    brain_file = COZMO_SRC / "brain" / "brain.py"
+    text = brain_file.read_text("utf-8", errors="replace")
+    if "append-only" not in text:
+        raise AssertionError(
+            "brain.py must document Architecture Rule #5 (append-only knowledge)"
+        )
+
+
+def test_brain_does_not_register_in_place_mutation():
+    """Rule #5: no producer may mutate a persisted KnowledgeItem in place.
+
+    The write pipeline persists new items and supersedes edges only. A direct
+    ``.confidence =`` / ``.content =`` assignment on a stored item is the
+    anti-pattern this rule forbids.
+    """
+    brain_dir = COZMO_SRC / "brain"
+    violations = []
+    for pyfile in brain_dir.rglob("*.py"):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if re.search(r"\.(confidence|content)\s*=\s*$|\.(confidence|content)\s*=", line):
+                if "assert" in line or "==" in line or "!=" in line or "param" in line or "field=" in line:
+                    continue
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "In-place KnowledgeItem mutation found (Rule #5):\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Test 7: Brain no longer calls legacy memory write ──────────────────
 
 def test_brain_observe_does_not_call_legacy_memory():
     """Phase C: the legacy add_interaction write is gone from Brain.

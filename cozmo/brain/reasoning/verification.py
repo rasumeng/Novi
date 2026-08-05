@@ -1,7 +1,8 @@
 """Verification — corroboration counting and confirmation detection (pure).
 
 Phase F. The Identity layer is accumulated evidence, not configuration:
-a single observation is a ``candidate``; observing the same claim again
+a single observation is a ``candidate`` — one mention is never enough to
+believe a claim (single-observation rule); observing the same claim again
 ``corroborates`` it; an explicit user confirmation ("remember that I...")
 ``verifies`` it instantly. This module does that reasoning on Brain objects —
 no storage imports.
@@ -10,8 +11,9 @@ no storage imports.
 from __future__ import annotations
 
 import re
+from typing import Optional
 
-from ..types import KnowledgeItem
+from ..types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 
 # Explicit-confirmation markers. When a newly acquired claim is phrased as
 # one of these, it promotes directly to verified.
@@ -67,3 +69,38 @@ def corroboration(items: list[KnowledgeItem], index: int) -> int:
         if common / max(len(base), len(other_tokens)) >= 0.5:
             count += 1
     return count
+
+
+def find_near_duplicate(
+    items: list[KnowledgeItem], content: str
+) -> Optional[KnowledgeItem]:
+    """Return the existing ATOMIC, non-superseded item that restates ``content``.
+
+    Cross-corpus consolidation helper: a repeated claim corroborates the
+    nearest matching item instead of becoming a sibling row. Mirrors the
+    near-duplicate rule in ``corroboration`` (>= 2 shared terms, overlap ratio
+    >= 0.5). Composite summaries and already-superseded items are never
+    dedup targets — a fresh claim must not collapse into a summary or an
+    archived history row.
+    """
+    base = tokens(content)
+    if not base:
+        return None
+    best: Optional[KnowledgeItem] = None
+    best_ratio = 0.0
+    for item in items:
+        if item.form is not KnowledgeForm.ATOMIC:
+            continue
+        if item.status is KnowledgeStatus.SUPERSEDED:
+            continue
+        other = tokens(item.content)
+        if not other:
+            continue
+        common = len(base & other)
+        if common < 2:
+            continue
+        ratio = common / max(len(base), len(other))
+        if ratio >= 0.5 and ratio > best_ratio:
+            best = item
+            best_ratio = ratio
+    return best
