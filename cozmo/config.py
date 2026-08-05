@@ -52,8 +52,8 @@ DEFAULT_CONFIG = {
         "use_llm": False,
     },
     "workspace": {
-        "path": "./workspace",
-        "knowledge": "./knowledge",
+        "path": "~/.cozmo/workspace",
+        "knowledge": "~/.cozmo/knowledge",
         "git_repo": "",
     },
     "personality": "",
@@ -318,8 +318,12 @@ def _resolve_paths(cfg: dict) -> dict:
     if isinstance(workspace, dict):
         for key in ("path", "knowledge"):
             value = workspace.get(key)
-            if value:
-                workspace[key] = str(Path(value).expanduser().resolve())
+            if not value:
+                continue
+            p = Path(value).expanduser()
+            if not p.is_absolute():
+                p = CONFIG_DIR / p
+            workspace[key] = str(p.resolve())
     return cfg
 
 

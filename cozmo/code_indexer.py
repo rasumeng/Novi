@@ -1,3 +1,5 @@
+import hashlib
+
 from . import config as cozmo_config
 from pathlib import Path
 from .memory.lancedb_store import LanceStore
@@ -25,8 +27,9 @@ class ProjectIndex:
         def embed(text: str) -> list[float]:
             return embed_service.encode(text, normalize=True)
 
+        project_key = hashlib.sha1(str(self.root).encode("utf-8")).hexdigest()[:12]
         self.store = LanceStore(
-            uri=str(self.root / ".cozmo" / "project_index"),
+            uri=str(Path.home() / ".cozmo" / "project_index" / project_key),
             table_name="project_index",
             embed_func=embed,
             embed_dim=embed_service.dimension,

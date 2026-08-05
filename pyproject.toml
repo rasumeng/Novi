@@ -54,5 +54,12 @@ Repository = "https://github.com/rasumeng/cozmo"
 [tool.setuptools.packages.find]
 include = ["cozmo*"]
 
+[tool.setuptools.package-data]
+cozmo = [
+    "webui/dist/*",
+    "webui/dist/**/*",
+    "default_skills/**/*",
+]
+
 [project.scripts]
 cozmo = "cozmo.cli:main"
