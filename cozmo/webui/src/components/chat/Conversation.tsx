@@ -10,6 +10,7 @@ import { InlinePermissionCard } from './InlinePermissionCard'
 import { ActivityPanel } from './ActivityPanel'
 import { ProjectContextBar } from './ProjectContextBar'
 import { NotificationBell } from './NotificationBell'
+import { GlobalActivityIndicator } from './GlobalActivityIndicator'
 import { PromptInput } from './PromptInput'
 import { LandingPage } from './LandingPage'
 import { CONNECTION_LABEL } from './connectionStatus'
@@ -37,6 +38,10 @@ interface Props {
   onRejectPlan: () => void
   onAnswerPermission: (allowed: boolean) => void
   onOpenSettings?: (section: SectionId) => void
+  /** Title of whichever conversation owns the current generation, or null when idle. */
+  workingActivityTitle?: string | null
+  /** Item 2: open a conversation (e.g. from a notification). */
+  onSelectConversation?: (id: string) => void
 }
 
 export function Conversation({
@@ -57,6 +62,8 @@ export function Conversation({
   onRejectPlan,
   onAnswerPermission,
   onOpenSettings,
+  workingActivityTitle,
+  onSelectConversation,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
@@ -89,7 +96,10 @@ export function Conversation({
           <span className="text-base-100 font-medium">{conversation.title}</span>
         </div>
         <div className="flex items-center gap-1">
-          <NotificationBell/>
+          <NotificationBell onSelectConversation={onSelectConversation} />
+          {workingActivityTitle && (
+            <GlobalActivityIndicator isActiveConversation={generating} title={workingActivityTitle} />
+          )}
           <div className="flex items-center gap-1.5 text-[11px] text-base-500 ml-1">
             <span className={`w-1.5 h-1.5 rounded-full ${conn.dot}`} />
             {conn.text}

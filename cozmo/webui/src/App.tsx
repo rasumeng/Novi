@@ -34,6 +34,19 @@ export default function App() {
     setSettingsOpen(true)
   }, [])
 
+  // Item 2: navigate to a conversation from the notification center. Reuses
+  // the existing conversation state directly — no duplicated navigation logic.
+  const handleSelectConversation = useCallback((id: string) => {
+    chat.setActiveId(id)
+    setActiveSection('conversations')
+  }, [chat])
+
+  // Item 1: source for the global activity pill — whichever conversation owns
+  // the in-flight generation, not the one on screen.
+  const workingActivityTitle = chat.generatingConversationId
+    ? chat.generatingConversationTitle
+    : null
+
   const renderSection = () => {
     switch (activeSection) {
       case 'projects':
@@ -78,6 +91,8 @@ export default function App() {
             onRejectPlan={() => chat.answerPlan(false)}
             onAnswerPermission={chat.answerPermission}
             onOpenSettings={handleOpenSettings}
+            workingActivityTitle={workingActivityTitle}
+            onSelectConversation={handleSelectConversation}
           />
         )
     }

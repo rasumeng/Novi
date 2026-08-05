@@ -70,6 +70,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   suggestion,
 }, ref) {
   const [value, setValue] = useState('')
+  const [dragActive, setDragActive] = useState(false)
+  const dragDepthRef = useRef(0)
   const [menuOpen, setMenuOpen] = useState(false)
   const [micState, setMicState] = useState<'idle' | 'listening' | 'recording'>('idle')
   const micStateRef = useRef<'idle' | 'listening' | 'recording'>('idle')
@@ -324,8 +326,50 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
     e.target.value = ''
   }, [onSend])
 
+  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (!e.dataTransfer.types.includes('Files')) return
+    dragDepthRef.current += 1
+    setDragActive(true)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setDragActive(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    dragDepthRef.current = 0
+    setDragActive(false)
+    const files = e.dataTransfer.files
+    // Files only. Cozmo's own `disable_drag_drop_handler()` in the Tauri shell
+    // already strips non-file payloads; this guard keeps the browser path (used
+    // by preview tooling) from swallowing plain-drag bookmarks/text.
+    if (files && files.length > 0) handleAttachFiles(files)
+  }, [handleAttachFiles])
+
   return (
-    <div className="rounded-2xl border border-base-700 bg-base-900 shadow-panel focus-within:border-base-600 transition-colors">
+    <div
+      className="relative rounded-2xl border border-base-700 bg-base-900 shadow-panel focus-within:border-base-600 transition-colors"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragActive && (
+        <div className="pointer-events-none absolute inset-0 z-20 rounded-2xl border-2 border-dashed border-accent bg-accent/10 flex items-center justify-center">
+          <span className="px-4 py-2 rounded-full bg-base-850 border border-accent/40 text-[13px] text-accent font-medium shadow-panel">
+            Drop to attach
+          </span>
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={value}
