@@ -3,6 +3,7 @@ import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunI
 import { CozmoClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations } from '@/services/cozmo'
 import { useToast } from '@/hooks/useToast'
 import { useNotificationCenter } from '@/hooks/useNotificationCenter'
+import { notifyPolicy } from '@/notifications/policy'
 import { notifyIfUnfocused } from '@/native/tauri'
 
 export interface PermissionRequest {
@@ -330,14 +331,12 @@ export function useCozmoChat() {
           })
 
           if (justFinished) {
-            const label = justFinished.goal.slice(0, 60)
-            if (justFinished.status === 'error') {
-              pushNotification({ kind: 'error', text: `Job failed: ${label}` })
-              notifyIfUnfocused('Cozmo', `Job failed: ${label}`)
-            } else if (justFinished.status === 'done') {
-              pushNotification({ kind: 'success', text: `Job completed: ${label}` })
-              notifyIfUnfocused('Cozmo', `Job completed: ${label}`)
-            }
+            const goal = justFinished.goal
+            const r = justFinished.status === 'error'
+              ? notifyPolicy.jobFailed(goal)
+              : notifyPolicy.jobCompleted(goal)
+            pushNotification(r.draft)
+            if (r.native) notifyIfUnfocused(r.native.title, r.native.body)
           }
           break
         }
@@ -377,13 +376,12 @@ export function useCozmoChat() {
           ))
           if (finishedId) {
             const title = conversations.find(c => c.id === finishedId)?.title || 'a conversation'
+            const r = notifyPolicy.responseReady(title, finishedId)
             // In-app history only matters for what you didn't already see happen live.
-            if (!wasViewing) {
-              pushNotification({ kind: 'success', text: `Response ready in "${title}"`, conversationId: finishedId })
-            }
+            if (!wasViewing) pushNotification(r.draft)
             // Native OS notification is keyed on window focus, not which conversation
             // was active — a minimized window still deserves a ping either way.
-            notifyIfUnfocused('Cozmo', `Response ready in "${title}"`)
+            if (r.native) notifyIfUnfocused(r.native.title, r.native.body)
           }
           break
         }
@@ -397,10 +395,9 @@ export function useCozmoChat() {
           setProgress(null)
           if (finishedId) {
             const title = conversations.find(c => c.id === finishedId)?.title || 'a conversation'
-            if (!wasViewing) {
-              pushNotification({ kind: 'error', text: `Something went wrong in "${title}"`, conversationId: finishedId })
-            }
-            notifyIfUnfocused('Cozmo', `Something went wrong in "${title}"`)
+            const r = notifyPolicy.responseFailed(title, finishedId)
+            if (!wasViewing) pushNotification(r.draft)
+            if (r.native) notifyIfUnfocused(r.native.title, r.native.body)
           }
           break
         }
@@ -420,6 +417,23 @@ export function useCozmoChat() {
     clientRef.current = client
     return () => client.disconnect()
   }, [])
+
+  // Reconnection awareness: surfacing a closed→open transition instead of
+  // silently resuming. This does not touch the owner/streaming model — in-flight
+  // state is intentionally left intact so an interrupted generation can resume.
+  const [reconnected, setReconnected] = useState(false)
+  const prevConnectionRef = useRef<ConnectionState>('connecting')
+  useEffect(() => {
+    const prev = prevConnectionRef.current
+    prevConnectionRef.current = connection
+    if (prev === 'closed' && connection === 'open') {
+      const r = notifyPolicy.reconnected()
+      pushNotification(r.draft)
+      setReconnected(true)
+      const t = window.setTimeout(() => setReconnected(false), 4000)
+      return () => window.clearTimeout(t)
+    }
+  }, [connection, pushNotification])
 
   const sendMessage = useCallback(
     (content: string, attachments?: Attachment[]) => {
@@ -630,6 +644,7 @@ export function useCozmoChat() {
     busyReason,
     generatingConversationId,
     generatingConversationTitle,
+    reconnected,
     inlineSteps: activeIsGenerating ? inlineSteps : [],
     agentState: activeIsGenerating ? agentState : null,
     progress: activeIsGenerating ? progress : null,

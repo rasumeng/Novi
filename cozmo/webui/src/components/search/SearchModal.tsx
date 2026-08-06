@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, X, MessageSquare } from 'lucide-react'
+import { Search, X, MessageSquareText, SearchX, WifiOff } from 'lucide-react'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
+import { EmptyState } from '@/components/common/EmptyState'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8765' : ''
 
@@ -18,8 +21,6 @@ interface Props {
   onSelect: (id: string) => void
 }
 
-
-
 export function SearchModal({ open, onClose, onSelect }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
@@ -27,6 +28,8 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
   const [error, setError] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(modalRef, open)
 
   useEffect(() => {
     if (!open) return
@@ -88,11 +91,14 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
         >
           <motion.div
             ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search conversations"
             initial={{ opacity: 0, y: -16 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -16 }}
             transition={{ duration: 0.12, ease: 'easeOut' }}
-            className="w-[520px] max-h-[380px] flex flex-col rounded-2xl border border-base-700 bg-base-900 shadow-2xl overflow-hidden"
+            className="w-[520px] max-h-[380px] flex flex-col rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
           >
             <div className="flex items-center gap-2 px-4 h-12 border-b border-base-800 shrink-0">
               <Search size={15} className="text-base-500 shrink-0" />
@@ -101,29 +107,35 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search chats, tasks, sessions..."
+                aria-label="Search conversations"
                 className="flex-1 bg-transparent text-sm text-base-100 placeholder:text-base-500 outline-none"
               />
               {query && (
-                <button onClick={() => setQuery('')} className="p-1 rounded text-base-500 hover:text-base-100">
+                <button onClick={() => setQuery('')} aria-label="Clear search" className="p-1 rounded text-base-500 hover:text-base-100">
                   <X size={14} />
                 </button>
               )}
             </div>
             <div className="flex-1 overflow-y-auto">
               {loading && (
-                <div className="flex items-center justify-center h-16 text-xs text-base-500">
-                  Searching...
-                </div>
+                <LoadingSkeleton rows={3} compact />
               )}
               {!loading && error && (
-                <div className="flex items-center justify-center h-16 text-xs text-err">
-                  Search failed. Check your connection and try again.
-                </div>
+                <EmptyState
+                  compact
+                  tone="error"
+                  icon={WifiOff}
+                  title="Search couldn't be completed"
+                  description="Check your connection and try again."
+                />
               )}
               {!loading && !error && query && results.length === 0 && (
-                <div className="flex items-center justify-center h-16 text-xs text-base-500">
-                  No results
-                </div>
+                <EmptyState
+                  compact
+                  icon={Search}
+                  title="No matches"
+                  description={`Nothing found for "${query.trim()}".`}
+                />
               )}
               {results.map((r) => {
                 return (
@@ -132,7 +144,7 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
                     onClick={() => { onSelect(r.id); onClose() }}
                     className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-base-800 transition-colors border-b border-base-800/50 last:border-0"
                   >
-                    <MessageSquare size={14} className="text-base-500 shrink-0 mt-1" />
+                    <MessageSquareText size={14} className="text-base-500 shrink-0 mt-1" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-base-100 truncate">{r.title}</p>
                       <p className="text-[11px] text-base-500 line-clamp-2 mt-0.5 leading-relaxed">

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { PanelRightClose, PanelRightOpen, Activity, Target, Clock, FolderKanban, Cpu, Layers } from 'lucide-react'
+import { PanelRightClose, PanelRightOpen, Activity, Target, Clock, FolderKanban, Cpu, Layers, Loader2 } from 'lucide-react'
 import { InlineStep, AgentStateInfo, ProgressInfo, Project } from '@/types'
+import { EmptyState } from '@/components/common/EmptyState'
 
 interface Props {
   open: boolean
@@ -62,6 +63,8 @@ export function ActivityPanel({
     <>
       <button
         onClick={onToggle}
+        aria-label={open ? 'Hide activity' : 'Show activity'}
+        aria-expanded={open}
         className="shrink-0 w-8 flex items-center justify-center border-l border-base-800 text-base-400 hover:text-base-100 hover:bg-base-850 transition-colors"
         title={open ? 'Hide activity' : 'Show activity'}
       >
@@ -94,7 +97,12 @@ export function ActivityPanel({
 
               <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
                 {!hasActivity && (
-                  <p className="text-xs text-base-500 text-center pt-8">No active tasks</p>
+                  <EmptyState
+                    compact
+                    icon={Loader2}
+                    title="No active tasks"
+                    description="Start a conversation to see live tool steps and progress here."
+                  />
                 )}
 
                 {agentState?.current_goal && (

@@ -186,7 +186,7 @@ describe('cross-conversation notifications', () => {
     act(() => client.emit({ type: 'done' }))
 
     expect(result.current.notifications.notifications).toHaveLength(1)
-    expect(result.current.notifications.notifications[0]).toMatchObject({ conversationId: 'A', kind: 'success' })
+    expect(result.current.notifications.notifications[0]).toMatchObject({ conversationId: 'A', severity: 'success' })
 
     // Now do the same but stay on the conversation that's generating — no notification expected.
     act(() => result.current.chat.setActiveId('B'))

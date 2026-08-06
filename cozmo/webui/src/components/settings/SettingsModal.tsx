@@ -4,7 +4,9 @@ import { X, Search, Settings } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/cozmo'
 import { fetchConfig, saveConfig, fetchOllamaModels, fetchAvailableModels } from './api'
 import { useToast } from '@/hooks/useToast'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useProductConfig } from '@/hooks/useProductConfig'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { SECTIONS } from './constants'
 import { ModelsSettings } from './ModelsSettings'
 import { ToolsSettings } from './ToolsSettings'
@@ -36,6 +38,8 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   const [dirty, setDirty] = useState(false)
   const [skills, setSkills] = useState<Skill[]>([])
   const modalRef = useRef<HTMLDivElement>(null)
+
+  useFocusTrap(modalRef, open)
 
   const discoveredModels = useMemo(
     () => [
@@ -126,11 +130,14 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
         >
           <motion.div
             ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Settings"
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="flex w-[800px] h-[560px] rounded-2xl border border-base-700 bg-base-900 shadow-2xl overflow-hidden"
+            className="flex w-[800px] h-[560px] rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
           >
             <div className="w-48 shrink-0 border-r border-base-800 flex flex-col bg-base-950/50">
               <div className="p-3 border-b border-base-800">
@@ -144,6 +151,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search settings..."
+                    aria-label="Search settings"
                     className="w-full bg-base-800 border border-base-700 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/40 transition-colors"
                   />
                 </div>
@@ -185,6 +193,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                       if (dirty) save()
                       onClose()
                     }}
+                    aria-label="Close settings"
                     className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
                   >
                     <X size={16} />
@@ -192,7 +201,10 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
-                {section === 'general' && (
+                {config === null && (
+                  <LoadingSkeleton rows={5} compact />
+                )}
+                {config !== null && section === 'general' && (
                   <GeneralSettings
                     config={config}
                     setConfig={setConfig}

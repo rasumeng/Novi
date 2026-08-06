@@ -382,6 +382,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         }}
         onPaste={handlePaste}
         placeholder={disabled ? 'Connecting to Cozmo…' : 'Message Cozmo...'}
+        aria-label={generating ? 'Message Cozmo (stop to interrupt)' : 'Message Cozmo'}
         rows={1}
         disabled={disabled}
         className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] text-base-100 placeholder:text-base-500 focus:outline-none disabled:opacity-60 max-h-[200px] overflow-y-auto"
@@ -400,7 +401,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
                 <Paperclip size={12} />
               )}
               <span className="truncate max-w-[120px]">{att.name}</span>
-              <button onClick={() => removeAttachment(att.id)} className="text-base-400 hover:text-base-100 ml-0.5">
+              <button onClick={() => removeAttachment(att.id)} aria-label={`Remove attachment ${att.name}`} className="text-base-400 hover:text-base-100 ml-0.5">
                 <X size={12} />
               </button>
             </span>
@@ -412,6 +413,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenuOpen((v) => !v)}
+              aria-label="Attach files or folders"
+              aria-expanded={menuOpen}
               className="p-2 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
             >
               <Plus size={16} />
@@ -450,6 +453,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           />
           <button
             onClick={toggleMic}
+            aria-label={micState === 'idle' ? 'Voice input' : micState === 'listening' ? 'Stop listening' : 'Stop recording'}
             className={`relative p-2 rounded-lg transition-colors ${
               micState === 'idle'
                 ? 'text-base-400 hover:text-base-100 hover:bg-base-800'
@@ -470,6 +474,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         <button
           onClick={submit}
           disabled={disabled || (!value.trim() && attachments.length === 0 && !generating)}
+          aria-label={generating ? 'Stop generating' : 'Send message'}
           className="p-2 rounded-full bg-accent hover:bg-accent/90 disabled:bg-base-700 disabled:text-base-500 text-white transition-colors"
         >
           {generating ? <Square size={14} /> : <ArrowUp size={16} />}

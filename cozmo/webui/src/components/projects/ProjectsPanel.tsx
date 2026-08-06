@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Plus, FolderKanban, Trash2 } from 'lucide-react'
+import { Plus, FolderKanban, Trash2, Box } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { ProjectForm } from './ProjectForm'
 import { ProjectDetail } from './ProjectDetail'
 import { useConfirm } from '@/hooks/useConfirm'
+import { EmptyState } from '@/components/common/EmptyState'
 
 interface Props {
   projects: Project[]
@@ -92,11 +93,20 @@ export function ProjectsPanel({
         )}
 
         {projects.length === 0 && !showForm ? (
-          <div className="flex flex-col items-center justify-center pt-24 text-center">
-            <FolderKanban size={48} className="text-base-600 mb-4" />
-            <p className="text-base-300 text-sm mb-1">No projects yet</p>
-            <p className="text-base-500 text-xs">Create a project to group related conversations.</p>
-          </div>
+          <EmptyState
+            icon={Box}
+            title="No projects yet"
+            description="Create a project to group related conversations."
+            action={
+              <button
+                onClick={() => setShowForm(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+              >
+                <Plus size={14} />
+                New Project
+              </button>
+            }
+          />
         ) : (
           <div className="space-y-2 max-w-2xl">
             {projects.map(p => (
@@ -115,7 +125,8 @@ export function ProjectsPanel({
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDeleteProject(p) }}
-                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-base-400 hover:text-err hover:bg-base-800 transition-all"
+                  className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-base-400 hover:text-err hover:bg-base-800 transition-all"
+                  aria-label={`Delete project ${p.name}`}
                   title="Delete project"
                 >
                   <Trash2 size={14} />

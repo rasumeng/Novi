@@ -93,6 +93,9 @@ export default function App() {
             onOpenSettings={handleOpenSettings}
             workingActivityTitle={workingActivityTitle}
             onSelectConversation={handleSelectConversation}
+            reconnected={chat.reconnected}
+            conversations={chat.conversations}
+            onOpenConversation={chat.setActiveId}
           />
         )
     }
@@ -115,6 +118,7 @@ export default function App() {
           activeSection={activeSection}
           onSectionChange={handleSectionChange}
           jobsCount={chat.backgroundRuns.length}
+          generatingConversationId={chat.generatingConversationId}
         />
         {renderSection()}
       </div>

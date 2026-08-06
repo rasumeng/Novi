@@ -7,6 +7,7 @@ import { useConfirm } from '@/hooks/useConfirm'
 export function SidebarItem({
   conversation,
   active,
+  generating,
   onClick,
   onPin,
   onRename,
@@ -14,6 +15,7 @@ export function SidebarItem({
 }: {
   conversation: Conversation
   active: boolean
+  generating?: boolean
   onClick: () => void
   onPin: (id: string) => void
   onRename: (id: string, title: string) => void
@@ -60,14 +62,24 @@ export function SidebarItem({
       {dialog}
       <button
         onClick={onClick}
+        aria-current={active ? 'true' : undefined}
+        aria-label={generating ? `${conversation.title} (generating)` : conversation.title}
         className={clsx(
           'w-full text-left px-2.5 py-2 rounded-xl text-sm flex items-center justify-between gap-1 transition-colors',
           active ? 'bg-base-800 text-base-100' : 'text-base-300 hover:bg-base-850 hover:text-base-100'
         )}
       >
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          {generating && (
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0"
+              title="Generating"
+              aria-label="Generating"
+            />
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); onPin(conversation.id) }}
+            aria-label={conversation.pinned ? `Unpin ${conversation.title}` : `Pin ${conversation.title}`}
             className={clsx(
               'shrink-0 transition-opacity',
               conversation.pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
@@ -97,7 +109,9 @@ export function SidebarItem({
         {!renaming && (
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen) }}
-            className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-base-400 hover:text-base-100"
+            aria-label={`More actions for ${conversation.title}`}
+            aria-expanded={menuOpen}
+            className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded text-base-400 hover:text-base-100"
           >
             <MoreHorizontal size={14} />
           </button>

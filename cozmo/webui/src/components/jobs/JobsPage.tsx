@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { PlayCircle, Square, RefreshCw, Clock, CheckCircle, XCircle, PauseCircle, Play, ExternalLink } from 'lucide-react'
+import { PlayCircle, Square, RefreshCw, Clock, CheckCircle, XCircle, PauseCircle, Play, Loader2 } from 'lucide-react'
 import { BackgroundRunInfo } from '@/types'
+import { EmptyState } from '@/components/common/EmptyState'
 
 interface Props {
   runs: BackgroundRunInfo[]
@@ -80,6 +81,7 @@ export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
         <div className="flex items-center gap-2">
           <button
             onClick={onRefresh}
+            aria-label="Refresh jobs"
             className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
             title="Refresh"
           >
@@ -137,11 +139,20 @@ export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
         )}
 
         {runs.length === 0 && (
-          <div className="flex flex-col items-center justify-center pt-24 text-center">
-            <PlayCircle size={48} className="text-base-600 mb-4" />
-            <p className="text-base-300 text-sm mb-1">No jobs yet</p>
-            <p className="text-base-500 text-xs">Start a job to run long-running tasks in the background.</p>
-          </div>
+          <EmptyState
+            icon={Loader2}
+            title="No jobs yet"
+            description="Start a job to run long-running tasks in the background."
+            action={
+              <button
+                onClick={() => setShowNew(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+              >
+                <Play size={13} />
+                Start a job
+              </button>
+            }
+          />
         )}
       </div>
     </div>
@@ -178,6 +189,7 @@ function JobCard({ run, onStop }: { run: BackgroundRunInfo; onStop: (id: string)
         {isActiveStatus && (
           <button
             onClick={() => onStop(run.run_id)}
+            aria-label={`Stop job: ${run.goal || 'untitled'}`}
             className="shrink-0 p-1.5 rounded-lg text-base-400 hover:text-red-400 hover:bg-base-800 transition-colors"
             title="Stop"
           >

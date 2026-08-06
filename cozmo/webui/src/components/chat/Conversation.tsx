@@ -6,7 +6,7 @@ import { ConnectionState } from '@/services/cozmo'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { MessageBubble } from './MessageBubble'
 import { InlineTraceTimeline } from './InlineTraceTimeline'
-import { InlinePermissionCard } from './InlinePermissionCard'
+import { PermissionPrompt } from '@/components/common/PermissionPrompt'
 import { ActivityPanel } from './ActivityPanel'
 import { ProjectContextBar } from './ProjectContextBar'
 import { NotificationBell } from './NotificationBell'
@@ -42,6 +42,12 @@ interface Props {
   workingActivityTitle?: string | null
   /** Item 2: open a conversation (e.g. from a notification). */
   onSelectConversation?: (id: string) => void
+  /** True for a short window after a closed→open reconnect. */
+  reconnected?: boolean
+  /** Full conversation list for the landing dashboard's "continue" section. */
+  conversations?: ConversationType[]
+  /** Open another conversation from the landing page. */
+  onOpenConversation?: (id: string) => void
 }
 
 export function Conversation({
@@ -64,6 +70,9 @@ export function Conversation({
   onOpenSettings,
   workingActivityTitle,
   onSelectConversation,
+  reconnected,
+  conversations,
+  onOpenConversation,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
@@ -100,6 +109,11 @@ export function Conversation({
           {workingActivityTitle && (
             <GlobalActivityIndicator isActiveConversation={generating} title={workingActivityTitle} />
           )}
+          {reconnected && (
+            <span className="px-2 py-1 rounded-full bg-ok/10 border border-ok/25 text-[11px] text-ok animate-fadeIn">
+              Reconnected
+            </span>
+          )}
           <div className="flex items-center gap-1.5 text-[11px] text-base-500 ml-1">
             <span className={`w-1.5 h-1.5 rounded-full ${conn.dot}`} />
             {conn.text}
@@ -112,7 +126,15 @@ export function Conversation({
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
           {conversation.messages.length === 0 ? (
-            <LandingPage onSuggestion={setSuggestionText} connection={connection} />
+            <LandingPage
+              onSuggestion={setSuggestionText}
+              connection={connection}
+              conversations={conversations}
+              backgroundRuns={backgroundRuns}
+              generating={generating}
+              generatingElsewhereTitle={workingActivityTitle}
+              onOpenConversation={onOpenConversation}
+            />
           ) : (
             conversation.messages.map((m, i, arr) => (
               <div key={m.id}>
@@ -143,7 +165,7 @@ export function Conversation({
                     )}
                     {permission && (
                       <div className="mt-3">
-                        <InlinePermissionCard request={permission} onAnswer={onAnswerPermission} />
+                        <PermissionPrompt request={permission} onAnswer={onAnswerPermission} />
                       </div>
                     )}
                   </div>

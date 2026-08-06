@@ -20,9 +20,11 @@ interface Props {
   activeSection: NavItemId
   onSectionChange: (id: NavItemId) => void
   jobsCount?: number
+  /** Id of the conversation that owns the current generation, or null. */
+  generatingConversationId?: string | null
 }
 
-export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, onSelect, onNewChat, onPin, onRename, onDelete, projects, activeSection, onSectionChange, jobsCount = 0 }: Props) {
+export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, onSelect, onNewChat, onPin, onRename, onDelete, projects, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null }: Props) {
   const [searchOpen, setSearchOpen] = useState(false)
 
   const pinned = useMemo(() => conversations.filter((c) => c.pinned), [conversations])
@@ -101,14 +103,14 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                 <>
                   <p className="px-2.5 text-[11px] uppercase tracking-wider text-accent mb-1">Pinned</p>
                   {pinned.map((c) => (
-                    <SidebarItem key={c.id} conversation={c} active={c.id === activeId} onClick={() => onSelect(c.id)} onPin={onPin} onRename={onRename} onDelete={onDelete} />
+                    <SidebarItem key={c.id} conversation={c} active={c.id === activeId} generating={c.id === generatingConversationId} onClick={() => onSelect(c.id)} onPin={onPin} onRename={onRename} onDelete={onDelete} />
                   ))}
                   <div className="h-2" />
                 </>
               )}
               <p className="px-2.5 text-[11px] uppercase tracking-wider text-base-500 mb-1">Recent</p>
               {recent.map((c) => (
-                <SidebarItem key={c.id} conversation={c} active={c.id === activeId} onClick={() => onSelect(c.id)} onPin={onPin} onRename={onRename} onDelete={onDelete} />
+                <SidebarItem key={c.id} conversation={c} active={c.id === activeId} generating={c.id === generatingConversationId} onClick={() => onSelect(c.id)} onPin={onPin} onRename={onRename} onDelete={onDelete} />
               ))}
             </div>
           </>

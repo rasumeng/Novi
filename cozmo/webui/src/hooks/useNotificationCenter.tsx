@@ -1,19 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
-
-export interface AppNotification {
-  id: string
-  kind: 'success' | 'error' | 'info'
-  text: string
-  createdAt: number
-  read: boolean
-  /** If set, clicking the notification should open this conversation. */
-  conversationId?: string
-}
+import type { AppNotification, NotificationDraft } from '@/notifications/types'
 
 interface NotificationCenterValue {
   notifications: AppNotification[]
   unreadCount: number
-  push: (n: Omit<AppNotification, 'id' | 'createdAt' | 'read'>) => void
+  push: (n: NotificationDraft) => void
   markAllRead: () => void
   dismiss: (id: string) => void
   clear: () => void
@@ -24,14 +15,13 @@ const NotificationCenterContext = createContext<NotificationCenterValue | null>(
 let idCounter = 0
 const MAX_NOTIFICATIONS = 30
 
-// Session-scoped notification history: job completion, and (new) responses
-// finishing in a conversation the user isn't currently looking at. Not
-// persisted across app restarts — that's a documented future enhancement,
-// not something this milestone needs.
+// Session-scoped notification history: job completion, responses finishing in
+// a conversation the user isn't viewing, and reconnection events. Not persisted
+// across app restarts — that remains a documented future enhancement.
 export function NotificationCenterProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([])
 
-  const push = useCallback((n: Omit<AppNotification, 'id' | 'createdAt' | 'read'>) => {
+  const push = useCallback((n: NotificationDraft) => {
     setNotifications((prev) => {
       const next: AppNotification = { ...n, id: `notif-${Date.now()}-${idCounter++}`, createdAt: Date.now(), read: false }
       return [next, ...prev].slice(0, MAX_NOTIFICATIONS)
@@ -63,3 +53,5 @@ export function useNotificationCenter() {
   if (!ctx) throw new Error('useNotificationCenter must be used within a NotificationCenterProvider')
   return ctx
 }
+
+export type { AppNotification }
