@@ -1,7 +1,7 @@
 // WebSocket client for the Cozmo FastAPI backend (cozmo/webui_server.py).
 // Reconnects automatically; events are fanned out to a single handler.
 
-import { Conversation, Attachment, Project, Skill, McpCatalogEntry, McpStatusResponse, McpServerDetail, DiffData, AgentTaskCreate, AgentConfig, TaskData, BackgroundRunInfo, BackgroundRunLog, ScheduledTaskInfo } from '@/types'
+import { Conversation, Attachment, Project, Skill, McpCatalogEntry, McpStatusResponse, McpServerDetail, DiffData, AgentTaskCreate, AgentConfig, TaskData, BackgroundRunInfo, BackgroundRunLog, ScheduledTaskInfo, TimelineEntry, KnowledgeOverview } from '@/types'
 
 export type ServerEvent =
   | { type: 'token'; text: string }
@@ -32,6 +32,7 @@ export type ServerEvent =
   | { type: 'agent_status'; text: string; detail?: string; query?: string }
   | { type: 'progress'; current: number; total: number; label: string }
   | { type: 'agent_state'; current_goal: string; status: string; tools_used: number; error?: string }
+  | { type: 'assistant_event'; entry: TimelineEntry }
   | { type: 'done' }
   | { type: 'error'; text: string }
 
@@ -318,6 +319,24 @@ export async function fetchMcpCatalog(): Promise<McpCatalogEntry[]> {
     if (r.ok) return r.json()
   } catch { /* ignore */ }
   return []
+}
+
+// ── Milestone 4: assistant timeline + knowledge overview ────────────────
+
+export async function fetchTimeline(limit = 200): Promise<TimelineEntry[]> {
+  try {
+    const r = await fetch(`${API_BASE}/api/timeline?limit=${limit}`)
+    if (r.ok) return r.json()
+  } catch { /* ignore */ }
+  return []
+}
+
+export async function fetchKnowledgeOverview(): Promise<KnowledgeOverview> {
+  try {
+    const r = await fetch(`${API_BASE}/api/knowledge/overview`)
+    if (r.ok) return r.json()
+  } catch { /* ignore */ }
+  return { categories: [], total: 0, updated: '' }
 }
 
 export { deleteConversationApi as deleteConversation }

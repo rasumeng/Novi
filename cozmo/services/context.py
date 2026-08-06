@@ -182,6 +182,19 @@ class CozmoContext:
         return self._brain
 
     @property
+    def brain_event_bus(self):
+        """Read-only accessor to the Brain's own EventBus (Milestone 4 bridge).
+
+        Returns a reference to the bus the Brain already emits into; never
+        takes ownership, never mutates Brain state. External consumers (e.g.
+        the WebUI timeline bridge) subscribe here as passive observers. Safe
+        to call before the Brain is built — forces a lazy build if needed.
+        """
+        if self._brain_event_bus is None:
+            _ = self.brain
+        return self._brain_event_bus
+
+    @property
     def scheduler(self):
         from ..scheduler import Scheduler
         from ..tools.scheduler_task import init_scheduler_tool

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
-import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo } from '@/types'
+import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
 import { ConnectionState } from '@/services/cozmo'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { MessageBubble } from './MessageBubble'
@@ -48,6 +48,8 @@ interface Props {
   conversations?: ConversationType[]
   /** Open another conversation from the landing page. */
   onOpenConversation?: (id: string) => void
+  /** Assistant timeline feed for the landing summary. */
+  timeline?: TimelineEntry[]
 }
 
 export function Conversation({
@@ -73,6 +75,7 @@ export function Conversation({
   reconnected,
   conversations,
   onOpenConversation,
+  timeline,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
@@ -134,6 +137,7 @@ export function Conversation({
               generating={generating}
               generatingElsewhereTitle={workingActivityTitle}
               onOpenConversation={onOpenConversation}
+              timeline={timeline}
             />
           ) : (
             conversation.messages.map((m, i, arr) => (

@@ -4,6 +4,7 @@ import { API_BASE } from './api'
 import type { SettingsData } from './types'
 import { useToast } from '@/hooks/useToast'
 import { useConfirm } from '@/hooks/useConfirm'
+import { KnowledgeOverview } from '@/components/knowledge/KnowledgeOverview'
 
 interface Props {
   config: SettingsData | null
@@ -12,13 +13,13 @@ interface Props {
 }
 
 export function MemorySettings({ config, setConfig, setDirty }: Props) {
-  const { showError, showSuccess } = useToast()
+  const { showError } = useToast()
   const { confirm, dialog } = useConfirm()
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [allMemory, setAllMemory] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
-  const [tab, setTab] = useState<'browser' | 'config'>('browser')
+  const [tab, setTab] = useState<'overview' | 'preferences' | 'dev'>('overview')
 
   const fetchAll = async () => {
     try {
@@ -63,19 +64,6 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
     }
   }
 
-  const openFolder = async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/memory/path`)
-      const data = await r.json()
-      if (data.path) {
-        navigator.clipboard.writeText(data.path)
-        showSuccess('Memory folder path copied to clipboard.')
-      }
-    } catch {
-      showError("Couldn't get the memory folder path.")
-    }
-  }
-
   const setMemoryPref = (key: 'max_turns_before_summary' | 'max_short_term_pairs', value: number) => {
     if (!config) return
     setConfig({ ...config, memory: { ...config.memory, [key]: value } })
@@ -93,25 +81,38 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
 
       <div className="flex gap-1 p-0.5 bg-base-800 rounded-lg">
         <button
-          onClick={() => setTab('browser')}
+          onClick={() => setTab('overview')}
           className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-            tab === 'browser' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
+            tab === 'overview' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
           }`}
         >
-          Memory Browser
+          What I know
         </button>
         <button
-          onClick={() => setTab('config')}
+          onClick={() => setTab('preferences')}
           className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-            tab === 'config' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
+            tab === 'preferences' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
           }`}
         >
           Preferences
         </button>
+        <button
+          onClick={() => setTab('dev')}
+          className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            tab === 'dev' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
+          }`}
+        >
+          Developer
+        </button>
       </div>
 
-      {tab === 'browser' && (
+      {tab === 'overview' && (
+        <KnowledgeOverview />
+      )}
+
+      {tab === 'dev' && (
         <div className="space-y-3">
+          <p className="text-xs text-base-500">Diagnostic view of the raw memory index. This is a troubleshooting surface — most people only need the “What I know” tab.</p>
           <div className="flex gap-2">
             <input
               value={searchQuery}
@@ -129,13 +130,6 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
             </button>
           </div>
 
-          <div className="flex items-center justify-between p-2 rounded-lg bg-base-800/50 border border-base-700">
-            <span className="text-[11px] text-base-400 font-mono">~/.cozmo/memory/</span>
-            <button onClick={openFolder} className="text-[11px] text-accent hover:text-accent/80 transition-colors">
-              Copy path
-            </button>
-          </div>
-
           {searchResults.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-[11px] text-base-400 font-medium">Search results ({searchResults.length})</p>
@@ -146,7 +140,7 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
           )}
 
           <div className="space-y-1.5">
-            <p className="text-[11px] text-base-400 font-medium">All memories ({allMemory.length})</p>
+            <p className="text-[11px] text-base-400 font-medium">All stored items ({allMemory.length})</p>
             {allMemory.length === 0 && (
               <p className="text-xs text-base-500 py-4 text-center">No memories stored yet. Memories are created automatically from conversations.</p>
             )}
@@ -157,7 +151,7 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
         </div>
       )}
 
-      {tab === 'config' && (
+      {tab === 'preferences' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
             <div>
@@ -196,7 +190,6 @@ function MemoryCard({ item, onDelete }: { item: any; onDelete: (id: string) => v
   const text = item.text || ''
   const preview = text.length > 120 ? text.slice(0, 120) + '...' : text
   const meta = item.metadata || {}
-  const distance = item.distance
 
   return (
     <div className="p-2.5 rounded-lg bg-base-800/30 border border-base-700/50 group">
@@ -211,9 +204,6 @@ function MemoryCard({ item, onDelete }: { item: any; onDelete: (id: string) => v
           <div className="flex items-center gap-2 mt-1.5">
             {meta.timestamp && (
               <span className="text-[10px] text-base-500">{new Date(meta.timestamp).toLocaleDateString()}</span>
-            )}
-            {distance != null && (
-              <span className="text-[10px] text-base-600">{Math.round((1 - distance) * 100)}% match</span>
             )}
             {meta.turns && (
               <span className="text-[10px] text-base-600">{meta.turns} turns</span>

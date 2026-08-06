@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo } from '@/types'
-import { CozmoClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations } from '@/services/cozmo'
+import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo, TimelineEntry } from '@/types'
+import { CozmoClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations, fetchTimeline } from '@/services/cozmo'
 import { useToast } from '@/hooks/useToast'
 import { useNotificationCenter } from '@/hooks/useNotificationCenter'
 import { notifyPolicy } from '@/notifications/policy'
 import { notifyIfUnfocused } from '@/native/tauri'
+import { mergeTimeline } from '@/utils/timeline'
 
 export interface PermissionRequest {
   tool: string
@@ -53,6 +54,17 @@ export function useCozmoChat() {
   const [progress, setProgress] = useState<ProgressInfo | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+  // Milestone 4: assistant timeline feed. Live entries prepend from
+  // `assistant_event`; history is hydrated via REST on mount.
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([])
+  const pushTimelineEntry = useCallback((entry: TimelineEntry) => {
+    setTimeline(prev => mergeTimeline([entry, ...prev]))
+  }, [])
+  const refreshTimeline = useCallback(() => {
+    fetchTimeline().then((entries) => {
+      if (entries.length) setTimeline(prev => mergeTimeline([...entries, ...prev]))
+    }).catch(() => {})
+  }, [])
   // Id of the conversation with unsaved changes, or null. Deliberately not a
   // boolean: persistence must save the conversation that actually changed
   // (the generation owner), not whatever is currently on screen.
@@ -83,6 +95,11 @@ export function useCozmoChat() {
   }, [showError])
 
   useEffect(() => clearStopFallback, [])
+
+  // Milestone 4: hydrate the persisted assistant timeline on mount.
+  useEffect(() => {
+    refreshTimeline()
+  }, [refreshTimeline])
 
   // Persist whichever conversation was last marked dirty (never "the active one" —
   // the active one may not be the conversation that actually changed).
@@ -359,6 +376,9 @@ export function useCozmoChat() {
             error: ev.error,
           })
           break
+        case 'assistant_event':
+          pushTimelineEntry(ev.entry)
+          break
         case 'permission_request':
           setPermission({ tool: ev.tool, args: ev.args })
           break
@@ -403,7 +423,7 @@ export function useCozmoChat() {
         }
       }
     },
-    [appendToken, pushStep, pushReasoning, finishStreaming, owner, resolvedActiveId, conversations, pushNotification, backgroundRuns]
+    [appendToken, pushStep, pushReasoning, finishStreaming, owner, resolvedActiveId, conversations, pushNotification, backgroundRuns, pushTimelineEntry]
   )
 
   const handleEventRef = useRef(handleEvent)
@@ -650,7 +670,9 @@ export function useCozmoChat() {
     progress: activeIsGenerating ? progress : null,
     plan: activeIsGenerating ? plan : null,
     permission: activeIsGenerating ? permission : null,
-    backgroundRuns,
+backgroundRuns,
+    timeline,
+    refreshTimeline,
     sendMessage,
     startBackgroundRun: handleStartBackgroundRun,
     stopBackgroundRun: handleStopBackgroundRun,

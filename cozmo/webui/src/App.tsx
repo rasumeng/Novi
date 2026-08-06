@@ -3,6 +3,7 @@ import { Sidebar } from '@/components/sidebar/Sidebar'
 import { Conversation } from '@/components/chat/Conversation'
 import { ProjectsPanel } from '@/components/projects/ProjectsPanel'
 import { JobsPage } from '@/components/jobs/JobsPage'
+import { TimelinePage } from '@/components/timeline/TimelinePage'
 
 import { SettingsModal, SectionId } from '@/components/settings/SettingsModal'
 import { useCozmoChat } from '@/hooks/useCozmoChat'
@@ -71,6 +72,14 @@ export default function App() {
             onRefresh={chat.refreshBackgroundRuns}
           />
         )
+      case 'timeline':
+        return (
+          <TimelinePage
+            entries={chat.timeline}
+            onRefresh={chat.refreshTimeline}
+            onOpenConversation={handleSelectConversation}
+          />
+        )
       default:
         return (
           <Conversation
@@ -96,6 +105,7 @@ export default function App() {
             reconnected={chat.reconnected}
             conversations={chat.conversations}
             onOpenConversation={chat.setActiveId}
+            timeline={chat.timeline}
           />
         )
     }

@@ -55,6 +55,7 @@ vi.mock('@/services/cozmo', () => ({
   updateProject: vi.fn(async () => null),
   deleteProjectApi: vi.fn(async () => {}),
   fetchProjectConversations: vi.fn(async () => []),
+  fetchTimeline: vi.fn(async () => []),
 }))
 
 // Imported after the mock so the hook picks up MockCozmoClient.

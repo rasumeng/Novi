@@ -30,6 +30,7 @@ WebSocket protocol (/ws/chat), JSON messages:
     {"type": "permission_request", "tool": "...", "args": {...}}
     {"type": "done"}                                         run finished
     {"type": "error",    "text": "..."}
+    {"type": "assistant_event", "entry": {...}}              brain event surfaced to timeline
 
 The runtime loop is synchronous, so each run executes in a worker thread and
 events are marshalled back onto the event loop through an asyncio.Queue.
@@ -60,6 +61,7 @@ from .runtime.retrieval_budget import ContextAllocation
 from .runtime.sources import MemoryRetrievalSource
 from .services.context import CozmoContext
 from .runtime.tool_risk import get_tool_risk, risk_to_label
+from .timeline import TimelineService, build_knowledge_overview
 from .webui import WebUIBackend
 
 DIST_DIR = Path(__file__).parent / "webui" / "dist"
@@ -290,7 +292,35 @@ def get_backend(cfg: dict) -> dict:
 
         web_ui = WebUIBackend(cfg)
         _shared_backend = web_ui.build_backend()
+        _shared_backend["timeline_service"] = _build_timeline_bridge(_shared_backend)
         return _shared_backend
+
+
+def _build_timeline_bridge(backend: dict) -> TimelineService | None:
+    """Wire the read-only Brain event bridge (Milestone 4).
+
+    Subscribes the TimelineService to the Brain's own event bus (exposed
+    read-only via the context). Surfaced events are persisted and forwarded to
+    every connected WebSocket as ``assistant_event`` messages. This never
+    touches Brain internals or moves EventBus ownership.
+    """
+    ctx = backend.get("context")
+    if ctx is None:
+        return None
+    try:
+        bus = ctx.brain_event_bus
+        if bus is None:
+            return None
+        service = TimelineService(
+            bus,
+            on_entry=lambda entry: _broadcast_sync(
+                {"type": "assistant_event", "entry": entry}
+            ),
+        )
+        return service.start()
+    except Exception as e:
+        print(f"[timeline] bridge disabled: {e}")
+        return None
 
 
 def _safe_child(base: Path, name: str, suffix: str = "") -> Path:
@@ -854,6 +884,33 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     @app.get("/api/memory/path")
     def memory_path():
         return {"path": str(Path.home() / ".cozmo" / "memory")}
+
+    # ── Brain / Timeline (Milestone 4) ──────────────────────────────
+
+    @app.get("/api/timeline")
+    def timeline(limit: int = 200):
+        """Stored assistant activity feed, newest first.
+
+        User-facing only: kind/title/detail/timestamp + per-row instance id.
+        """
+        b = get_backend(cfg)
+        service = b.get("timeline_service")
+        if service is None:
+            return []
+        try:
+            return service.recent(limit=min(limit, 500))
+        except Exception:
+            return []
+
+    @app.get("/api/knowledge/overview")
+    def knowledge_overview():
+        """What Cozmo knows — grouped, user-shaped projection.
+
+        Only category / label / content / evidence. Never ids, scores,
+        distances, embeddings, or storage paths.
+        """
+        b = get_backend(cfg)
+        return build_knowledge_overview(b.get("brain"))
 
     @app.post("/api/transcribe")
     async def transcribe_audio(file: UploadFile = File(...)):

@@ -29,6 +29,35 @@ export interface Conversation {
   messages: ChatMessage[]
 }
 
+// Milestone 4 — assistant timeline + knowledge overview (user-facing shapes).
+export interface TimelineEntry {
+  /** Per-row instance id (timeline address, never a Brain id). */
+  id: string
+  kind: string
+  title: string
+  detail: string
+  timestamp: string
+  /** Pseudo id a user can open; may not resolve if the source chat was created outside this app. */
+  conversation_id?: string
+}
+
+export interface KnowledgeEntry {
+  content: string
+  evidence: string
+}
+
+export interface KnowledgeCategory {
+  category: string
+  label: string
+  entries: KnowledgeEntry[]
+}
+
+export interface KnowledgeOverview {
+  categories: KnowledgeCategory[]
+  total: number
+  updated: string
+}
+
 export interface Project {
   id: string
   name: string
