@@ -17,41 +17,84 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 from .job import Checkpoint, Job, JobStatus
 
 log = logging.getLogger("cozmo.jobs.manager")
 
 
-class JobManager:
-    """Owns job lifecycle. Thread-safe."""
+EventSink = Callable[[str, dict], None]
 
-    def __init__(self):
+
+class JobManager:
+    """Owns job lifecycle. Thread-safe.
+
+    Accepts an optional ``JobStore`` so every lifecycle transition is
+    persisted, and an optional ``event_sink`` callable (``(type, data)``) so a
+    passive projection (e.g. timeline) can observe lifecycle events without
+    the manager importing any bus implementation.
+    """
+
+    def __init__(self, store: Optional["JobStore"] = None,
+                 event_sink: Optional[EventSink] = None):
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
         self._counter = 0
+        self._store = store
+        self._event_sink = event_sink
+
+    @property
+    def store(self):
+        return self._store
+
+    def set_event_sink(self, sink: Optional[EventSink]):
+        self._event_sink = sink
 
     def _next_id(self) -> str:
         self._counter += 1
         ts = datetime.now().strftime("%y%m%d%H%M%S")
         return f"job-{ts}-{self._counter}"
 
+    def _persist(self, job: Job) -> Job:
+        if self._store is not None:
+            try:
+                self._store.save(job)
+            except Exception as e:
+                log.warning("failed to persist job %s: %s", job.id, e)
+        return job
+
+    def _emit(self, event_type: str, job: Job, **data) -> None:
+        if self._event_sink is None:
+            return
+        payload = {
+            "job_id": job.id,
+            "task_id": job.task_id,
+            **data,
+        }
+        try:
+            self._event_sink(event_type, payload)
+        except Exception as e:
+            log.warning("event sink failed for %s: %s", event_type, e)
+
     # ── lifecycle ────────────────────────────────────────────────────────
 
     def submit(self, task_id: str, strategy: str = "execute",
-               max_retries: int = 2, metadata: dict | None = None) -> Job:
+               max_retries: int = 2, metadata: dict | None = None,
+               status: JobStatus = JobStatus.PENDING) -> Job:
         """Create and register a new Job."""
         job = Job(
             id=self._next_id(),
             task_id=task_id,
-            status=JobStatus.PENDING,
+            status=status,
             strategy=strategy,
             max_retries=max_retries,
             metadata=metadata or {},
         )
         with self._lock:
             self._jobs[job.id] = job
+        self._persist(job)
+        self._emit("job.created", job, status=job.status.value)
         log.info("job submitted: %s (task=%s, strategy=%s)", job.id, task_id, strategy)
         return job
 
@@ -64,6 +107,8 @@ class JobManager:
             job.status = JobStatus.PAUSED
             if checkpoint:
                 job.checkpoint = checkpoint
+        self._persist(job)
+        self._emit("job.paused", job, step=checkpoint.step if checkpoint else None)
         log.info("job paused: %s (step=%s)", job_id,
                  checkpoint.step if checkpoint else "?")
         return True
@@ -93,6 +138,8 @@ class JobManager:
             )
             self._jobs[new_job.id] = new_job
 
+        self._persist(new_job)
+        self._emit("job.resumed", new_job, resumed_from=job_id)
         log.info("job resumed: %s → %s (step=%s)", job_id,
                  new_job.id, new_job.checkpoint.step if new_job.checkpoint else "?")
         return new_job
@@ -105,6 +152,8 @@ class JobManager:
                 return False
             job.status = JobStatus.CANCELLED
             job.completed_at = datetime.now().isoformat()
+        self._persist(job)
+        self._emit("job.cancelled", job)
         log.info("job cancelled: %s", job_id)
         return True
 
@@ -130,6 +179,9 @@ class JobManager:
             )
             self._jobs[new_job.id] = new_job
 
+        self._persist(new_job)
+        self._emit("job.created", new_job, retry_of=job_id,
+                   retry_count=new_job.retry_count)
         log.info("job retry: %s → %s (attempt %d/%d)", job_id,
                  new_job.id, new_job.retry_count, new_job.max_retries)
         return new_job
@@ -138,22 +190,70 @@ class JobManager:
         """Mark a job as running."""
         with self._lock:
             job = self._jobs.get(job_id)
-            if job is None or job.status not in (JobStatus.PENDING, JobStatus.QUEUED):
+            if job is None or job.status not in (
+                    JobStatus.PENDING, JobStatus.QUEUED, JobStatus.CREATED):
                 return False
             job.status = JobStatus.RUNNING
             job.started_at = datetime.now().isoformat()
+        self._persist(job)
+        self._emit("job.started", job)
         return True
 
     def complete(self, job_id: str, result: str = "", error: str = "") -> bool:
-        """Mark a job as done or errored."""
+        """Mark a job as completed (or errored, backward-compat).
+
+        ``error`` truthy keeps the legacy ``ERROR`` status so existing retry
+        callers keep working; a clean success is recorded as ``COMPLETED``.
+        """
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return False
-            job.status = JobStatus.ERROR if error else JobStatus.DONE
+            if error:
+                job.status = JobStatus.ERROR
+                job.error = error
+            else:
+                job.status = JobStatus.COMPLETED
             job.result = result
-            job.error = error
             job.completed_at = datetime.now().isoformat()
+        self._persist(job)
+        self._emit("job.completed" if not error else "job.failed",
+                   job, result=result[:500], error=error[:200])
+        return True
+
+    def fail(self, job_id: str, error: str = "") -> bool:
+        """Mark a running job as failed (durable FAILED lifecycle, path )."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+            job.status = JobStatus.FAILED
+            job.error = error or job.error
+            job.completed_at = datetime.now().isoformat()
+        self._persist(job)
+        self._emit("job.failed", job, error=error[:200])
+        return True
+
+    def checkpoint(self, job_id: str, checkpoint: Checkpoint | None = None) -> bool:
+        """Persist a progress snapshot for a running job (additive, non-blocking).
+
+        Job stays RUNNING. If a JobStore is wired the checkpoint is persisted
+        separately; the running job also carries it for in-memory resume.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+            if checkpoint:
+                job.checkpoint = checkpoint
+        if self._store is not None and checkpoint is not None:
+            try:
+                self._store.save_checkpoint(checkpoint)
+            except Exception as e:
+                log.warning("failed to save checkpoint %s: %s", job_id, e)
+        self._persist(job)
+        self._emit("job.checkpointed", job,
+                   step=checkpoint.step if checkpoint else None)
         return True
 
     # ── queries ──────────────────────────────────────────────────────────

@@ -101,6 +101,13 @@ ORCHESTRATOR_FORBIDDEN = frozenset(
 RUNTIME_FORBIDDEN = frozenset({"jobs", "task_store", "taskstore"})
 JOBS_FORBIDDEN = frozenset({"orchestrator", "runtime"})
 
+# Phase 4 (durable execution lifecycle) — the Runtime must not pull in the
+# Job store/manager directly; it only emits plan/step events that a
+# composition-root coordinator (cozmo/services) translates into Jobs.
+RUNTIME_STORE_TOKENS = frozenset(
+    {"JobStore", "JobManager", "job_store", "job_manager"}
+)
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -220,6 +227,52 @@ def test_runtime_does_not_import_job_or_task_lifecycle():
             f"{rel}/{v}" for v in _forbidden_imports(p.read_text("utf-8"), RUNTIME_FORBIDDEN)
         ]
     assert violations == [], "runtime/ imported jobs or TaskStore:\n" + "\n".join(violations)
+
+
+def test_runtime_never_names_job_store_or_manager():
+    """Phase 4: Runtime stays execution-only — no direct JobStore/JobManager use.
+
+    The durable execution coordinator lives in cozmo/services, which may
+    import everything; runtime must not grow a backdoor into persistence.
+    """
+    violations = []
+    for f in (COZMO_SRC / "runtime").glob("*.py"):
+        if f.name == "engine.py":  # legacy checkpoint loop, allowed
+            continue
+        rel = f.relative_to(PROJECT_ROOT)
+        text = f.read_text("utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if any(tok in line for tok in RUNTIME_STORE_TOKENS):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    assert violations == [], (
+        "runtime/ referenced JobStore/JobManager (persistence must be driven "
+        "from the composition root):\n" + "\n".join(violations)
+    )
+
+
+def test_job_does_not_gain_plan_or_goal_field():
+    """Phase 4: Job references a Task by id only — never plan/goal ownership."""
+    fields = _dataclass_fields(_read("jobs", "job.py"), "Job")
+    assert not fields - JOB_OWNED_FIELDS, (
+        f"Job gained non-attempt field(s): {sorted(fields - JOB_OWNED_FIELDS)}"
+    )
+    forbidden_extra = {
+        f for f in fields
+        if any(tok in f.lower() for tok in ("goal", "plan", "intent"))
+    }
+    assert forbidden_extra == set(), (
+        "Job owns plan/goal/intent state (belongs on Task): "
+        f"{sorted(forbidden_extra)}"
+    )
+
+
+def test_task_does_not_gain_checkpoint_field():
+    """Phase 4: checkpoint ownership stays on Job — a Task never holds it."""
+    fields = _dataclass_fields(_read("orchestrator", "task_types.py"), "Task")
+    assert "checkpoint" not in fields, (
+        "Task gained checkpoint state; a Task records attempts only via "
+        "execution_history (job_id strings)."
+    )
 
 
 def test_orchestrator_does_not_import_execution_mechanics_or_jobs():

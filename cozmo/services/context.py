@@ -47,6 +47,9 @@ class CozmoContext:
         self._knowledge_inited: bool = False
         self._brain: object | None = None
         self._brain_event_bus: object | None = None
+        self._job_store: object | None = None
+        self._job_manager: object | None = None
+        self._job_lifecycle: object | None = None
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -227,6 +230,37 @@ class CozmoContext:
             )
         return self._orchestrator
 
+    # ── durable execution lifecycle (Milestone 5 Phase 4) ────────────────
+
+    @property
+    def job_store(self):
+        from ..jobs.persistence import JobStore
+
+        if self._job_store is None:
+            self._job_store = JobStore()
+        return self._job_store
+
+    @property
+    def job_manager(self):
+        from ..jobs.manager import JobManager
+
+        if self._job_manager is None:
+            self._job_manager = JobManager(store=self.job_store)
+        return self._job_manager
+
+    @property
+    def job_lifecycle(self):
+        """Event coordinator: Runtime plan events → Job + Checkpoint state."""
+        from .job_lifecycle import JobLifecycle
+
+        if self._job_lifecycle is None:
+            task_store = getattr(self.orchestrator, "task_store", None)
+            self._job_lifecycle = JobLifecycle(
+                job_manager=self.job_manager,
+                task_store=task_store,
+            )
+        return self._job_lifecycle
+
     # ── lifecycle ───────────────────────────────────────────────────────
 
     def init_knowledge_index(self):
@@ -265,6 +299,16 @@ class CozmoContext:
         # orchestrator already holds.
         task_store = getattr(orchestrator, "task_store", None) if orchestrator else None
         TaskLifecycleProjection(task_store).subscribe(runtime.event_bus)
+
+        # Wire Job lifecycle (Phase 4): runtime stays a plan executor — this
+        # coordinator derives the Job/Checkpoint side of the same events and
+        # persists via JobStore + the Task's ExecutionHistory. Passive and
+        # additive: non-plan runs emit no plan events, so no jobs are created.
+        job_lifecycle = overrides.get("job_lifecycle", None)
+        if job_lifecycle is None:
+            job_lifecycle = self.job_lifecycle
+        if job_lifecycle is not None:
+            job_lifecycle.subscribe(runtime.event_bus)
         return runtime
 
     def warmup(self):

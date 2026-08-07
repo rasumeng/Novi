@@ -94,6 +94,9 @@ def _task_to_dict(task: Task) -> dict:
                 "reason": e.reason,
                 "parent_job_id": e.parent_job_id,
                 "timestamp": e.timestamp,
+                "status": e.status,
+                "result": e.result,
+                "error": e.error,
             }
             for e in task.execution_history.entries
         ],
@@ -117,6 +120,9 @@ def _task_from_dict(data: dict) -> Task:
             reason=e.get("reason", "initial"),
             parent_job_id=e.get("parent_job_id"),
             timestamp=e.get("timestamp", ""),
+            status=e.get("status", "running"),
+            result=e.get("result", ""),
+            error=e.get("error", ""),
         )
         for e in data.get("execution_history", [])
     ]

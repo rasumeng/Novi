@@ -35,7 +35,28 @@ CONVERSATION_OBSERVED = "conversation.observed"
 KNOWLEDGE_EXTRACTED = "knowledge.extracted"
 KNOWLEDGE_PROMOTED = "knowledge.promoted"
 
-SURFACED_EVENTS = {CONVERSATION_OBSERVED, KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED}
+# Job lifecycle (Milestone 5 Phase 4E) — presentation-only projection.
+JOB_CREATED = "job.created"
+JOB_STARTED = "job.started"
+JOB_COMPLETED = "job.completed"
+JOB_FAILED = "job.failed"
+JOB_CHECKPOINTED = "job.checkpointed"
+JOB_INTERRUPTED = "job.interrupted"
+
+SURFACED_EVENTS = {
+    CONVERSATION_OBSERVED, KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED,
+    JOB_CREATED, JOB_STARTED, JOB_COMPLETED, JOB_FAILED,
+    JOB_CHECKPOINTED, JOB_INTERRUPTED,
+}
+
+_JOB_LIFECYCLE_TITLES = {
+    JOB_CREATED: "Task scheduled",
+    JOB_STARTED: "Execution started",
+    JOB_COMPLETED: "Execution completed",
+    JOB_FAILED: "Execution failed",
+    JOB_CHECKPOINTED: "Progress saved",
+    JOB_INTERRUPTED: "Execution interrupted",
+}
 
 _DETAIL_TRUNCATE = 200
 
@@ -95,12 +116,37 @@ def _entry_for(event) -> dict:
             "detail": detail,
             "timestamp": timestamp,
         }
+    if t in (JOB_CREATED, JOB_STARTED, JOB_COMPLETED, JOB_FAILED,
+             JOB_CHECKPOINTED, JOB_INTERRUPTED):
+        return {
+            "kind": t,
+            "title": _JOB_LIFECYCLE_TITLES.get(t, "Execution"),
+            "detail": _job_detail(t, data),
+            "timestamp": timestamp,
+            "task_id": (data.get("task_id") or ""),
+            "job_id": (data.get("job_id") or ""),
+        }
     return {
         "kind": t,
         "title": "Assistant activity",
         "detail": _truncate(str(data.get("detail", ""))),
         "timestamp": timestamp,
     }
+
+
+def _job_detail(t: str, data: dict) -> str:
+    step = data.get("step")
+    result = data.get("result") or data.get("error") or ""
+    task_id = data.get("task_id", "") or ""
+    if task_id:
+        prefix = f"Task {task_id}."
+    else:
+        prefix = ""
+    if step is not None:
+        return f"{prefix} Checkpoint at step {step}."
+    if result:
+        return f"{prefix} {_truncate(str(result))}"
+    return prefix.rstrip(".") or "Execution activity."
 
 
 class TimelineService:

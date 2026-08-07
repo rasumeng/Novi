@@ -98,6 +98,9 @@ class JobStore:
                     step=cp_data.get("step", 0),
                     messages=cp_data.get("messages", []),
                     tool_states=cp_data.get("tool_states", {}),
+                    task_id=cp_data.get("task_id", ""),
+                    plan_id=cp_data.get("plan_id", ""),
+                    completed_steps=cp_data.get("completed_steps", []),
                     created_at=cp_data.get("created_at", ""),
                 )
             return job
@@ -145,6 +148,9 @@ class JobStore:
                 "step": checkpoint.step,
                 "messages": checkpoint.messages,
                 "tool_states": checkpoint.tool_states,
+                "task_id": checkpoint.task_id,
+                "plan_id": checkpoint.plan_id,
+                "completed_steps": checkpoint.completed_steps,
                 "created_at": checkpoint.created_at,
             }
             _checkpoint_path(checkpoint.job_id).write_text(
@@ -167,8 +173,65 @@ class JobStore:
                 step=data.get("step", 0),
                 messages=data.get("messages", []),
                 tool_states=data.get("tool_states", {}),
+                task_id=data.get("task_id", ""),
+                plan_id=data.get("plan_id", ""),
+                completed_steps=data.get("completed_steps", []),
                 created_at=data.get("created_at", ""),
             )
         except Exception as e:
             log.warning("failed to load checkpoint %s: %s", job_id, e)
             return None
+
+
+def find_interrupted_jobs(store: "JobStore") -> list[dict]:
+    """Return running/paused jobs left behind by a crash — candidates to resume.
+
+    Startup detection (Phase 4D): Jobs persisted as RUNNING/PAUSED are
+    interrupted work. This enumerates them so a future continuation flow can
+    ask "Continue previous task?" with the exact playing fields a resume
+    needs (task_id, plan_id, next step index, completed steps). It performs no
+    automatic resume.
+    """
+    candidates = []
+    for job in store.list():
+        if job.status not in (JobStatus.RUNNING, JobStatus.PAUSED):
+            continue
+        cp = job.checkpoint
+        candidates.append({
+            "job_id": job.id,
+            "task_id": job.task_id,
+            "status": job.status.value,
+            "plan_id": cp.plan_id if cp else "",
+            "next_step": (cp.step + 1) if (cp and cp.step is not None) else 0,
+            "completed_steps": list(cp.completed_steps) if cp else [],
+            "has_checkpoint": cp is not None,
+            "started_at": job.started_at,
+        })
+    return candidates
+
+
+def mark_interrupted(store: JobStore) -> list[dict]:
+    """Startup recovery: flip RUNNING jobs to INTERRUPTED and persist.
+
+    INTERRUPTED is preferred over auto-resume. Returns the same enrichment
+    rows ``recover_interrupted_jobs`` produces so the continuation layer can
+    still ask the user. Persists every transition.
+    """
+    marked = []
+    for job in store.list():
+        if job.status != JobStatus.RUNNING:
+            continue
+        job.status = JobStatus.INTERRUPTED
+        store.save(job)
+        cp = job.checkpoint
+        marked.append({
+            "job_id": job.id,
+            "task_id": job.task_id,
+            "status": "interrupted",
+            "plan_id": cp.plan_id if cp else "",
+            "next_step": (cp.step + 1) if (cp and cp.step is not None) else 0,
+            "completed_steps": list(cp.completed_steps) if cp else [],
+            "has_checkpoint": cp is not None,
+            "started_at": job.started_at,
+        })
+    return marked

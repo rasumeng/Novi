@@ -23,22 +23,41 @@ from typing import Optional
 class JobStatus(str, Enum):
     PENDING = "pending"
     QUEUED = "queued"
+    CREATED = "created"
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETING = "completing"
     DONE = "done"
     ERROR = "error"
     CANCELLED = "cancelled"
+    COMPLETED = "done"  # alias of DONE — a successful attempt is "done"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in (JobStatus.DONE, JobStatus.COMPLETED,
+                        JobStatus.ERROR, JobStatus.FAILED,
+                        JobStatus.CANCELLED, JobStatus.INTERRUPTED)
 
 
 @dataclass
 class Checkpoint:
-    """Snapshot of execution state for pause/resume."""
+    """Snapshot of execution state for pause/resume.
+
+    Captures everything the runtime needs to resume a Job: the owning
+    Task/Plan ids, the current step index, the steps already completed,
+    plus the message/tool state of the run itself. ``task_id`` / ``plan_id``
+    are references only — a Checkpoint never owns plan/goal content.
+    """
 
     job_id: str = ""
     step: int = 0
     messages: list = field(default_factory=list)
     tool_states: dict = field(default_factory=dict)
+    task_id: str = ""
+    plan_id: str = ""
+    completed_steps: list = field(default_factory=list)
     created_at: str = ""
 
     def __post_init__(self):
@@ -51,6 +70,9 @@ class Checkpoint:
             "step": self.step,
             "messages": self.messages,
             "tool_states": self.tool_states,
+            "task_id": self.task_id,
+            "plan_id": self.plan_id,
+            "completed_steps": list(self.completed_steps),
             "created_at": self.created_at,
         }
 
@@ -101,7 +123,10 @@ class Job:
 
     @property
     def is_done(self) -> bool:
-        return self.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED)
+        return self.status in (
+            JobStatus.DONE, JobStatus.COMPLETED, JobStatus.ERROR,
+            JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.INTERRUPTED,
+        )
 
     @property
     def can_resume(self) -> bool:

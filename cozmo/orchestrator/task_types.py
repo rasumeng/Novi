@@ -215,12 +215,20 @@ class ExecutionPlan:
 
 @dataclass
 class ExecutionEntry:
-    """One entry in a Task's execution history."""
+    """One entry in a Task's execution history — bookkeeping about an attempt.
+
+    Records the owning Job reference plus the attempt's durable outcome
+    (status / result / failure reason). The attempt itself lives on the Job;
+    this is intent-level provenance only.
+    """
 
     job_id: str
     reason: str = "initial"
     parent_job_id: Optional[str] = None
     timestamp: str = ""
+    status: str = "running"
+    result: str = ""
+    error: str = ""
 
 
 class ExecutionHistory:
@@ -238,13 +246,23 @@ class ExecutionHistory:
         return [e.job_id for e in self.entries]
 
     def add(self, job_id: str, reason: str = "initial",
-            parent_job_id: Optional[str] = None):
+            parent_job_id: Optional[str] = None,
+            status: str = "running", result: str = "", error: str = ""):
         self.entries.append(ExecutionEntry(
             job_id=job_id,
             reason=reason,
             parent_job_id=parent_job_id,
             timestamp=datetime.now().isoformat(),
+            status=status,
+            result=result[:500] if len(result) > 500 else result,
+            error=error[:500] if len(error) > 500 else error,
         ))
+
+    def find(self, job_id: str) -> Optional[ExecutionEntry]:
+        for e in reversed(self.entries):
+            if e.job_id == job_id:
+                return e
+        return None
 
     def count(self) -> int:
         return len(self.entries)
@@ -252,7 +270,8 @@ class ExecutionHistory:
     def to_dict(self) -> list[dict]:
         return [
             {"job_id": e.job_id, "reason": e.reason,
-             "parent_job_id": e.parent_job_id, "timestamp": e.timestamp}
+             "parent_job_id": e.parent_job_id, "timestamp": e.timestamp,
+             "status": e.status, "result": e.result, "error": e.error}
             for e in self.entries
         ]
 

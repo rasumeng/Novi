@@ -11,6 +11,12 @@ import pytest
 from cozmo.runtime.event_bus import EventBus
 from cozmo.timeline import (
     CONVERSATION_OBSERVED,
+    JOB_CHECKPOINTED,
+    JOB_COMPLETED,
+    JOB_CREATED,
+    JOB_FAILED,
+    JOB_INTERRUPTED,
+    JOB_STARTED,
     KNOWLEDGE_EXTRACTED,
     KNOWLEDGE_PROMOTED,
     SURFACED_EVENTS,
@@ -133,7 +139,11 @@ def test_bridge_persists_to_disk(tmp_path):
 
 
 def test_surfaced_events_set_is_exactly_three():
-    assert SURFACED_EVENTS == {CONVERSATION_OBSERVED, KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED}
+    assert SURFACED_EVENTS == {
+        CONVERSATION_OBSERVED, KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED,
+        JOB_CREATED, JOB_STARTED, JOB_COMPLETED, JOB_FAILED,
+        JOB_CHECKPOINTED, JOB_INTERRUPTED,
+    }
 
 
 def test_webui_bridge_wires_service_from_context(tmp_path, monkeypatch):
