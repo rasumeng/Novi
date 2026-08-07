@@ -56,6 +56,9 @@ class ExecutionContext:
     # ── Input ────────────────────────────────────────────────────────────
     user_input: str = ""
     attachments: list[dict] = field(default_factory=list)
+    conversation_id: str = ""
+    """Brain conversation identity this turn belongs to. Empty when the
+    Brain should assign one (single-turn / background paths)."""
 
     # ── Analysis (from orchestrator) ─────────────────────────────────────
     analysis: Optional[TaskAnalysis] = None

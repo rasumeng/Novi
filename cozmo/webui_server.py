@@ -346,6 +346,12 @@ def build_runtime(cfg: dict):
         brain=b.get("brain"),
         orchestrator=b.get("orchestrator"),
     )
+    # Drive Task lifecycle from runtime plan events; runtime never touches the
+    # store itself.
+    from .orchestrator.projection import TaskLifecycleProjection
+    orch = b.get("orchestrator")
+    task_store = getattr(orch, "task_store", None) if orch else None
+    TaskLifecycleProjection(task_store).subscribe(event_bus)
     return runtime, b["orchestrator"], b["job_manager"], event_bus
 
 
@@ -466,7 +472,11 @@ class Session:
         def work():
             try:
                 # Plan via orchestrator
-                plan = self.orchestrator.plan(user_input=user_input, has_images=bool(resolved_atts))
+                plan = self.orchestrator.plan(
+                    user_input=user_input,
+                    has_images=bool(resolved_atts),
+                    conversation_id=self.current_conv_id or None,
+                )
 
                 # Submit job via job manager
                 job = self.job_manager.submit(
@@ -481,6 +491,7 @@ class Session:
                     user_input=user_input,
                     attachments=resolved_atts,
                     execution_plan=plan,
+                    conversation_id=self.current_conv_id,
                 ):
                     if self.stop_flag.is_set():
                         self._emit({"type": "thinking", "text": "Stopped by user", "detail": "Generation was cancelled by the user"})

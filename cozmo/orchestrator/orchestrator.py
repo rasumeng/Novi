@@ -60,12 +60,16 @@ class Orchestrator:
         evidence_detector: Optional[EvidenceDetector] = None,
         capability_registry: Optional[CapabilityRegistry] = None,
         model_router=None,
+        task_store=None,
+        planner_engine=None,
     ):
         self.intent_detector = intent_detector or IntentDetector()
         self.complexity = complexity_estimator or ComplexityEstimator()
         self.evidence_detector = evidence_detector or EvidenceDetector()
         self.capabilities = capability_registry or CapabilityRegistry()
         self.model_router = model_router
+        self.task_store = task_store
+        self.planner_engine = planner_engine
 
     def _resolve_capabilities(
         self,
@@ -256,11 +260,16 @@ class Orchestrator:
         has_images: bool = False,
         force_capability: Optional[str] = None,
         force_model: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> ExecutionPlan:
         """Turn user input into an ExecutionPlan.
 
         Overrides (force_capability / force_model) bypass detection.
         Uses analyze() for the analysis phase, then builds the plan.
+
+        When a ``task_store`` is wired, the request creates or loads a Task at
+        this boundary and the resulting plan references it via ``task_id``.
+        Without a task_store, no Task is managed and ``task_id`` stays empty.
         """
         # 1–2. Analyze: intent + evidence + complexity + capabilities → TaskAnalysis
         analysis = self.analyze(user_input, history, has_images)
@@ -323,6 +332,34 @@ class Orchestrator:
             plan.model_spec["model"] = model_name
 
         plan.model_spec["supports_tools"] = supports_tools
+
+        # 7. Task ownership: create or load a Task for this request. This is
+        #    the universal-currency boundary — the plan references the Task.
+        if self.task_store is not None:
+            task = self.task_store.get_or_create(
+                conversation_id=conversation_id or "",
+                goal_text=user_input[:500],
+                intent=analysis.intent,
+            )
+            plan.task_id = task.id
+            plan.context["task_id"] = task.id
+
+            # 8. Planning: coordinate plan generation, never execute it. The
+            #    resulting Plan is attached to the Task (Task owns the plan
+            #    reference) and surfaced on the ExecutionPlan. A Task that
+            #    already carries a plan is NOT replanned (Phase 2 is
+            #    sequential, non-replanning).
+            if self.planner_engine is not None:
+                if task.plan is None:
+                    task.plan = self.planner_engine.create_plan(task)
+                    self.task_store.update(task)
+                plan.plan = task.plan
+                plan.context["plan"] = task.plan
+
+            log.debug(
+                "Task bound: %s (conversation=%r, status=%s)",
+                task.id, task.conversation_id, task.status.value,
+            )
 
         log.debug(
             "Plan: intent=%s capabilities=%s tools=%d strategy=%s model=%s",

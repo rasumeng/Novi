@@ -212,6 +212,8 @@ class CozmoContext:
         from ..orchestrator.intent import IntentDetector
         from ..orchestrator.complexity import ComplexityEstimator
         from ..orchestrator.evidence import EvidenceDetector
+        from ..orchestrator.task_store import TaskStore
+        from ..planner.planner import PlannerEngine
 
         if not hasattr(self, "_orchestrator"):
             self._orchestrator = None
@@ -220,6 +222,8 @@ class CozmoContext:
                 intent_detector=IntentDetector(router_llm=self.router_llm),
                 complexity_estimator=ComplexityEstimator(),
                 evidence_detector=EvidenceDetector(router_llm=self.router_llm),
+                task_store=TaskStore(),
+                planner_engine=PlannerEngine(),
             )
         return self._orchestrator
 
@@ -239,7 +243,9 @@ class CozmoContext:
     def create_runtime(self, **overrides) -> object:
         from ..runtime.runtime import CozmoRuntime
         from ..runtime.event_bus import EventBus
+        from ..orchestrator.projection import TaskLifecycleProjection
 
+        orchestrator = overrides.get("orchestrator", self.orchestrator)
         runtime = CozmoRuntime(
             model_service=overrides.get("model_service", self.model_service),
             model_manager=overrides.get("model_manager", None),
@@ -251,8 +257,14 @@ class CozmoContext:
             brain=overrides.get("brain", self.brain),
             skills=overrides.get("skills", None),
             registry=overrides.get("registry", None),
-            orchestrator=overrides.get("orchestrator", self.orchestrator),
+            orchestrator=orchestrator,
         )
+
+        # Wire Task lifecycle projection: runtime only emits events; this
+        # projection transitions + persists the owning Task via the store the
+        # orchestrator already holds.
+        task_store = getattr(orchestrator, "task_store", None) if orchestrator else None
+        TaskLifecycleProjection(task_store).subscribe(runtime.event_bus)
         return runtime
 
     def warmup(self):

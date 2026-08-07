@@ -32,8 +32,14 @@ class RuntimeInterface(Protocol):
                    force_model: str | None = None,
                    execution_plan: object | None = None,
                    context: object | None = None,
+                   conversation_id: str | None = None,
                    ) -> Generator:
-        """Yield (kind, text) tuples.  Unified pipeline — no mode branching."""
+        """Yield (kind, text) tuples.  Unified pipeline — no mode branching.
+
+        ``conversation_id`` maps this turn to an existing Brain conversation
+        so that multi-turn threads stay in one Brain conversation/scenario.
+        Absent/empty → Brain assigns a fresh conversation id.
+        """
 
     def run(self,
             user_input: str,

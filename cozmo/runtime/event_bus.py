@@ -56,9 +56,12 @@ class EventType(str, Enum):
     JOB_CANCELLED = "job.cancelled"
 
     # Execution
-    STEP_STARTED = "step_started"
-    STEP_COMPLETED = "step_completed"
-    STEP_FAILED = "step_failed"
+    STEP_STARTED = "step.started"
+    STEP_COMPLETED = "step.completed"
+    STEP_FAILED = "step.failed"
+    PLAN_STARTED = "plan.started"
+    PLAN_COMPLETED = "plan.completed"
+    PLAN_FAILED = "plan.failed"
     TOOL_CALLED = "tool_called"
     TOOL_RESULT = "tool_result"
     TOOL_FAILED = "tool_failed"

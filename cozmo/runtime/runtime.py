@@ -135,6 +135,11 @@ from .lessons import LessonStore
 from ..models import ModelUnavailableError
 from .retrieval import RetrievalExecutor
 from .tool_executor import ToolExecutor
+from .event_bus import EventType
+
+# Sentinel emitted by CozmoRuntime._run_agent_loop carrying the loop outcome.
+# Payload: (_LOOP_DONE, final_text, stop_reason, success)
+_LOOP_DONE = "__plan_step_done__"
 
 class _RouterLLM:
     def __init__(self, model_service, role: str = "chat"):
@@ -165,26 +170,11 @@ _IDENTITY = (
     "- Use search results as primary source; internal knowledge supplements.\n"
 )
 
-_COLLAB_PLAN_PROMPT = """Plan this multi-step task.
-
-CONTEXT:
-{context}
-
-USER REQUEST: {query}
-
-Output a numbered plan (3-7 steps). Each step: what to do, which tools, expected output.
-Format:
-## Plan
-1. [step] — tools: [tools] — output: [expected]
-2. ..."""
-
-_COMPACT_PROMPT = """Condense into 4-6 sentences. Keep: user goal, key facts, decisions, preferences. Drop: greetings, dead-ends.
+_COMPACT_PROMPT = """Condense into 4-6 sentences. Keep: user goal, key facts, decisions, assumptions. Drop: greetings, dead-ends.
 
 {text}
 
 Context note:"""
-
-_TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 class CozmoRuntime:
     """Single agentic runtime loop with native tool calling."""
@@ -282,8 +272,8 @@ class CozmoRuntime:
             debug_trace=self.debug_trace,
             event_bus=self.event_bus,
         )
-        planning_cfg = rt.get("planning", {})
-        self._planning_threshold = planning_cfg.get("auto_threshold", 1)
+        # NOTE: legacy inline-planning knobs were removed in Milestone 5
+        # Phase 3 — PlannerEngine is the sole planning authority.
     def set_config(self, **kwargs):
         """Apply configuration from external consumers."""
         for k, v in kwargs.items():
@@ -412,7 +402,8 @@ class CozmoRuntime:
                    force_capability: str | None = None,
                    force_model: str | None = None,
                    execution_plan: object | None = None,
-                   context: ExecutionContext | None = None):
+                   context: ExecutionContext | None = None,
+                   conversation_id: str | None = None):
         """Yield (kind, text) tuples from the agentic loop."""
         intent_str = "conversation"
         try:
@@ -426,6 +417,8 @@ class CozmoRuntime:
                     force_model=force_model or self.force_model,
                     force_capability=force_capability or self.force_capability,
                 )
+            if conversation_id:
+                ctx.conversation_id = conversation_id
             if ctx.trace is None:
                 ctx.trace = ExecutionTrace(user_input=ctx.user_input)
             user_input = ctx.user_input
@@ -568,38 +561,6 @@ class CozmoRuntime:
                 self.tracer.finalize(ctx.trace, "stopped")
                 return
 
-            if ctx.analysis is not None and ctx.analysis.complexity.plan_level >= self._planning_threshold:
-                event = self.tracer.emit(
-                    action=TraceAction.PLANNING,
-                    category="planning",
-                    summary="Analyzing request complexity and building execution plan.",
-                    trace=ctx.trace,
-                    debug_category="planning",
-                    debug_data={
-                        "plan_level": ctx.analysis.complexity.plan_level,
-                        "complexity_score": ctx.analysis.complexity.score,
-                    },
-                )
-                yield ("trace", event)
-                yield ("thinking", event.action.value, event.summary, None)
-                t0 = time.time()
-                try:
-                    if self.model_service:
-                        llm = self.model_service.client_for_role("research", temperature=0.2)
-                    else:
-                        raise RuntimeError("model_service required for plan generation")
-                    plan = llm.invoke(_COLLAB_PLAN_PROMPT.format(context=ctx.grounding_text, query=user_input))
-                    text = getattr(plan, "content", plan)
-                    ctx.plan_context = text.strip() if isinstance(text, str) else str(text).strip()
-                except Exception as e:
-                    ctx.plan_context = f"1. Investigate the request: {user_input}\n2. Execute based on available tools and context.\n(Plan generation failed: {e})"
-                ctx.trace.plan_generated = bool(ctx.plan_context)
-                ctx.trace.plan_latency_ms = round((time.time() - t0) * 1000, 2)
-                if ctx.plan_context:
-                    yield ("thinking", "Plan generated", ctx.plan_context[:200], None)
-            else:
-                ctx.trace.plan_generated = False
-                ctx.trace.plan_latency_ms = 0.0
             if self.stop_event and self.stop_event.is_set():
                 self.tracer.finalize(ctx.trace, "stopped")
                 return
@@ -638,10 +599,8 @@ class CozmoRuntime:
                         if lc_tools else mm.client_for_model(ctx.model_name, ctx.temperature))
 
             full_grounding = ctx.grounding_text
-            if ctx.plan_context:
-                full_grounding = (ctx.grounding_text + "\n\n" + ctx.plan_context) if ctx.grounding_text else ctx.plan_context
 
-            msgs = [SystemMessage(content=self._system_prompt(
+            base_msgs = [SystemMessage(content=self._system_prompt(
                 user_input, intent_str, full_grounding,
                 grounding_error=ctx.grounding_error,
                 attachments=ctx.attachments, activated_skills=ctx.activated_skills,
@@ -649,29 +608,194 @@ class CozmoRuntime:
                 memory_context=ctx.memory_context, project_context=ctx.project_context))]
             coord = ctx.retrieval_coordinator
             if coord is not None and coord.budget.max_web_searches > 0:
-                msgs.append(SystemMessage(
+                base_msgs.append(SystemMessage(
                     content="[Retrieval guidance] Retrieval is in progress. Prefer using "
                             "existing retrieved evidence. Avoid repeated searches unless "
                             "previous evidence is clearly insufficient. Only one web search "
                             f"and one web fetch are allowed."
                 ))
             for user, assistant in self.history[-self.max_history:]:
-                msgs.append(HumanMessage(content=user))
-                msgs.append(AIMessage(content=assistant))
+                base_msgs.append(HumanMessage(content=user))
+                base_msgs.append(AIMessage(content=assistant))
 
             if has_images:
                 multimodal = self._build_multimodal_content(user_input, attachments)
-                msgs.append(HumanMessage(content=multimodal))
+                base_msgs.append(HumanMessage(content=multimodal))
             else:
-                msgs.append(HumanMessage(content=user_input))
+                base_msgs.append(HumanMessage(content=user_input))
 
             if self.stop_event and self.stop_event.is_set():
                 self.tracer.finalize(ctx.trace, "stopped")
                 return
 
+            # ── Sequential plan execution ─────────────────────────────
+            # Runtime is a deterministic executor: it consumes the ordered
+            # PlanSteps on ExecutionPlan.plan.steps and runs them one at a
+            # time, emitting step/plan lifecycle events. No planning lives
+            # here — PlannerEngine owns plan generation.
+            plan_steps: list = []
+            plan_ref = None
+            if ctx.execution_plan is not None:
+                plan_ref = ctx.execution_plan.plan
+                if plan_ref is not None:
+                    plan_steps = list(getattr(plan_ref, "steps", None) or [])
+
+            # Split the plan's model-step budget across sequential steps so
+            # total ReAct iterations stay bounded regardless of step count.
+            step_budget = ctx.max_steps
+            if plan_steps:
+                step_budget = max(1, ctx.max_steps // len(plan_steps))
+
             final = ""
-            seen_calls: set[str] = set()
-            for step in range(ctx.max_steps):
+            stop_reason = "completed"
+
+            if plan_steps:
+                from ..planner.models import PlanStatus, PlanStepStatus
+
+                plan_ref.status = PlanStatus.ACTIVE
+                self._emit_bus(EventType.PLAN_STARTED,
+                               task_id=ctx.execution_plan.task_id,
+                               plan_id=plan_ref.id,
+                               step_count=len(plan_steps))
+                yield ("plan.started", plan_ref.id, f"Executing {len(plan_steps)} step(s)")
+
+                step_finals: list[str] = []
+                plan_failed = False
+                for idx, plan_step in enumerate(plan_steps):
+                    plan_step.status = PlanStepStatus.RUNNING
+                    self._emit_bus(EventType.STEP_STARTED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_id=plan_step.id,
+                                   index=idx,
+                                   description=plan_step.description)
+                    yield ("step.started", plan_step.id, plan_step.description)
+
+                    step_final = ""
+                    step_ok = True
+                    step_reason = "completed"
+                    for chunk in self._run_agent_loop(
+                            ctx, mm, runnable, intent_str, step_budget, base_msgs,
+                            step=plan_step, step_index_base=len(ctx.trace.steps)):
+                        if chunk[0] == _LOOP_DONE:
+                            step_final, step_reason, step_ok = chunk[1], chunk[2], chunk[3]
+                        else:
+                            yield chunk
+
+                    if step_ok:
+                        plan_step.status = PlanStepStatus.COMPLETED
+                        self._emit_bus(EventType.STEP_COMPLETED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_id=plan_step.id,
+                                       index=idx,
+                                       result=step_final[:2000])
+                        yield ("step.completed", plan_step.id, step_final[:2000])
+                        step_finals.append(step_final)
+                    else:
+                        plan_step.status = PlanStepStatus.FAILED
+                        self._emit_bus(EventType.STEP_FAILED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_id=plan_step.id,
+                                       index=idx,
+                                       error=step_final[:2000])
+                        yield ("step.failed", plan_step.id, step_final[:2000])
+                        plan_ref.status = PlanStatus.FAILED
+                        self._emit_bus(EventType.PLAN_FAILED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_id=plan_step.id,
+                                       error=step_final[:2000])
+                        yield ("plan.failed", plan_ref.id, step_final[:2000])
+                        stop_reason = step_reason
+                        final = step_final
+                        plan_failed = True
+                        break
+
+                if not plan_failed:
+                    plan_ref.status = PlanStatus.COMPLETED
+                    self._emit_bus(EventType.PLAN_COMPLETED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_count=len(step_finals))
+                    yield ("plan.completed", plan_ref.id, f"Completed {len(step_finals)} step(s)")
+                    final = "\n\n".join(s for s in step_finals if s.strip())
+                    stop_reason = "completed"
+                    if not final.strip():
+                        stop_reason = "empty"
+            else:
+                # Backward-compatible unplanned path. When no ExecutionPlan
+                # (or a plan without steps) is supplied, the runtime runs a
+                # single unplanned ReAct loop. This intentionally bypasses the
+                # plan/step lifecycle events — they belong to planned execution.
+                # Standalone/direct runs (no orchestrator) rely on this path.
+                for chunk in self._run_agent_loop(
+                        ctx, mm, runnable, intent_str, step_budget, base_msgs,
+                        step=None, step_index_base=0):
+                    if chunk[0] == _LOOP_DONE:
+                        final, stop_reason, _ = chunk[1], chunk[2], chunk[3]
+                    else:
+                        yield chunk
+
+            if self.stop_event and self.stop_event.is_set():
+                self.tracer.finalize(ctx.trace, "stopped")
+                return
+
+            ctx.trace.final_response_length = len(final)
+            rc = ctx.retrieval_coordinator
+            if rc is not None:
+                ctx.trace.retrieval_search_count = rc.budget.searches_used
+                ctx.trace.retrieval_fetch_count = rc.budget.fetches_used
+                ctx.trace.retrieval_budget_exhausted = rc.budget.is_exhausted
+            self.tracer.finalize(ctx.trace, stop_reason)
+
+            self._remember(user_input, final, conversation_id=ctx.conversation_id)
+
+        except Exception as e:
+            self.tracer.finalize(ctx.trace, "error")
+            msg = f"I hit an error: {e}"
+            yield ("token", msg)
+            self._remember(user_input, msg, conversation_id=ctx.conversation_id)
+    def _emit_bus(self, event_type, **data):
+        """Publish a lifecycle event to the runtime event bus, if any."""
+        if self.event_bus is None:
+            return
+        try:
+            self.event_bus.emit(event_type, **data)
+        except Exception:
+            pass
+    def _run_agent_loop(self, ctx, mm, runnable, intent_str, step_budget,
+                        base_msgs, step=None, step_index_base=0):
+        """Run the ReAct loop for one plan step (or a whole unplanned run).
+
+        Yields the runtime streaming events (token/reasoning/thinking/tool_*)
+        exactly as the legacy single loop did. Ends by yielding the
+        ``_LOOP_DONE`` sentinel carrying ``(final, stop_reason, success)`` so the
+        caller can drive sequential plan steps or terminate on failure.
+
+        ``step`` is an optional :class:`PlanStep`. When given, its objective is
+        injected as a trailing system instruction so the model executes that
+        specific step. ``step_index_base`` offsets StepTrace indexing so plan
+        steps accumulate into one global trace.
+
+        Future checkpoint execution: the loop is index-addressed and
+        idempotent per step. A future Job-driven executor (which already owns
+        Checkpoint step/messages/tool_states in cozmo/jobs) can resume by
+        feeding ``Checkpoint.step`` as ``step_index_base`` and the restored
+        messages as ``base_msgs`` — no re-planning and no new planning logic
+        needed here. Runtime stays the generic per-step executor.
+        """
+        msgs = list(base_msgs)
+        if step is not None:
+            msgs.append(SystemMessage(
+                content=f"CURRENT STEP ({step.id}): {step.description}"
+            ))
+        seen_calls: set[str] = set()
+        final = ""
+        try:
+            for outer_step in range(step_budget):
+                idx = step_index_base + outer_step
                 acc = None
                 content_buf = ""
                 step_start = time.time()
@@ -680,6 +804,7 @@ class CozmoRuntime:
                 for chunk in runnable.stream(msgs):
                     if self.stop_event and self.stop_event.is_set():
                         self.tracer.finalize(ctx.trace, "stopped")
+                        yield (_LOOP_DONE, "", "stopped", False)
                         return
                     acc = chunk if acc is None else acc + chunk
                     reasoning_content = chunk.additional_kwargs.get("reasoning_content", "")
@@ -693,10 +818,10 @@ class CozmoRuntime:
 
                 ai = acc if acc is not None else AIMessage(content=content_buf)
                 model_ms = round((time.time() - step_start) * 1000, 2)
-                while len(ctx.trace.steps) <= step:
+                while len(ctx.trace.steps) <= idx:
                     ctx.trace.steps.append(StepTrace(step=len(ctx.trace.steps)))
-                ctx.trace.steps[step].model_inference_ms = model_ms
-                ctx.trace.steps[step].tokens_generated = tokens_in_step
+                ctx.trace.steps[idx].model_inference_ms = model_ms
+                ctx.trace.steps[idx].tokens_generated = tokens_in_step
 
                 calls = self.tool_executor.extract_calls(ai)
 
@@ -748,13 +873,15 @@ class CozmoRuntime:
 
                 for c, args_sig in zip(calls, arg_sigs):
                     if self.stop_event and self.stop_event.is_set():
+                        self.tracer.finalize(ctx.trace, "stopped")
+                        yield (_LOOP_DONE, "", "stopped", False)
                         return
                     sig = f"{c['name']}:{args_sig}"
-                    call_id = f"call-{step}-{c['name']}"
+                    call_id = f"call-{idx}-{c['name']}"
                     yield ("tool_call", c["name"], c["args"], call_id, self.tool_executor.tool_category(c["name"]))
                     if self.event_bus:
                         try:
-                            self.event_bus.emit("tool_called", tool=c["name"], args=c["args"], step=step)
+                            self.event_bus.emit("tool_called", tool=c["name"], args=c["args"], step=idx)
                         except Exception:
                             pass
                     if sig in seen_calls:
@@ -766,7 +893,7 @@ class CozmoRuntime:
                         diff = self.tool_executor.compute_diff(c["name"], c["args"])
                         tool_ms = round((time.time() - tool_t0) * 1000, 2)
                         self.tracer.record_tool(
-                            step_idx=step, name=c["name"], args=c["args"],
+                            step_idx=idx, name=c["name"], args=c["args"],
                             result=out, latency_ms=tool_ms, success=tool_success,
                             error=out if out.startswith("Error") else None,
                             trace=ctx.trace,
@@ -776,7 +903,7 @@ class CozmoRuntime:
                         result = self.tool_executor.execute(
                             c["name"], c["args"],
                             coordinator=ctx.retrieval_coordinator,
-                            step_idx=step, trace=ctx.trace,
+                            step_idx=idx, trace=ctx.trace,
                         )
                         out = result.output
                         tool_success = result.success
@@ -812,13 +939,14 @@ class CozmoRuntime:
                                     "action": "post_tool_escalation",
                                     "reason": recovery_decision.reason,
                                     "attempt": state.attempts_used,
-                                    "step": step,
+                                    "step": idx,
                                     "tool": c["name"],
                                 },
                             ))
 
                     if self.stop_event and self.stop_event.is_set():
                         self.tracer.finalize(ctx.trace, "stopped")
+                        yield (_LOOP_DONE, "", "stopped", False)
                         return
                 yield ("thinking", "Thinking...", "Processing tool results and forming response", None)
             else:
@@ -835,34 +963,29 @@ class CozmoRuntime:
                 stop_reason = "empty"
             elif "ran out of steps" in final:
                 stop_reason = "max_steps"
-            ctx.trace.final_response_length = len(final)
-            rc = ctx.retrieval_coordinator
-            if rc is not None:
-                ctx.trace.retrieval_search_count = rc.budget.searches_used
-                ctx.trace.retrieval_fetch_count = rc.budget.fetches_used
-                ctx.trace.retrieval_budget_exhausted = rc.budget.is_exhausted
-            self.tracer.finalize(ctx.trace, stop_reason)
-
-            self._remember(user_input, final)
-
+            success = stop_reason not in ("max_steps", "error")
+            yield (_LOOP_DONE, final, stop_reason, success)
         except Exception as e:
-            self.tracer.finalize(ctx.trace, "error")
-            msg = f"I hit an error: {e}"
-            yield ("token", msg)
-            self._remember(user_input, msg)
+            final = f"I hit an error: {e}"
+            yield ("token", final)
+            yield (_LOOP_DONE, final, "error", False)
     def run(self, user_input: str, attachments: list[dict] | None = None) -> str:
         chunks = []
         for kind, text in self.run_stream(user_input, attachments):
             if kind == "token":
                 chunks.append(text)
         return "".join(chunks).strip()
-    def _remember(self, user_input: str, final: str):
+    def _remember(self, user_input: str, final: str, conversation_id: str | None = None):
         self.history.append((user_input, final))
         if len(self.history) > self.max_history:
             self._compact()
         if self.brain is not None:
             try:
-                self.brain.observe(Turn(user=user_input, assistant=final))
+                self.brain.observe(Turn(
+                    user=user_input,
+                    assistant=final,
+                    conversation_id=conversation_id or None,
+                ))
             except Exception:
                 pass
             return
