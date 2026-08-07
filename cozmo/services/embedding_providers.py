@@ -69,13 +69,16 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
 
     @property
     def model_name(self) -> str:
-        return self._config.get("embedding", {}).get(
-            "model", "all-MiniLM-L6-v2"
-        )
+        return self._config.get("embedding", {}).get("model", "")
 
     @property
     def model(self):
         if self._model is None:
+            if not self.model_name:
+                raise ValueError(
+                    "No embedding model configured. Set embedding.model (e.g. via "
+                    "Model settings or the Configuration Framework) before use."
+                )
             from sentence_transformers import SentenceTransformer
 
             self._model = SentenceTransformer(self.model_name)
@@ -108,9 +111,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
             or self._config.get("ollama", {}).get("url")
             or DEFAULT_OLLAMA_URL
         ).rstrip("/")
-        self._model = self._config.get("embedding", {}).get(
-            "model", "nomic-embed-text"
-        )
+        self._model = self._config.get("embedding", {}).get("model", "")
 
     @property
     def model_name(self) -> str:

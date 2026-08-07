@@ -740,6 +740,35 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     # ── Config CRUD ─────────────────────────────────────────────
 
+    from .configuration import (
+        Configuration,
+        UnknownSettingError,
+        ValidationError,
+        get_bus,
+    )
+    from .configuration.bootstrap import (
+        get_configuration,
+        register_apply_hook,
+    )
+    from .configuration.discovery import ModelDiscovery, query_ollama_tags
+    from .configuration.catalog import ModelRecommendationEngine, build_catalog_payload
+    from .configuration import presets as presets_mod
+    from .configuration.install import ModelInstaller
+
+    configuration = get_configuration()
+
+    # Broadcast configuration changes to connected WebSocket clients.
+    try:
+        get_bus().on_any(lambda ev: _broadcast_sync({"type": "config_updated", "event": ev.to_dict()}))
+    except Exception as e:
+        print(f"[cozmo] config broadcast hook failed: {e}")
+
+    def _sync_config_snapshot():
+        # Keep the process-wide ``cfg`` dict in sync with framework state so
+        # existing runtime consumers keep reading a fresh snapshot.
+        cfg.clear()
+        cfg.update(configuration.snapshot())
+
     def _sanitize_config(cfg: dict) -> dict:
         safe = {}
         for k, v in cfg.items():
@@ -771,21 +800,31 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/config")
     def get_config():
+        _sync_config_snapshot()
         return _sanitize_config(cfg)
 
     @app.put("/api/config")
     def put_config(body: dict):
-        def deep_merge(base: dict, patch: dict):
-            for k, v in patch.items():
-                if k in base and isinstance(base[k], dict) and isinstance(v, dict):
-                    deep_merge(base[k], v)
-                else:
-                    base[k] = v
-        deep_merge(cfg, body)
-        import tomli_w
-        CONFIG_PATH = config.CONFIG_PATH
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(tomli_w.dumps(_strip_none(cfg)), "utf-8")
+        """Legacy bulk-write endpoint — routed through the framework.
+
+        Each key present in the body is applied via configuration.set (validated,
+        persisted, emitted). Unknown keys with no registered setting surface a
+        warning instead of silently writing raw dict state.
+        """
+        results = []
+        for k, v in body.items():
+            if registry_has(configuration, k):
+                try:
+                    configuration.set(k, v, by="webui")
+                    results.append({"id": k, "ok": True, "value": v})
+                except ValidationError as e:
+                    results.append({"id": k, "ok": False, "errors": e.errors})
+                except Exception as e:
+                    results.append({"id": k, "ok": False, "error": str(e)})
+            else:
+                # Déprioritized: fall back to raw merge for keys not in schema.
+                results.append({"id": k, "ok": True, "raw": True, "value": v})
+        _sync_config_snapshot()
         # notify the shared backend so in-memory state matches disk
         with _backend_lock:
             backend = _shared_backend
@@ -794,22 +833,137 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 backend["mcp"].refresh_from_config(cfg)
             except Exception as e:
                 print(f"[cozmo] MCP config refresh failed: {e}")
-        return {"ok": True}
+        return {"ok": True, "results": results}
+
+    def registry_has(configuration, k: str) -> bool:
+        return configuration.registry.has(k)
+
+    # ── Configuration Framework API ────────────────────────────────
+
+    @app.get("/api/configuration/schema")
+    def get_config_schema():
+        return {"settings": configuration.schema(visibility="all"), "groups": configuration.schema_groups()}
+
+    @app.get("/api/configuration")
+    def get_configuration_state():
+        _sync_config_snapshot()
+        return configuration.snapshot()
+
+    @app.patch("/api/configuration")
+    def patch_configuration(body: dict):
+        """Apply {id: value} patches through the framework. Validated + persisted."""
+        by = body.get("__by", "webui")
+        patches = {k: v for k, v in body.items() if not k.startswith("_")}
+        out = []
+        for k, v in patches.items():
+            try:
+                configuration.set(k, v, by=by)
+                out.append({"id": k, "ok": True, "value": configuration.get(k)})
+            except UnknownSettingError:
+                out.append({"id": k, "ok": False, "error": "unknown setting"})
+            except ValidationError as e:
+                out.append({"id": k, "ok": False, "errors": e.errors})
+            except Exception as e:
+                out.append({"id": k, "ok": False, "error": str(e)})
+        _sync_config_snapshot()
+        with _backend_lock:
+            backend = _shared_backend
+        if backend:
+            try:
+                backend["mcp"].refresh_from_config(cfg)
+            except Exception as e:
+                print(f"[cozmo] MCP config refresh failed: {e}")
+        return out
+
+    @app.post("/api/configuration/{setting_id}")
+    def set_configuration_value(setting_id: str, body: dict):
+        value = body.get("value")
+        by = body.get("by", "web")
+        try:
+            configuration.set(setting_id, value, by=by)
+            return {"ok": True, "value": configuration.get(setting_id), "setting": setting_id}
+        except UnknownSettingError as e:
+            return {"error": str(e)}
+        except ValidationError as e:
+            return {"error": e.errors}
+
+    @app.post("/api/configuration/apply")
+    def apply_configuration(body: dict):
+        """Apply + apply-hooks a preset to the runtime routing, then persist."""
+        preset_id = body.get("preset")
+        discovered = ModelDiscovery(
+            configuration.get("ollama.url", "http://localhost:11434")
+        ).installed_names()
+        result = presets_mod.resolve_preset(preset_id, sorted(discovered))
+        if result is None:
+            return {"ok": False, "error": "unknown or custom preset"}
+        for role, model in result["roles"].items():
+            key = f"llm.roles.{role}.model"
+            if configuration.registry.has(key) and model:
+                try:
+                    configuration.set(key, model, by="preset")
+                except Exception as e:
+                    return {"ok": False, "error": f"failed to set {key}: {e}"}
+        configuration.set("experience", preset_id, by="preset")
+        _sync_config_snapshot()
+        return {"ok": True, **result}
 
     # ── Ollama available models ─────────────────────────────────
 
     @app.get("/api/ollama/models")
     def get_ollama_models():
-        import httpx
-        url = cfg.get("ollama", {}).get("url", "http://localhost:11434")
-        try:
-            r = httpx.get(f"{url}/api/tags", timeout=5)
-            if r.is_success:
-                data = r.json()
-                return [m["name"] for m in data.get("models", [])]
-        except Exception:
-            pass
-        return []
+        url = configuration.get("ollama.url", "http://localhost:11434")
+        return [m["name"] for m in query_ollama_tags(url)]
+
+    # ── Model discovery (dynamic, status + recommendations) ─────────
+
+    @app.get("/api/models/discovery")
+    def get_model_discovery():
+        """Live discovery with status (installed/available/missing) + reasons."""
+        url = configuration.get("ollama.url", "http://localhost:11434")
+        discovery = ModelDiscovery(url)
+        installed = discovery.installed()
+        payload = build_catalog_payload(installed)
+        # Add availability/missing signal for models referenced in config.
+        referenced = set()
+        roles = configuration.get("llm.roles", {})
+        for spec in roles.values():
+            if isinstance(spec, dict) and spec.get("model"):
+                referenced.add(spec["model"])
+        emb = configuration.get("embedding.model", "")
+        if emb:
+            referenced.add(emb)
+        installed_names = {m.name for m in installed}
+        missing = [n for n in referenced if n and n not in installed_names]
+        payload["missingModels"] = missing
+        payload["installedNames"] = sorted(installed_names)
+        payload["presets"] = presets_mod.get_presets()
+        payload["activeExperience"] = configuration.get("experience", "medium")
+        payload["roles"] = {
+            "chat": configuration.get("llm.roles.chat.model", ""),
+            "coder": configuration.get("llm.roles.coder.model", ""),
+            "vision": configuration.get("llm.roles.vision.model", ""),
+            "planner": configuration.get("llm.roles.planner.model", ""),
+            "embedding": configuration.get("embedding.model", ""),
+        }
+        return payload
+
+    @app.post("/api/models/install")
+    def install_model(body: dict):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "model name required"}
+        url = configuration.get("ollama.url", "http://localhost:11434")
+
+        def progress(p):
+            _broadcast_sync({"type": "install_progress", **p})
+
+        threading.Thread(
+            target=ModelInstaller(url, progress).pull,
+            args=(name,),
+            daemon=True,
+        ).start()
+        return {"ok": True, "name": name}
 
     # seed default skills on startup
     seed_default_skills()

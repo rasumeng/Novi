@@ -61,7 +61,7 @@ def migrate(persist_dir: str | Path, embed_model: str | EmbeddingService | None 
     """
     persist_dir = Path(persist_dir)
     embed_cfg = dict(cozmo_config.load())
-    embed_cfg.setdefault("embedding", {})["model"] = embed_model or "nomic-embed-text"
+    embed_cfg.setdefault("embedding", {})["model"] = embed_model or cozmo_config.load().get("embedding", {}).get("model", "")
     embed_service = (
         embed_model
         if isinstance(embed_model, EmbeddingService)

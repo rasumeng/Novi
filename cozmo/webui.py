@@ -45,7 +45,7 @@ class WebUIBackend:
 
         # Model router
         from .runtime.model_router import ModelRouter
-        default_model = ctx.config.get("llm", {}).get("default_model") or "qwen3:8b"
+        default_model = ctx.config.get("llm", {}).get("default_model") or ""
         model_router = ModelRouter(default_model=default_model, resource_manager=None)
 
         # MCP manager
@@ -67,6 +67,27 @@ class WebUIBackend:
             model_router=model_router,
         )
         job_manager = JobManager()
+
+        # Event-driven wiring (no polling): config changes reach the shared
+        # backend live through the framework's apply hooks.
+        def _reload_router(path, value, previous):
+            if not path.startswith("llm."):
+                return
+            try:
+                ctx.model_service.refresh()
+            except Exception as e:
+                print(f"[cozmo] model refresh failed: {e}")
+            model_router.populate_from_service(ctx.model_service, ctx.config)
+
+        def _safe_mcp_refresh(manager, path, value, previous):
+            try:
+                manager.refresh_from_config(ctx.config)
+            except Exception as e:
+                print(f"[cozmo] MCP config refresh failed: {e}")
+
+        from .configuration.bootstrap import register_apply_hook as _ra
+        _ra("runtime", _reload_router)
+        _ra("mcp", lambda p, v, prev: _safe_mcp_refresh(mcp, p, v, prev))
 
         return {
             "model_service": ctx.model_service,

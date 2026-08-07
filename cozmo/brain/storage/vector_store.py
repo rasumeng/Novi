@@ -52,7 +52,7 @@ class VectorStore:
             from ... import config as cozmo_config
 
             cfg = cozmo_config.load()
-            model_name = embed_model or cfg.get("embedding", {}).get("model", "nomic-embed-text")
+            model_name = embed_model or cfg.get("embedding", {}).get("model", "")
             embed_cfg = dict(cfg)
             embed_cfg.setdefault("embedding", {})["model"] = model_name
             embed_service = EmbeddingService(embed_cfg)

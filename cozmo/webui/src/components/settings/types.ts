@@ -1,4 +1,4 @@
-export type SectionId = 'general' | 'models' | 'memory' | 'tools' | 'mcp' | 'skills' | 'advanced'
+export type SectionId = 'general' | 'models' | 'memory' | 'tools' | 'mcp' | 'skills' | 'advanced' | 'developer'
 
 export interface ToolInfo {
   id: string

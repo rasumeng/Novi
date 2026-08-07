@@ -250,7 +250,7 @@ class CozmoRuntime:
         self._capability_registry = CapabilityRegistry()
         register_builtin_capabilities(self._capability_registry)
         llm_cfg = self.cfg.get("llm", {})
-        default_model = llm_cfg.get("default_model") or "qwen3:8b"
+        default_model = llm_cfg.get("default_model") or ""
         routing = rt.get("routing", {})
         cap_prefs = routing.get("capability_preferences")
         self._model_router = ModelRouter(

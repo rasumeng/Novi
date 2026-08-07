@@ -1,19 +1,20 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Search, Settings } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/cozmo'
-import { fetchConfig, saveConfig, fetchOllamaModels, fetchAvailableModels } from './api'
+import { fetchConfig, saveConfig, type SchemaResponse } from './api'
 import { useToast } from '@/hooks/useToast'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
-import { useProductConfig } from '@/hooks/useProductConfig'
+import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { SECTIONS } from './constants'
+import { GeneralSettings } from './GeneralSettings'
 import { ModelsSettings } from './ModelsSettings'
+import { SettingField } from './SettingField'
 import { ToolsSettings } from './ToolsSettings'
 import { MemorySettings } from './MemorySettings'
 import { SkillsSection } from './SkillsSection'
 import { ConnectorsSection } from './ConnectorsSection'
-import { GeneralSettings } from './GeneralSettings'
 import { AgentSettings } from './AgentSettings'
 import type { SectionId, SettingsData, ToolInfo } from './types'
 import type { Skill } from '@/types'
@@ -27,97 +28,97 @@ interface Props {
   onCreateSkill?: () => void
 }
 
+const PAGE_LABEL: Record<string, string> = {
+  general: 'General',
+  models: 'Models',
+  advanced: 'Advanced',
+  developer: 'Developer',
+}
+
 export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: Props) {
   const { showError } = useToast()
+  const framework = useFrameworkSettings()
   const [section, setSection] = useState<SectionId>('general')
   const [search, setSearch] = useState('')
-  const [config, setConfig] = useState<SettingsData | null>(null)
+  const [legacyConfig, setLegacyConfig] = useState<SettingsData | null>(null)
   const [tools, setTools] = useState<ToolInfo[]>([])
-  const [ollamaModels, setOllamaModels] = useState<string[]>([])
-  const [availableModels, setAvailableModels] = useState<{ name: string; provider: string }[]>([])
-  const [dirty, setDirty] = useState(false)
   const [skills, setSkills] = useState<Skill[]>([])
   const modalRef = useRef<HTMLDivElement>(null)
 
   useFocusTrap(modalRef, open)
 
-  const discoveredModels = useMemo(
-    () => [
-      ...ollamaModels.map((name) => ({ name, provider: 'ollama' })),
-      ...availableModels,
-    ],
-    [ollamaModels, availableModels]
-  )
-  const product = useProductConfig({ config, setConfig, setDirty, discoveredModels })
+  // The framework schema is the single source of truth for every page.
+  const schema = framework.schema
 
-  useEffect(() => {
-    if (!open) return
-    if (initialSection) setSection(initialSection)
-    fetchConfig().then((cfg) => {
-      setConfig(cfg)
-    }).catch(() => {
-      showError("Couldn't load settings. Is Cozmo's backend running?")
-    })
-    fetchOllamaModels().then(setOllamaModels).catch(() => {})
-    fetchAvailableModels().then(setAvailableModels).catch(() => {})
-    fetchTools()
-      .then(setTools)
-      .catch(() => {})
-    fetchSkills()
-      .then(setSkills)
-      .catch(() => {})
-  }, [open, initialSection, showError])
+  const updateLegacy = (next: SettingsData) => {
+    setLegacyConfig(next)
+    flushLegacy(next)
+  }
+
+  // Legacy nested config (memory/tools/agent/mcp) persists live through the
+  // framework endpoint; the legacy PUT is kept only as a compat fallback.
+  const flushLegacy = (next: SettingsData) => {
+    if (!legacyConfig) return
+    const prev = legacyConfig
+    const ids = new Set(schema?.settings.map((s) => s.id) ?? [])
+    for (const path of collectLeafPaths(prev, next)) {
+      if (ids.has(path)) {
+        const val = readLeaf(next, path)
+        void framework.set(path, val)
+      }
+    }
+    const patch = legacyPatch(next)
+    if (Object.keys(patch).length > 0) {
+      void saveConfig(patch).catch(() => showError("Some advanced settings didn't persist."))
+    }
+  }
 
   const updateToolPermission = (toolId: string, mode: string) => {
-    if (!config) return
-    setConfig({ ...config, permissions: { ...(config.permissions as Record<string, unknown> ?? {}), [toolId]: mode } } as SettingsData)
-    setDirty(true)
+    if (!legacyConfig) return
+    const next = {
+      ...legacyConfig,
+      permissions: { ...((legacyConfig.permissions as Record<string, unknown>) ?? {}), [toolId]: mode },
+    } as SettingsData
+    updateLegacy(next)
   }
 
-  const save = () => {
-    if (!config) return
-    const patch: Record<string, unknown> = { models: config.models }
-    if ((config as any).llm) patch.llm = (config as any).llm
-    if (config.permissions) patch.permissions = config.permissions
-    patch.runtime = (config as any).runtime ?? { lightweight_mode: false }
-    if ((config as any).agent) patch.agent = (config as any).agent
-    if ((config as any).mcp) patch.mcp = (config as any).mcp
-    if ((config as any).personality) patch.personality = (config as any).personality
-    if ((config as any).memory) patch.memory = (config as any).memory
-    if ((config as any).embedding) patch.embedding = (config as any).embedding
-    saveConfig(patch).catch(() => {
-      showError("Couldn't save settings — your changes weren't persisted.")
-    })
-    setDirty(false)
-  }
-
-  useEffect(() => {
-    if (!open) return
-    const handleClick = (e: MouseEvent) => {
-      if (modalRef.current && !modalRef.current.contains(e.target as Node)) {
-        if (dirty) save()
-        onClose()
-      }
-    }
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (dirty) save()
-        onClose()
-      }
-    }
-    window.addEventListener('mousedown', handleClick)
-    window.addEventListener('keydown', handleKey)
-    return () => {
-      window.removeEventListener('mousedown', handleClick)
-      window.removeEventListener('keydown', handleKey)
-    }
-  }, [open, dirty, onClose])
+  const activePreset = schema?.settings.find((s) => s.id === 'experience') as
+    | { default?: string } | undefined
+  const activeExperience =
+    typeof framework.values.experience === 'string'
+      ? framework.values.experience
+      : (activePreset?.default as string | undefined) ?? 'medium'
 
   const filteredSections = useMemo(() => {
-    if (!search) return SECTIONS
+    const pages = [
+      { id: 'general', label: 'General', icon: SECTIONS[0].icon },
+      { id: 'models', label: 'Models', icon: SECTIONS[1].icon },
+      { id: 'advanced', label: 'Advanced', icon: SECTIONS[6].icon },
+      { id: 'developer', label: 'Developer', icon: SECTIONS[0].icon },
+    ]
+    if (!search) return pages
     const q = search.toLowerCase()
-    return SECTIONS.filter((s) => s.label.toLowerCase().includes(q))
+    return pages.filter((s) => s.label.toLowerCase().includes(q))
   }, [search])
+
+  const reloadData = () => {
+    if (!open) return
+    if (initialSection) setSection(initialSection)
+    void fetchConfig().then(setLegacyConfig).catch(() => {})
+    void fetchTools().then(setTools).catch(() => {})
+    void fetchSkills().then(setSkills).catch(() => {})
+  }
+
+  const refreshSkills = () => {
+    void fetchSkills().then(setSkills).catch(() => {})
+  }
+
+  useEffect(() => { reloadData() }, [open, initialSection]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const close = () => {
+    if (legacyConfig) flushLegacy(legacyConfig)
+    onClose()
+  }
 
   return (
     <AnimatePresence>
@@ -137,7 +138,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="flex w-[800px] h-[560px] rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
+            className="flex w-[800px] h-[600px] rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
           >
             <div className="w-48 shrink-0 border-r border-base-800 flex flex-col bg-base-950/50">
               <div className="p-3 border-b border-base-800">
@@ -160,7 +161,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 {filteredSections.map((s) => (
                   <button
                     key={s.id}
-                    onClick={() => setSection(s.id)}
+                    onClick={() => setSection(s.id as SectionId)}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors ${
                       section === s.id
                         ? 'bg-base-800 text-base-100 border-l-2 border-accent'
@@ -176,23 +177,11 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
 
             <div className="flex-1 flex flex-col min-w-0">
               <div className="flex items-center justify-between px-5 h-12 border-b border-base-800 shrink-0">
-                <h2 className="text-sm font-semibold text-base-100">
-                  {SECTIONS.find((s) => s.id === section)?.label}
-                </h2>
+                <h2 className="text-sm font-semibold text-base-100">{PAGE_LABEL[section]}</h2>
                 <div className="flex items-center gap-2">
-                  {dirty && (
-                    <button
-                      onClick={save}
-                      className="px-3 py-1 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
-                    >
-                      Save
-                    </button>
-                  )}
+                  <span className="hidden text-[11px] text-base-500 sm:block">Changes save automatically</span>
                   <button
-                    onClick={() => {
-                      if (dirty) save()
-                      onClose()
-                    }}
+                    onClick={close}
                     aria-label="Close settings"
                     className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
                   >
@@ -201,48 +190,46 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
-                {config === null && (
-                  <LoadingSkeleton rows={5} compact />
-                )}
-                {config !== null && section === 'general' && (
+                {framework.loading && <LoadingSkeleton rows={5} compact />}
+
+                {!framework.loading && section === 'general' && (
                   <GeneralSettings
-                    config={config}
-                    setConfig={setConfig}
-                    setDirty={setDirty}
-                    profiles={product.profiles}
-                    activeProfileId={product.activeProfileId}
-                    profileSummaries={product.profileSummaries}
-                    onApplyProfile={product.applyProfile}
+                    discovery={framework.discovery}
+                    activeExperience={activeExperience}
+                    installing={framework.installs}
+                    onApply={framework.applyPreset}
+                    onInstall={framework.install}
+                    loading={false}
                   />
                 )}
-                {section === 'models' && (
+
+                {!framework.loading && section === 'models' && (
                   <ModelsSettings
-                    config={config}
-                    catalog={product.catalog}
-                    availableModels={availableModels}
-                    setConfig={setConfig}
-                    setDirty={setDirty}
+                    discovery={framework.discovery}
+                    installing={framework.installs}
+                    onInstall={framework.install}
+                    onRefresh={framework.refreshDiscovery}
+                    loading={false}
                   />
                 )}
-                {section === 'memory' && <MemorySettings config={config} setConfig={setConfig} setDirty={setDirty} />}
-                {section === 'tools' && (
-                  <ToolsSettings
+
+                {!framework.loading && section === 'advanced' && (
+                  <AdvancedPage
+                    schema={schema}
+                    framework={framework}
+                    config={legacyConfig}
                     tools={tools}
-                    config={config}
-                    updateToolPermission={updateToolPermission}
-                  />
-                )}
-                {section === 'mcp' && <ConnectorsSection config={config} setConfig={setConfig} setDirty={setDirty} />}
-                {section === 'skills' && (
-                  <SkillsSection
                     skills={skills}
-                    onRefresh={() => fetchSkills().then(setSkills).catch(() => {})}
+                    updateToolPermission={updateToolPermission}
+                    updateConfig={updateLegacy}
                     onCreateSkill={onCreateSkill}
-                    onClose={onClose}
+                    onClose={close}
+                    refreshSkills={refreshSkills}
                   />
                 )}
-                {section === 'advanced' && (
-                  <AgentSettings config={config} setConfig={setConfig} setDirty={setDirty} />
+
+                {!framework.loading && section === 'developer' && (
+                  <DeveloperPage schema={schema} framework={framework} config={legacyConfig} updateConfig={updateLegacy} />
                 )}
               </div>
             </div>
@@ -251,4 +238,174 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
       )}
     </AnimatePresence>
   )
+}
+
+function AdvancedPage({ schema, framework, config, tools, skills, updateToolPermission, updateConfig, onCreateSkill, onClose, refreshSkills }: {
+  schema: SchemaResponse | null
+  framework: ReturnType<typeof useFrameworkSettings>
+  config: SettingsData | null
+  tools: ToolInfo[]
+  skills: Skill[]
+  updateToolPermission: (id: string, mode: string) => void
+  updateConfig: (next: SettingsData) => void
+  onCreateSkill?: () => void
+  onClose: () => void
+  refreshSkills: () => void
+}) {
+  const advanced = schema?.settings.filter((s) => s.category === 'advanced') ?? []
+  return (
+    <div className="space-y-5">
+      <section className="space-y-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Core behavior</h3>
+        {advanced.map((s) => (
+          <SettingField
+            key={s.id}
+            setting={s}
+            value={framework.values[s.id]}
+            onChange={(id, v) => void framework.set(id, v)}
+          />
+        ))}
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Memory</h3>
+        <MemorySettings config={config} setConfig={updateConfig} setDirty={() => {}} />
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Tools & permissions</h3>
+        <ToolsSettings tools={tools} config={config} updateToolPermission={updateToolPermission} />
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Connectors (MCP)</h3>
+        <ConnectorsSection config={config} setConfig={updateConfig} setDirty={() => {}} />
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Agent behavior</h3>
+        <AgentSettings config={config} setConfig={updateConfig} setDirty={() => {}} />
+      </section>
+
+      {skills.length > 0 && (
+        <section className="space-y-2 pt-2">
+          <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Skills</h3>
+          <SkillsSection
+            skills={skills}
+            onRefresh={refreshSkills}
+            onCreateSkill={onCreateSkill}
+            onClose={onClose}
+          />
+        </section>
+      )}
+    </div>
+  )
+}
+
+function DeveloperPage({ schema, framework, config, updateConfig }: {
+  schema: SchemaResponse | null
+  framework: ReturnType<typeof useFrameworkSettings>
+  config: SettingsData | null
+  updateConfig: (next: SettingsData) => void
+}) {
+  const developer = schema?.settings.filter((s) => s.category === 'developer') ?? []
+  const embedding = schema?.settings.filter((s) => s.owner === 'memory') ?? []
+  const providers = schema?.settings.filter((s) => s.owner === 'providers') ?? []
+  const roles = schema?.settings.filter((s) => s.owner === 'runtime' && s.id.includes('roles')) ?? []
+  return (
+    <div className="space-y-5">
+      <section className="space-y-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Expert routing</h3>
+        <p className="text-xs text-base-500 mb-1">
+          Assign a model to each role. Leave blank to let routing fall back automatically. Custom experiences need this page.
+        </p>
+        {roles.map((s) => (
+          <SettingField
+            key={s.id}
+            setting={s}
+            value={framework.values[s.id]}
+            onChange={(id, v) => void framework.set(id, v)}
+          />
+        ))}
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Providers</h3>
+        {providers.map((s) => (
+          <SettingField
+            key={s.id}
+            setting={s}
+            value={framework.values[s.id]}
+            onChange={(id, v) => void framework.set(id, v)}
+          />
+        ))}
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Embeddings</h3>
+        {embedding.map((s) => (
+          <SettingField
+            key={s.id}
+            setting={s}
+            value={framework.values[s.id]}
+            onChange={(id, v) => void framework.set(id, v)}
+          />
+        ))}
+      </section>
+
+      <section className="space-y-2 pt-2">
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Other developer settings</h3>
+        {developer.filter((s) => !s.id.includes('roles')).map((s) => (
+          <SettingField
+            key={s.id}
+            setting={s}
+            value={framework.values[s.id]}
+            onChange={(id, v) => void framework.set(id, v)}
+          />
+        ))}
+      </section>
+    </div>
+  )
+}
+
+// ── nested-config leaf diffing ────────────────────────────────────────────
+
+function collectLeafPaths(prev: Record<string, unknown>, next: Record<string, unknown>): string[] {
+  const out: string[] = []
+  const walk = (a: Record<string, unknown>, b: Record<string, unknown>, prefix: string) => {
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const path = prefix ? `${prefix}.${key}` : key
+      const av = a[key]
+      const bv = b[key]
+      if (typeof av === 'object' && av !== null && typeof bv === 'object' && bv !== null) {
+        walk(av as Record<string, unknown>, bv as Record<string, unknown>, path)
+      } else if (av !== bv) {
+        out.push(path)
+      }
+    }
+  }
+  walk(prev, next, '')
+  return out
+}
+
+function readLeaf(obj: Record<string, unknown>, path: string): unknown {
+  let cur: unknown = obj
+  for (const part of path.split('.')) {
+    if (cur && typeof cur === 'object' && part in (cur as Record<string, unknown>)) {
+      cur = (cur as Record<string, unknown>)[part]
+    } else {
+      return undefined
+    }
+  }
+  return cur
+}
+
+function legacyPatch(next: SettingsData): Record<string, unknown> {
+  const keys = ['models', 'llm', 'permissions', 'runtime', 'agent', 'mcp', 'personality', 'memory', 'embedding'] as const
+  const patch: Record<string, unknown> = {}
+  for (const k of keys) {
+    const v = (next as unknown as Record<string, unknown>)[k]
+    if (v !== undefined && Object.keys(v as object).length > 0) patch[k] = v
+  }
+  return patch
 }

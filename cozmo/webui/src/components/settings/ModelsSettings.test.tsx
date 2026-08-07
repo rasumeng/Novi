@@ -1,79 +1,57 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ModelsSettings } from './ModelsSettings'
-import { mergeModelCatalog, profileToConfigPatch } from '@/product/configLayer'
-import type { SettingsData } from './types'
+import type { DiscoveryPayload } from './api'
 
-const BASE_CONFIG: SettingsData = { models: {}, runtime: { lightweight_mode: false }, llm: { roles: {} } }
-const BALANCED_CONFIG: SettingsData = { ...BASE_CONFIG, ...profileToConfigPatch('balanced', BASE_CONFIG) }
-const CATALOG = mergeModelCatalog([])
+const DISCOVERY: DiscoveryPayload = {
+  hardware: { ramGb: 16 },
+  models: [
+    { name: 'llama3.1:8b', displayName: 'Llama 3.1 8B', status: 'installed', size: null, capabilities: {}, recommended: true, tier: 'supported', reasons: ['Tested with Cozmo'], approxRamGb: 5 },
+    { name: 'qwen2.5-coder:7b', displayName: 'Qwen 2.5 Coder 7B', status: 'installed', size: null, capabilities: {}, recommended: true, tier: 'supported', reasons: [], approxRamGb: 6 },
+    { name: 'nomic-embed-text', displayName: 'Nomic Embed Text', status: 'missing', size: null, capabilities: {}, recommended: false, tier: 'supported', reasons: ['Needed for good search'], approxRamGb: null },
+  ],
+  missingModels: ['nomic-embed-text'],
+  installedNames: ['llama3.1:8b', 'qwen2.5-coder:7b'],
+  presets: [],
+  activeExperience: 'medium',
+  roles: {},
+}
 
 describe('ModelsSettings', () => {
-  it('shows the four product-concept pickers with the balanced preset selections, and keeps routing roles collapsed by default', () => {
+  it('shows the discovered library with install status and recommendations', () => {
     render(
-      <ModelsSettings
-        config={BALANCED_CONFIG}
-        catalog={CATALOG}
-        availableModels={[]}
-        setConfig={vi.fn()}
-        setDirty={vi.fn()}
-      />
+      <ModelsSettings discovery={DISCOVERY} installing={{}} onInstall={vi.fn()} onRefresh={vi.fn()} loading={false} />
     )
-
-    expect(screen.getByText('Conversation Model')).toBeTruthy()
-    expect(screen.getByText('Coding Model')).toBeTruthy()
-    expect(screen.getByText('Vision Model')).toBeTruthy()
-    expect(screen.getByText('Embedding Model')).toBeTruthy()
-
-    // Balanced assigns Llama 3.1 8B to chat — the current-selection card should show it.
     expect(screen.getByText('Llama 3.1 8B')).toBeTruthy()
     expect(screen.getByText('Qwen 2.5 Coder 7B')).toBeTruthy()
-
-    // Backend role names must not appear until Expert Configuration is explicitly expanded.
-    expect(screen.queryByText('Classifier')).toBeNull()
-    expect(screen.queryByText('Orchestrator')).toBeNull()
-    expect(screen.getByText('Expert Configuration')).toBeTruthy()
-
-    fireEvent.click(screen.getByText('Expert Configuration'))
-    expect(screen.getByText('Classifier')).toBeTruthy()
-    expect(screen.getByText('Orchestrator')).toBeTruthy()
+    expect(screen.getByText('Nomic Embed Text')).toBeTruthy()
+    expect(screen.getByText('Tested with Cozmo')).toBeTruthy()
+    expect(screen.getAllByText('installed')).toHaveLength(2)
   })
 
-  it('lets a beginner change the Conversation Model without ever seeing a role name', () => {
-    const setConfig = vi.fn()
+  it('shows an Install button only for non-installed models', () => {
     render(
-      <ModelsSettings
-        config={BALANCED_CONFIG}
-        catalog={CATALOG}
-        availableModels={[]}
-        setConfig={setConfig}
-        setDirty={vi.fn()}
-      />
+      <ModelsSettings discovery={DISCOVERY} installing={{}} onInstall={vi.fn()} onRefresh={vi.fn()} loading={false} />
     )
-
-    const changeButtons = screen.getAllByText('Change')
-    fireEvent.click(changeButtons[0]) // Conversation Model's "Change"
-
-    // High Quality's conversation model should be selectable from the picker.
-    const options = screen.getAllByText('Llama 3.1 70B')
-    fireEvent.click(options[options.length - 1])
-
-    expect(setConfig).toHaveBeenCalled()
-    const patchArg = setConfig.mock.calls[0][0] as SettingsData
-    expect(patchArg.llm?.roles?.chat).toMatchObject({ model: 'llama3.1:70b' })
+    const buttons = screen.getAllByRole('button', { name: /install/i })
+    expect(buttons).toHaveLength(1)
   })
 
-  it('marks the embedding model as unrelated to llm.roles', () => {
-    const setConfig = vi.fn()
+  it('calls onInstall when the user installs a missing model', () => {
+    const onInstall = vi.fn().mockResolvedValue(true)
     render(
-      <ModelsSettings
-        config={BALANCED_CONFIG}
-        catalog={CATALOG}
-        availableModels={[]}
-        setConfig={setConfig}
-        setDirty={vi.fn()}
-      />
+      <ModelsSettings discovery={DISCOVERY} installing={{}} onInstall={onInstall} onRefresh={vi.fn()} loading={false} />
     )
-    expect(screen.getByText('No model chosen yet.')).toBeTruthy() // embedding model not set in BALANCED_CONFIG
+    fireEvent.click(screen.getAllByRole('button', { name: /install/i })[0])
+    expect(onInstall).toHaveBeenCalledWith('nomic-embed-text')
+  })
+
+  it('filters the list by query', () => {
+    render(
+      <ModelsSettings discovery={DISCOVERY} installing={{}} onInstall={vi.fn()} onRefresh={vi.fn()} loading={false} />
+    )
+    fireEvent.change(screen.getByRole('textbox', { name: '' }), { target: { value: 'qwen' } })
+    expect(screen.queryByText('Llama 3.1 8B')).toBeNull()
+    expect(screen.getByText('Qwen 2.5 Coder 7B')).toBeTruthy()
   })
 })

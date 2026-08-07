@@ -1,0 +1,133 @@
+"""Configuration schema — declarative definition of every configurable value.
+
+A Setting is the single authoritative description of one configurable value.
+The Settings UI renders registered settings; the runtime consumes registered
+settings; validation and persistence are driven by the schema.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable
+
+
+class Category(str, Enum):
+    GENERAL = "general"      # how Cozmo behaves
+    MODELS = "models"        # what Cozmo runs
+    ADVANCED = "advanced"    # how Cozmo executes
+    DEVELOPER = "developer"  # diagnostics + experimental
+
+
+class SettingType(str, Enum):
+    STRING = "string"
+    INT = "int"
+    FLOAT = "float"
+    BOOL = "bool"
+    ENUM = "enum"
+    MODEL = "model"
+    SECRET = "secret"
+    JSON = "json"
+
+
+class Visibility(str, Enum):
+    USER = "user"
+    ADVANCED = "advanced"
+    DEVELOPER = "developer"
+    HIDDEN = "hidden"
+
+
+class Option:
+    def __init__(self, value: Any, label: str, description: str = ""):
+        self.value = value
+        self.label = label
+        self.description = description
+
+    def to_dict(self) -> dict:
+        return {"value": self.value, "label": self.label, "description": self.description}
+
+
+Validator = Callable[[Any], str | None]
+
+
+def require_nonempty(value: Any) -> str | None:
+    if value is None or value == "":
+        return "value is required"
+    return None
+
+
+def require_number(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "expected a number"
+    if not isinstance(value, (int, float)):
+        return f"expected a number, got {type(value).__name__}"
+    return None
+
+
+@dataclass
+class Setting:
+    """One configurable value, owned by exactly one subsystem."""
+
+    id: str
+    category: Category
+    owner: str
+    label: str = ""
+    type: SettingType = SettingType.STRING
+    description: str = ""
+    default: Any = None
+    validation: list[Validator] = field(default_factory=list)
+    options: list[Option] = field(default_factory=list)
+    restart_required: bool = False
+    depends: list[str] = field(default_factory=list)
+    visibility: Visibility = Visibility.USER
+    # sensor: how the value enters the system. Only "direct" exists today.
+    sensor: str = "direct"
+
+    def validate(self, value: Any) -> list[str]:
+        errors = []
+        if value is None:
+            return errors
+        for v in self.validation:
+            msg = v(value)
+            if msg:
+                errors.append(msg)
+        return errors
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "description": self.description,
+            "category": self.category.value,
+            "owner": self.owner,
+            "type": self.type.value,
+            "default": self.default,
+            "options": [o.to_dict() for o in self.options],
+            "restart_required": self.restart_required,
+            "depends": self.depends,
+            "visibility": self.visibility.value,
+        }
+
+
+@dataclass
+class SettingGroup:
+    """A named group of settings (e.g. ``llm.roles``), registered by one owner."""
+
+    key: str
+    label: str
+    category: Category
+    owner: str
+    description: str = ""
+    settings: list[Setting] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "description": self.description,
+            "category": self.category.value,
+            "owner": self.owner,
+            "settings": [s.to_dict() for s in self.settings],
+        }

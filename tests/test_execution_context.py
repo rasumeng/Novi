@@ -1,6 +1,7 @@
 """Tests for ExecutionContext — the unified runtime state object."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -329,10 +330,10 @@ def test_ctx_trace_receives_model_routing():
     """ctx.trace should record model routing decisions."""
     from cozmo.runtime.runtime import CozmoRuntime
 
-    runtime = CozmoRuntime()
+    runtime = CozmoRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
     ctx = ExecutionContext(user_input="hello")
     list(runtime.run_stream(context=ctx))
-    # model_selected should be set (from router default)
+    # model_selected should be set (from configured model)
     assert ctx.trace.model_selected
     assert ctx.trace.model_reason in ("role_match", "config_override", "force_capability", "execution_plan")
 
@@ -397,7 +398,7 @@ def test_full_research_pipeline_trace_ownership():
     """
     from cozmo.runtime.runtime import CozmoRuntime
 
-    runtime = CozmoRuntime()
+    runtime = CozmoRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
     analysis = TaskAnalysis(
         intent=IntentType.RESEARCH,
         strategy=ExecutionStrategy.RESEARCH,

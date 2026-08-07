@@ -4,6 +4,8 @@ const API_BASE = import.meta.env.DEV ? 'http://localhost:8765' : ''
 
 export { API_BASE }
 
+// ── Legacy config (kept for non-settings consumers) ─────────────────────
+
 export async function fetchConfig(): Promise<SettingsData> {
   const r = await fetch(`${API_BASE}/api/config`)
   return r.json()
@@ -31,4 +33,121 @@ export async function fetchAvailableModels(): Promise<{ name: string; provider: 
     if (r.ok) return r.json()
   } catch {}
   return []
+}
+
+// ── Configuration Framework API (Settings V2) ───────────────────────────
+
+export interface SettingSchema {
+  id: string
+  label: string
+  description: string
+  category: 'general' | 'models' | 'advanced' | 'developer'
+  owner: string
+  type: string
+  default: unknown
+  options: { value: unknown; label: string; description: string }[]
+  restart_required: boolean
+  depends: string[]
+  visibility: string
+}
+
+export interface SchemaResponse {
+  settings: SettingSchema[]
+  groups: { key: string; label: string; description: string; category: string; owner: string; settings: SettingSchema[] }[]
+}
+
+export interface DiscoveredModelEntry {
+  name: string
+  status: 'installed' | 'available' | 'missing'
+  size: number | null
+  capabilities: Record<string, boolean>
+  recommended: boolean
+  tier: 'supported' | 'experimental'
+  reasons: string[]
+  displayName: string
+  approxRamGb: number | null
+}
+
+export interface DiscoveryPayload {
+  hardware: { ramGb: number }
+  models: DiscoveredModelEntry[]
+  missingModels: string[]
+  installedNames: string[]
+  presets: { id: string; label: string; description: string; lightweight: boolean }[]
+  activeExperience: string
+  roles: Record<string, string>
+}
+
+export async function fetchSchema(): Promise<SchemaResponse> {
+  const r = await fetch(`${API_BASE}/api/configuration/schema`)
+  return r.json()
+}
+
+export async function fetchFrameworkConfig(): Promise<Record<string, unknown>> {
+  const r = await fetch(`${API_BASE}/api/configuration`)
+  return r.json()
+}
+
+export async function fetchDiscovery(): Promise<DiscoveryPayload> {
+  try {
+    const r = await fetch(`${API_BASE}/api/models/discovery`)
+    if (r.ok) return r.json()
+  } catch {}
+  return {
+    hardware: { ramGb: 0 },
+    models: [],
+    missingModels: [],
+    installedNames: [],
+    presets: [],
+    activeExperience: 'medium',
+    roles: {},
+  }
+}
+
+/** Live-persist a single setting through the framework (no Save needed). */
+export async function setSetting(settingId: string, value: unknown): Promise<boolean> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/${encodeURIComponent(settingId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value, by: 'web' }),
+    })
+    const body = await r.json()
+    if (body.error) {
+      console.warn(`[config] ${settingId}: ${JSON.stringify(body.error)}`)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.warn(`[config] ${settingId} failed`, e)
+    return false
+  }
+}
+
+/** Apply an experience preset (routes roles across installed models). */
+export async function applyExperience(presetId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset: presetId }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
+
+/** Start a model install in the background. Progress arrives over WS. */
+export async function installModel(name: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/models/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
 }

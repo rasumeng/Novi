@@ -34,6 +34,9 @@ ALLOWED_HARDCODE_FILES = {
     "cozmo/ollama_util.py",    # deleted — no longer exists
     "cozmo/ollama.py",         # Ollama process mgmt (start/stop/check)
     "cozmo/cli.py",            # Ollama process mgmt integration
+    "cozmo/configuration/catalog.py",  # curated compatibility facts — referenced
+                                       # only against *installed* models for
+                                       # recommendations, never as a default.
 }
 
 # Provider SDKs that only cozmo/providers/ may import

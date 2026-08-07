@@ -77,7 +77,7 @@ class ModelRouter:
 
     def __init__(
         self,
-        default_model: str = "qwen3:8b",
+        default_model: str = "",
         default_capability: str = "chat",
         resource_manager: Optional[ResourceManager] = None,
         capability_preferences: Optional[dict[str, list[str]]] = None,
