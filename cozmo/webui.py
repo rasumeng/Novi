@@ -27,7 +27,6 @@ class WebUIBackend:
         from .orchestrator.complexity import ComplexityEstimator
         from .orchestrator.evidence import EvidenceDetector
         from .orchestrator.orchestrator import Orchestrator
-        from .jobs.manager import JobManager
 
         ctx = self._context
 
@@ -59,14 +58,28 @@ class WebUIBackend:
         intent_detector = IntentDetector()
         complexity_estimator = ComplexityEstimator()
         evidence_detector = EvidenceDetector(router_llm=ctx.router_llm)
+        from .orchestrator.task_store import TaskStore
+        from .planner.planner import PlannerEngine
+        task_store = TaskStore()
         orchestrator = Orchestrator(
             intent_detector=intent_detector,
             complexity_estimator=complexity_estimator,
             evidence_detector=evidence_detector,
             capability_registry=capability_registry,
             model_router=model_router,
+            task_store=task_store,
+            planner_engine=PlannerEngine(),
         )
-        job_manager = JobManager()
+        job_manager = ctx.job_manager
+        job_store = ctx.job_store
+
+        # Continuation resolver — read-only join of TaskStore + JobStore.
+        from .services.continuation import ContinuationService
+        continuation = ContinuationService(
+            task_store=task_store,
+            job_store=job_store,
+            job_manager=job_manager,
+        )
 
         # Event-driven wiring (no polling): config changes reach the shared
         # backend live through the framework's apply hooks.
@@ -102,5 +115,8 @@ class WebUIBackend:
             "model_router": model_router,
             "orchestrator": orchestrator,
             "job_manager": job_manager,
+            "task_store": task_store,
+            "job_store": job_store,
+            "continuation": continuation,
             "context": ctx,
         }

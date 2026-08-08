@@ -20,6 +20,21 @@ from ..orchestrator.task_types import Goal, IntentType
 
 log = logging.getLogger("cozmo.intent")
 
+_CONTINUATION_KEYWORDS = [
+    "continue",
+    "keep going",
+    "pick up where",
+    "what was i working on",
+    "previous task",
+    "carry on",
+    "carry over",
+    "go on",
+    "resume",
+    "next step",
+    "left off",
+    "continuation of",
+]
+
 _RESEARCH_KEYWORDS = [
     "latest news", "current events", "what's new",
     "weather", "price of", "release date", "upcoming", "schedule",
@@ -78,6 +93,7 @@ _INTENT_MAP = {
     "research": IntentType.RESEARCH,
     "planning": IntentType.PLANNING,
     "vision": IntentType.VISION,
+    "continuation": IntentType.CONTINUATION,
 }
 
 
@@ -97,6 +113,12 @@ def classify_intent(user_input: str,
         return IntentType.VISION
 
     query_lower = user_input.lower()
+    # Continuation is a high-confidence, low-collision signal — check it before
+    # generic coding/research keywords (a bare "continue" must not be routed as
+    # coding/research).
+    for kw in _CONTINUATION_KEYWORDS:
+        if re.search(r'\b' + re.escape(kw) + r'\b', query_lower):
+            return IntentType.CONTINUATION
     for kw in _RESEARCH_KEYWORDS:
         if re.search(r'\b' + re.escape(kw) + r'\b', query_lower):
             return IntentType.RESEARCH
@@ -141,9 +163,10 @@ class IntentDetector:
         """Returns (intent, confidence)."""
         intent = classify_intent(user_input, self.router_llm, history, has_images)
         query_lower = user_input.lower()
-        fast_path = has_images or any(kw in query_lower for kw in _RESEARCH_KEYWORDS) or any(
-            kw in query_lower for kw in _CODING_KEYWORDS
-        )
+        fast_path = (has_images
+                     or any(kw in query_lower for kw in _RESEARCH_KEYWORDS)
+                     or any(kw in query_lower for kw in _CODING_KEYWORDS)
+                     or any(kw in query_lower for kw in _CONTINUATION_KEYWORDS))
         confidence = 0.9 if fast_path else 0.7
         return intent, confidence
 

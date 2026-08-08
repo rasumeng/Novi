@@ -388,6 +388,10 @@ class Session:
         self.current_task_id = ""
         self.agent_config: dict = {}
 
+        b = get_backend(cfg)
+        self.task_store = getattr(self.orchestrator, "task_store", None)
+        self.continuation = b.get("continuation")
+
         # Bridge EventBus→WebSocket: forward runtime events
         self.event_bus.on_any(self._on_bus_event)
 
@@ -464,14 +468,104 @@ class Session:
             resolved.append(entry)
         return resolved
 
+    def _resolve_continuation(self, user_input: str) -> dict | None:
+        """Resolve a continuation request → resume dict or None.
+
+        Read-only: consults ContinuationService + JobManager only. Returns
+        None when there is nothing resumable or the request is ambiguous
+        (the caller surfaces candidates to the user instead).
+        """
+        if self.continuation is None or self.task_store is None:
+            return None
+        from ..orchestrator.task_types import IntentType
+        intent, _ = self.orchestrator.intent_detector.detect(user_input)
+        if intent is not IntentType.CONTINUATION:
+            return None
+        target = self.continuation.recommended(
+            conversation_id=self.current_conv_id or None)
+        if target is None:
+            # Ambiguous or nothing — return candidates for the caller to ask.
+            return {
+                "ambiguous": True,
+                "candidates": [t.to_dict() for t in self.continuation.candidates()],
+            }
+        task = self.task_store.get(target.task_id)
+        if task is None or task.plan is None:
+            return None
+        return {
+            "target": target,
+            "task": task,
+            "ambiguous": False,
+        }
+
+    def _record_resume_history(self, task_id: str, new_job_id: str,
+                               original_job_id: str) -> None:
+        """Record the ORIGINAL + RESUME attempts on the Task's ExecutionHistory.
+
+        The resolver is read-only; this is the compose step that happened at
+        the composition root. Guarantees both attempts appear and no duplicate
+        entries for the same job_id.
+        """
+        if self.task_store is None or not task_id:
+            return
+        task = self.task_store.get(task_id)
+        if task is None:
+            return
+        # Original attempt (idempotent).
+        if task.execution_history.find(original_job_id) is None:
+            task.execution_history.add(
+                original_job_id, reason="interrupted", parent_job_id=None)
+        # Resume attempt (new execution attempt, linked to original).
+        if task.execution_history.find(new_job_id) is None:
+            task.execution_history.add(
+                new_job_id, reason="resumed", parent_job_id=original_job_id)
+        self.task_store.update(task)
+
     def start_run(self, user_input: str, attachments_meta: list[dict] | None = None, project_context: str | None = None):
         self.stop_flag.clear()
         resolved_atts = self._resolve_attachments(attachments_meta) if attachments_meta else None
         self.runtime.set_config(project_context=project_context or "")
 
         def work():
+            job = None
             try:
-                # Plan via orchestrator
+                # Continuation: resolve an existing Task/Job/Checkpoint instead
+                # of planning fresh work. Resolver is read-only; the new
+                # execution attempt is opened below via JobManager.
+                continuation = self._resolve_continuation(user_input)
+                if continuation is not None:
+                    if continuation["ambiguous"]:
+                        self._emit({"type": "continuation_candidates",
+                                    "candidates": continuation["candidates"]})
+                        return
+                    target = continuation["target"]
+                    task = continuation["task"]
+                    plan = self._continuation_exec_plan(task, target)
+                    # A resumed run is a NEW execution attempt — never reuse
+                    # the interrupted job. Old job stays historical.
+                    new_job = self.job_manager.reopen(target.job_id)
+                    if new_job is None:
+                        self._emit({"type": "error",
+                                    "text": "That task can no longer be resumed."})
+                        return
+                    self.current_task_id = task.id
+                    self.current_job_id = new_job.id
+                    self._record_resume_history(task.id, new_job.id, target.job_id)
+                    self.job_manager.start(new_job.id)
+                    for item in self.runtime.run_stream(
+                        user_input=user_input,
+                        attachments=resolved_atts,
+                        execution_plan=plan,
+                        conversation_id=self.current_conv_id,
+                        resume_from=target.next_step,
+                    ):
+                        if self.stop_flag.is_set():
+                            break
+                        self._forward_item(item)
+                    self.job_manager.complete(new_job.id, result="done")
+                    return
+
+                # Fresh work: plan via orchestrator
                 plan = self.orchestrator.plan(
                     user_input=user_input,
                     has_images=bool(resolved_atts),
@@ -496,43 +590,75 @@ class Session:
                     if self.stop_flag.is_set():
                         self._emit({"type": "thinking", "text": "Stopped by user", "detail": "Generation was cancelled by the user"})
                         break
-                    kind = item[0]
-                    if kind == "tool_call":
-                        _, name, args, call_id = item[:4]
-                        payload = {"type": "tool_call", "tool": name, "args": args, "id": call_id}
-                        if len(item) >= 5 and item[4] is not None:
-                            payload["category"] = item[4]
-                        self._emit(payload)
-                    elif kind == "tool_result":
-                        _, name, result, call_id = item[:4]
-                        payload = {"type": "tool_result", "tool": name, "result": result, "id": call_id}
-                        if len(item) >= 5 and item[4] is not None:
-                            payload["diff"] = item[4]
-                        self._emit(payload)
-                    elif kind == "reasoning":
-                        self._emit({"type": "reasoning", "text": item[1]})
-                    elif kind == "trace":
-                        event = item[1]
-                        payload = event.to_dict()
-                        payload["type"] = "trace"
-                        self._emit(payload)
-                    else:
-                        text = item[1]
-                        detail = item[2] if len(item) > 2 else None
-                        query = item[3] if len(item) > 3 else None
-                        self._emit({"type": kind, "text": text, "detail": detail, "query": query})
+                    self._forward_item(item)
 
                 self.job_manager.complete(job.id, result="done")
 
             except Exception as e:
                 self._emit({"type": "error", "text": str(e)})
-                if job:
-                    self.job_manager.complete(job.id, error=str(e))
+                job_id = getattr(self, "current_job_id", None)
+                if job_id:
+                    self.job_manager.complete(job_id, error=str(e))
             finally:
                 self._emit({"type": "done"})
 
         self._worker = threading.Thread(target=work, daemon=True)
         self._worker.start()
+
+    def _forward_item(self, item: tuple):
+        """Stream a runtime event tuple to the WebSocket."""
+        kind = item[0]
+        if kind == "tool_call":
+            _, name, args, call_id = item[:4]
+            payload = {"type": "tool_call", "tool": name, "args": args, "id": call_id}
+            if len(item) >= 5 and item[4] is not None:
+                payload["category"] = item[4]
+            self._emit(payload)
+        elif kind == "tool_result":
+            _, name, result, call_id = item[:4]
+            payload = {"type": "tool_result", "tool": name, "result": result, "id": call_id}
+            if len(item) >= 5 and item[4] is not None:
+                payload["diff"] = item[4]
+            self._emit(payload)
+        elif kind == "reasoning":
+            self._emit({"type": "reasoning", "text": item[1]})
+        elif kind == "trace":
+            event = item[1]
+            payload = event.to_dict()
+            payload["type"] = "trace"
+            self._emit(payload)
+        else:
+            text = item[1]
+            detail = item[2] if len(item) > 2 else None
+            query = item[3] if len(item) > 3 else None
+            self._emit({"type": kind, "text": text, "detail": detail, "query": query})
+
+    def _continuation_exec_plan(self, task, target):
+        """Rebuild an ExecutionPlan from the Task's stored plan.
+
+        The task already owns a Plan (PlannerEngine attached it at creation).
+        The plan object is reused — no replanning. resume_from is threaded
+        separately into run_stream, not baked into the plan.
+        """
+        from ..orchestrator.task_types import ExecutionPlan, Goal, IntentType
+        from ..planner.models import Plan
+
+        plan = task.plan if isinstance(task.plan, Plan) else None
+        if plan is None:
+            return None
+        goal = task.goal or Goal(text=task.raw_goal, intent=IntentType.CONTINUATION)
+        return ExecutionPlan(
+            task_id=task.id,
+            goal=goal,
+            strategy="execute",
+            capabilities=getattr(task, "capabilities", None) or [],
+            tools=[],
+            model_spec={"model": "", "supports_tools": True},
+            max_steps=10,
+            temperature=0.2,
+            plan=plan,
+            context={"task_id": task.id, "resumed": True},
+        )
 
     def stop(self):
         self.stop_flag.set()

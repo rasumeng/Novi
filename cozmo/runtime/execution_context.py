@@ -66,6 +66,16 @@ class ExecutionContext:
     # ── Plan (from orchestrator or pre-computed) ─────────────────────────
     execution_plan: Optional[ExecutionPlan] = None
 
+    # ── Resume pointer (Milestone 5 Phase 5C) ─────────────────────────────
+    resume_from: Optional[int] = None
+    """0-based Plan.steps index to begin execution at, when resuming a
+    previously-interrupted run. ``None`` (default) means start at step 0.
+
+    This is plain execution information — the runtime never loads or reads
+    checkpoints, Tasks, or Jobs; the caller resolves the resume position and
+    passes this integer. Steps before ``resume_from`` are treated as already
+    completed and are skipped, not re-executed."""
+
     # ── Session state ────────────────────────────────────────────────────
     history: list[tuple[str, str]] = field(default_factory=list)
     summary: str = ""
@@ -205,6 +215,8 @@ class ExecutionContext:
             d["evidence_signals"] = [s.type for s in self.analysis.evidence.signals]
         if self.execution_plan is not None:
             d["plan_strategy"] = self.execution_plan.strategy.value
+        if self.resume_from is not None:
+            d["resume_from"] = self.resume_from
         if self.grounding_text:
             d["grounding_length"] = len(self.grounding_text)
         if self.grounding_quality:

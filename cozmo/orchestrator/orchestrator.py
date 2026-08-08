@@ -115,6 +115,8 @@ class Orchestrator:
         elif intent == IntentType.VISION:
             caps.add("vision")
             caps.add("conversation")
+        elif intent == IntentType.CONTINUATION:
+            caps.update(["memory", "planning", "conversation"])
 
         # ── Complexity-based capabilities ─────────────────────────────
 

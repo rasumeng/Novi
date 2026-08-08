@@ -397,8 +397,8 @@
     "id": "REG-024",
     "query": "Continue our previous discussion",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "continuation",
+      "strategy": "execute",
       "capabilities": [
         "memory",
         "conversation"
@@ -406,7 +406,8 @@
       "evidence_memory": true
     },
     "tags": [
-      "memory"
+      "memory",
+      "continuation"
     ]
   },
   {

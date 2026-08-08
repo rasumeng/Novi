@@ -144,6 +144,64 @@ class JobManager:
                  new_job.id, new_job.checkpoint.step if new_job.checkpoint else "?")
         return new_job
 
+    def reopen(self, job_id: str) -> Job | None:
+        """Open a NEW attempt for a store-backed interrupted/paused job.
+
+        Phase 5D continuation: a disk-loaded job (detected at startup via
+        ``find_interrupted_jobs`` / ``mark_interrupted``) is *historical*. We
+        never resurrect it. Instead we create a fresh Job carrying its
+        checkpoint, and record ``resumed_from`` so the old attempt stays the
+        durable record of what happened.
+
+        Returns the new attempt, or None when the referenced job can't be
+        reopened (unknown id, terminal status, or no checkpoint).
+        """
+        # Prefer the in-memory view, fall back to the persisted store.
+        with self._lock:
+            original = self._jobs.get(job_id)
+        if original is None and self._store is not None:
+            original = self._store.load(job_id)
+        if original is None:
+            log.warning("cannot reopen %s: not found", job_id)
+            return None
+        # Only genuinely finished attempts are dead-ends. INTERRUPTED jobs
+        # are precisely the historical record a continuation reopens — they
+        # are never resurrected (a NEW attempt is created), but they ARE a
+        # valid resume source.
+        _dead = frozenset({
+            JobStatus.DONE, JobStatus.COMPLETED, JobStatus.ERROR,
+            JobStatus.FAILED, JobStatus.CANCELLED,
+        })
+        if original.status in _dead:
+            log.warning("cannot reopen %s: terminal status %s",
+                        job_id, original.status.value)
+            return None
+        if original.checkpoint is None:
+            log.warning("cannot reopen %s: no checkpoint", job_id)
+            return None
+
+        new_job = Job(
+            id=self._next_id(),
+            task_id=original.task_id,
+            status=JobStatus.QUEUED,
+            strategy=original.strategy,
+            checkpoint=original.checkpoint,
+            max_retries=original.max_retries,
+            metadata={
+                **original.metadata,
+                "resumed_from": job_id,
+                "reopen": True,
+            },
+        )
+        with self._lock:
+            self._jobs[new_job.id] = new_job
+        self._persist(new_job)
+        self._emit("job.resumed", new_job, resumed_from=job_id)
+        log.info("job reopened: %s → %s (task=%s, step=%s)", job_id,
+                 new_job.id, new_job.task_id,
+                 new_job.checkpoint.step if new_job.checkpoint else "?")
+        return new_job
+
     def cancel(self, job_id: str) -> bool:
         """Cancel a job. Works from any non-terminal status."""
         with self._lock:

@@ -403,7 +403,8 @@ class CozmoRuntime:
                    force_model: str | None = None,
                    execution_plan: object | None = None,
                    context: ExecutionContext | None = None,
-                   conversation_id: str | None = None):
+                   conversation_id: str | None = None,
+                   resume_from: int | None = None):
         """Yield (kind, text) tuples from the agentic loop."""
         intent_str = "conversation"
         try:
@@ -419,6 +420,8 @@ class CozmoRuntime:
                 )
             if conversation_id:
                 ctx.conversation_id = conversation_id
+            if resume_from is not None:
+                ctx.resume_from = resume_from
             if ctx.trace is None:
                 ctx.trace = ExecutionTrace(user_input=ctx.user_input)
             user_input = ctx.user_input
@@ -642,9 +645,12 @@ class CozmoRuntime:
 
             # Split the plan's model-step budget across sequential steps so
             # total ReAct iterations stay bounded regardless of step count.
+            # When resuming, only the remaining steps consume budget.
+            resume_from = ctx.resume_from if ctx.resume_from is not None else 0
+            remaining_steps = len(plan_steps) - resume_from if plan_steps else 0
             step_budget = ctx.max_steps
             if plan_steps:
-                step_budget = max(1, ctx.max_steps // len(plan_steps))
+                step_budget = max(1, ctx.max_steps // max(1, remaining_steps))
 
             final = ""
             stop_reason = "completed"
@@ -656,12 +662,23 @@ class CozmoRuntime:
                 self._emit_bus(EventType.PLAN_STARTED,
                                task_id=ctx.execution_plan.task_id,
                                plan_id=plan_ref.id,
-                               step_count=len(plan_steps))
-                yield ("plan.started", plan_ref.id, f"Executing {len(plan_steps)} step(s)")
+                               step_count=remaining_steps)
+                yield ("plan.started", plan_ref.id,
+                       f"Executing {remaining_steps} step(s) (resuming at {resume_from})" if resume_from else f"Executing {remaining_steps} step(s)")
 
                 step_finals: list[str] = []
                 plan_failed = False
+
+                # Steps before resume_from were completed in a prior attempt —
+                # mark them completed without re-executing, and seed the final
+                # result buffer so step indexes stay globally correct.
+                for idx, plan_step in enumerate(plan_steps[:resume_from]):
+                    plan_step.status = PlanStepStatus.COMPLETED
+                    step_finals.append(getattr(plan_step, "result", "") or "")
+
                 for idx, plan_step in enumerate(plan_steps):
+                    if idx < resume_from:
+                        continue
                     plan_step.status = PlanStepStatus.RUNNING
                     self._emit_bus(EventType.STEP_STARTED,
                                    task_id=ctx.execution_plan.task_id,
