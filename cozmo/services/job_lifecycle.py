@@ -51,6 +51,20 @@ class JobLifecycle:
         """The job that currently owns execution for ``task_id`` (if any)."""
         return self._active.get(task_id)
 
+    def register(self, task_id: str, job_id: str) -> None:
+        """Pre-register a Job created by an ExecutionCoordinator.
+
+        Milestone 5 Phase 5E-1 ownership guard: when the coordinator has
+        already created + started the Job for this task (fresh submit or a
+        continuation reopen), the event-driven path must observe it — NOT
+        create a competing job on ``plan.started``. Registered jobs still
+        receive checkpoint/complete handlers.
+        """
+        if not task_id or not job_id:
+            return
+        self._active[task_id] = job_id
+        self._completed_steps[job_id] = self._completed_steps.get(job_id, [])
+
     def subscribe(self, bus) -> "JobLifecycle":
         """Register for the Runtime's plan lifecycle events. Bus is duck-typed."""
         if bus is None:
@@ -73,6 +87,10 @@ class JobLifecycle:
         task_id = event.data.get("task_id", "")
         plan_id = event.data.get("plan_id", "")
         if not task_id:
+            return
+        if task_id in self._active:
+            # ExecutionCoordinator pre-created + started this Job (5E-1).
+            # Observe it; never create a duplicate on plan.started.
             return
 
         job = self._manager.submit(
