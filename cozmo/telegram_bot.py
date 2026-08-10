@@ -82,7 +82,6 @@ class TelegramBot:
             )
         )
 
-    # commprog
 
     async def cmd_start(self, update, context):
         await update.message.reply_text(
