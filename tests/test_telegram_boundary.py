@@ -93,6 +93,7 @@ class _FakeMessageHandler:
 
 
 class _FakeExt(types.ModuleType):
+    Application = _FakeApplication          # real SDK exposes it under telegram.ext
     CommandHandler = _FakeCommandHandler
     MessageHandler = _FakeMessageHandler
     filters = _FakeFilters()

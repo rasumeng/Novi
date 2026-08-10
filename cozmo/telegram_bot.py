@@ -69,7 +69,7 @@ class TelegramBot:
         self.handler = handler
         self.allowed = set(str(c) for c in (allowed_chat_ids or ()))
         self._sdk = sdk or _require_telegram_sdk()
-        app_builder = self._sdk.Application.builder()
+        app_builder = self._sdk.ext.Application.builder()
         self.app = app_builder.token(token).build()
         self.app.add_handler(
             self._sdk.ext.CommandHandler("start", self.cmd_start))
