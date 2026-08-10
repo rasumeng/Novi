@@ -169,8 +169,9 @@ def test_probe_raises_install_hint_when_sdk_missing(monkeypatch):
     blocker = _BlockImports({"telegram"})
     sys.meta_path.insert(0, blocker)
     try:
-        with pytest.raises(TelegramIntegrationError, match="cozmo.*\\[telegram\\]"):
-            _require_telegram_sdk()
+        mod = importlib.import_module(MODULE)   # live module — identity-safe after reload
+        with pytest.raises(mod.TelegramIntegrationError, match="cozmo.*\\[telegram\\]"):
+            mod._require_telegram_sdk()
     finally:
         sys.meta_path.remove(blocker)
 
@@ -179,8 +180,9 @@ def test_probe_detects_conflicting_shadowing_package(monkeypatch):
     _clear_sdk(monkeypatch)
     shadow = _FakeSdk(update=False, bot=False, ext=True)   # like `telegram` 0.0.1
     _install_sdk(monkeypatch, shadow)
-    with pytest.raises(TelegramIntegrationError, match="NOT python-telegram-bot"):
-        _require_telegram_sdk()
+    mod = importlib.import_module(MODULE)
+    with pytest.raises(mod.TelegramIntegrationError, match="NOT python-telegram-bot"):
+        mod._require_telegram_sdk()
 
 
 def test_probe_accepts_real_sdk_surface(monkeypatch):
