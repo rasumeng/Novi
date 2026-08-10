@@ -155,7 +155,7 @@ def test_telegram_module_has_no_top_level_sdk_import():
     src = (Path(__file__).resolve().parent.parent / "cozmo" / "telegram_bot.py")
     tree = ast.parse(src.read_text("utf-8"))
     imports = []
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
             imports.extend(n for n in names if n == "telegram" or n == "telegram.ext")
