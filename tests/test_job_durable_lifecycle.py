@@ -14,6 +14,7 @@ checkpoints are driven purely from the plan/step events it emits.
 
 import pytest
 
+import cozmo.jobs.persistence as persistence
 from cozmo.jobs.job import Checkpoint, JobStatus
 from cozmo.jobs.manager import JobManager
 from cozmo.jobs.persistence import (
@@ -106,6 +107,40 @@ def test_retry_persists_new_attempt(manager, store):
     assert retried is not None and retried.retry_count == 1
     assert store.load(retried.id) is not None
     assert store.load(job.id).status is JobStatus.FAILED
+
+
+# ── 4A: collision-resistant Job ids (Phase 6A) ─────────────────────────────
+
+def test_job_ids_unique_within_same_second(manager, store):
+    """Many Jobs created in the same second → all ids + files distinct."""
+    ids = []
+    for _ in range(25):
+        ids.append(manager.submit(task_id="task-idx").id)
+
+    assert len(set(ids)) == 25                       # no same-second collision
+    assert all(i.startswith("job-") for i in ids)
+    # final segment is a uuid hex — not an incrementing per-manager counter
+    suffixes = {i.rsplit("-", 1)[1] for i in ids}
+    assert len(suffixes) == 25
+    assert all(len(s) == 12 for s in suffixes)
+
+    persisted = store.list_ids()
+    assert len(persisted) == 25                       # all durable
+    paths = {str(persistence._job_path(i)) for i in ids}
+    assert len(paths) == 25                           # distinct files
+
+
+def test_job_ids_unique_across_separate_managers(store):
+    """Independence from any in-memory counter: two managers, same store."""
+    m1 = JobManager(store=store)
+    m2 = JobManager(store=store)
+    ids = [
+        m1.submit(task_id="task-a").id,
+        m2.submit(task_id="task-b").id,
+        m1.submit(task_id="task-c").id,
+    ]
+    assert len(set(ids)) == 3
+    assert len(store.list_ids()) == 3
 
 
 # ── 4A/4B: JobLifecycle coordinator + execution history ────────────────────
@@ -284,7 +319,7 @@ def test_recovery_exposes_continue_state(manager, store):
     assert len(candidates) == 1
     row = candidates[0]
     assert row["plan_id"] == "plan-rec"
-    assert row["next_step"] == 3
+    assert row["next_step"] == 2         # cp.step 2 = 2 completed → resume at 2
     assert row["completed_steps"] == ["plan-rec-s1", "plan-rec-s2"]
     assert row["has_checkpoint"] is True
 

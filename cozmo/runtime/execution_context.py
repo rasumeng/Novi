@@ -66,15 +66,16 @@ class ExecutionContext:
     # ── Plan (from orchestrator or pre-computed) ─────────────────────────
     execution_plan: Optional[ExecutionPlan] = None
 
-    # ── Resume pointer (Milestone 5 Phase 5C) ─────────────────────────────
+    # ── Resume pointer (Milestone 5 Phase 5C / 6A contract) ──────────────
     resume_from: Optional[int] = None
     """0-based Plan.steps index to begin execution at, when resuming a
     previously-interrupted run. ``None`` (default) means start at step 0.
 
-    This is plain execution information — the runtime never loads or reads
-    checkpoints, Tasks, or Jobs; the caller resolves the resume position and
-    passes this integer. Steps before ``resume_from`` are treated as already
-    completed and are skipped, not re-executed."""
+    Phase 6A invariant: ``resume_from`` must equal ``Checkpoint.step`` —
+    the completed-step count, passed through UNCHANGED. The caller resolves
+    the checkpoint and hands this integer over; the runtime never loads or
+    reads checkpoints, Tasks, or Jobs. Steps before ``resume_from`` are
+    treated as already completed and are skipped, not re-executed."""
 
     # ── Session state ────────────────────────────────────────────────────
     history: list[tuple[str, str]] = field(default_factory=list)

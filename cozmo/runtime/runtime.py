@@ -422,6 +422,8 @@ class CozmoRuntime:
                 ctx.conversation_id = conversation_id
             if resume_from is not None:
                 ctx.resume_from = resume_from
+            if execution_plan is not None:
+                ctx.execution_plan = execution_plan
             if ctx.trace is None:
                 ctx.trace = ExecutionTrace(user_input=ctx.user_input)
             user_input = ctx.user_input

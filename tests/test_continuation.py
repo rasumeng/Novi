@@ -160,7 +160,7 @@ def test_resume_target_shape(task_store, job_store):
     assert t.task_id == "task-1"
     assert t.job_id == "job-1"
     assert t.plan_id == "plan-1"
-    assert t.next_step == 3            # 2 completed → resume index 3
+    assert t.next_step == 2            # cp.step 2 = 2 completed → resume index 2
     assert t.checkpoint is not None
     assert t.completed_steps == ["plan-1-s1", "plan-1-s2"]
 

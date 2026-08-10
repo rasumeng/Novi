@@ -195,7 +195,7 @@ def test_continuation_resumes_new_attempt_with_resume_from(task_store, job_store
     assert jobs[0].id != "job-orig"                  # never resurrect
     assert jobs[0].status is JobStatus.COMPLETED
     assert jobs[0].metadata.get("resumed_from") == "job-orig"
-    assert rt.resume_from_seen == 2                  # checkpoint.step 1 → 2
+    assert rt.resume_from_seen == 1                  # cp.step 1 = 1 completed → resume at 1
 
     # history: original (interrupted) + resume (resumed), no dups
     hist = task.execution_history

@@ -49,6 +49,16 @@ class Checkpoint:
     Task/Plan ids, the current step index, the steps already completed,
     plus the message/tool state of the run itself. ``task_id`` / ``plan_id``
     are references only — a Checkpoint never owns plan/goal content.
+
+    CHECKPOINT.STEP CONTRACT (Phase 6A — canonical, do not duplicate):
+      ``Checkpoint.step`` == number of plan steps that have already completed
+                          == 0-based global plan index of the NEXT step that
+                             must execute.
+      Producers write ``completed_step_index + 1`` (never an arbitrary
+      counter). Consumers (ContinuationService.next_step, Runtime
+      ``resume_from``, JobStore recovery ``next_step``) must pass this value
+      through UNCHANGED — no ``+1`` conversion is permitted anywhere.
+      A checkpoint with no completed steps carries ``step == 0``.
     """
 
     job_id: str = ""

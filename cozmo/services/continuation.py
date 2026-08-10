@@ -63,6 +63,11 @@ class ResumeTarget:
     References only — the continuation layer never takes ownership of the
     underlying objects; it holds ids so a later phase can reload the exact
     plan and checkpoint when asked to actually resume.
+
+    ``next_step`` equals ``checkpoint.step`` (Phase 6A contract): the number
+    of already-completed plan steps and the 0-based index of the next step
+    to execute. Consumers pass it straight to Runtime as ``resume_from`` —
+    no ``+1`` is applied here or anywhere downstream.
     """
 
     task_id: str
@@ -190,8 +195,10 @@ class ContinuationService:
     def _build_target(self, task: Task, job: Job) -> Optional[ResumeTarget]:
         cp = job.checkpoint
         completed = list(cp.completed_steps) if cp else []
-        # find_interrupted_jobs convention: next step = completed count + 1.
-        next_step = (cp.step + 1) if cp is not None else 0
+        # Checkpoint.step IS the resume pointer (Phase 6A contract): the
+        # completed-step count equals the 0-based index of the next step.
+        # Pass it through unchanged — never +1.
+        next_step = cp.step if cp is not None else 0
 
         plan_id = ""
         if cp is not None and cp.plan_id:

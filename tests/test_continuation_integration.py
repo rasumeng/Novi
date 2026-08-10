@@ -125,7 +125,7 @@ def test_checkpoint_step_becomes_resume_from(task_store, job_store):
 
     assert rec is not None
     assert rec.task_id == "task-1"          # only resumable candidate in conv
-    assert rec.next_step == 3                 # cp.step 2 → resume at 3
+    assert rec.next_step == 2                 # cp.step 2 = 2 completed → resume at 2
 
 
 # ── ExecutionHistory: original + resume, no dups ─────────────────────────

@@ -247,7 +247,7 @@ def test_cli_session_continuation_reopens_new_attempt(task_store, job_store):
     out = session.run("continue the task")
     assert "build it" in out
     assert session.coordinator.mode == "continuation"
-    assert session.runtime.resume_from_seen == 2
+    assert session.runtime.resume_from_seen == 1
 
     task = task_store.get("task-1")
     jobs = jm.list_by_task("task-1")

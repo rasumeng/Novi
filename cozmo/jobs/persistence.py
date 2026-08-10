@@ -197,16 +197,32 @@ def find_interrupted_jobs(store: "JobStore") -> list[dict]:
         if job.status not in (JobStatus.RUNNING, JobStatus.PAUSED):
             continue
         cp = job.checkpoint
-        candidates.append({
-            "job_id": job.id,
-            "task_id": job.task_id,
-            "status": job.status.value,
-            "plan_id": cp.plan_id if cp else "",
-            "next_step": (cp.step + 1) if (cp and cp.step is not None) else 0,
-            "completed_steps": list(cp.completed_steps) if cp else [],
-            "has_checkpoint": cp is not None,
-            "started_at": job.started_at,
-        })
+        if cp:
+            candidates.append({
+                "job_id": job.id,
+                "task_id": job.task_id,
+                "status": job.status.value,
+                "plan_id": cp.plan_id,
+                # Checkpoint.step is the exact resume pointer (Phase 6A
+                # contract): the completed-step count == 0-based index of the
+                # next step. Expose it unchanged — never +1.
+                "next_step": cp.step,
+                "completed_steps": list(cp.completed_steps),
+                "has_checkpoint": True,
+                "started_at": job.started_at,
+            })
+        else:
+            # No checkpoint yet → resume from the very beginning (step 0).
+            candidates.append({
+                "job_id": job.id,
+                "task_id": job.task_id,
+                "status": job.status.value,
+                "plan_id": "",
+                "next_step": 0,
+                "completed_steps": [],
+                "has_checkpoint": False,
+                "started_at": job.started_at,
+            })
     return candidates
 
 
@@ -229,7 +245,10 @@ def mark_interrupted(store: JobStore) -> list[dict]:
             "task_id": job.task_id,
             "status": "interrupted",
             "plan_id": cp.plan_id if cp else "",
-            "next_step": (cp.step + 1) if (cp and cp.step is not None) else 0,
+            # Checkpoint.step is the exact resume pointer (Phase 6A
+            # contract): the completed-step count == 0-based index of the
+            # next step. Expose it unchanged — never +1.
+            "next_step": cp.step if (cp and cp.step is not None) else 0,
             "completed_steps": list(cp.completed_steps) if cp else [],
             "has_checkpoint": cp is not None,
             "started_at": job.started_at,

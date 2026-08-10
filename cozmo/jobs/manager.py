@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -40,7 +41,6 @@ class JobManager:
                  event_sink: Optional[EventSink] = None):
         self._lock = threading.Lock()
         self._jobs: dict[str, Job] = {}
-        self._counter = 0
         self._store = store
         self._event_sink = event_sink
 
@@ -52,9 +52,15 @@ class JobManager:
         self._event_sink = sink
 
     def _next_id(self) -> str:
-        self._counter += 1
+        """Collision-resistant Job id: ``job-<timestamp>-<uuid>``.
+
+        The UUID suffix (not a per-manager counter) guarantees uniqueness
+        across same-second creations, process restarts, and separate
+        processes. Its prefix keeps ``job-`` sortability and leaves every
+        already-persisted ``job-<ts>-<counter>`` id loadable unchanged.
+        """
         ts = datetime.now().strftime("%y%m%d%H%M%S")
-        return f"job-{ts}-{self._counter}"
+        return f"job-{ts}-{uuid.uuid4().hex[:12]}"
 
     def _persist(self, job: Job) -> Job:
         if self._store is not None:
