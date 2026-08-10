@@ -62,12 +62,19 @@ class ExecutionCoordinator:
     def run_stream(self, runtime, user_input: str, *, conversation_id: str = "",
                    attachments: Optional[list] = None,
                    stop_check: Optional[Callable[[], bool]] = None,
+                   metadata: Optional[dict] = None,
                    ) -> Iterator[tuple]:
         """Drive one run though the full lifecycle. Yields runtime items.
 
         ``stop_check`` (optional callable) mirrors the WebUI stop_flag: when
         it returns True mid-stream, generation stops and the message is
         surfaced exactly like the previous Session behavior.
+
+        ``metadata`` (optional dict) is merged into the fresh Job's metadata
+        so a surface can tag its attempts (e.g. ``{"source": "background",
+        "run_id": ...}``) without owning any lifecycle logic. It is ignored
+        for continuations — a resumed attempt keeps the original attempt's
+        metadata plus ``resumed_from``.
         """
         self.mode = "unset"
         self.task_id = ""
@@ -76,7 +83,8 @@ class ExecutionCoordinator:
         self.candidates = []
         self.error = ""
 
-        prepared = self._prepare(user_input, conversation_id, attachments)
+        prepared = self._prepare(user_input, conversation_id, attachments,
+                                 metadata=metadata)
         if prepared.get("ambiguous"):
             self.mode = "ambiguous"
             self.candidates = prepared["candidates"]
@@ -142,7 +150,8 @@ class ExecutionCoordinator:
     # ── preparation ─────────────────────────────────────────────────────
 
     def _prepare(self, user_input: str, conversation_id: str,
-                 attachments: Optional[list] = None) -> dict:
+                 attachments: Optional[list] = None,
+                 metadata: Optional[dict] = None) -> dict:
         """Resolve continuation or plan fresh; open the Job attempt."""
         continuation = self._resolve_continuation(user_input, conversation_id)
         if continuation is not None:
@@ -179,6 +188,7 @@ class ExecutionCoordinator:
             metadata={
                 "intent": plan.goal.intent.value,
                 "tools": plan.tools,
+                **(metadata or {}),
             },
         )
         self.mode = "fresh"

@@ -199,7 +199,11 @@ def _start_background_run(goal: str, cfg: dict) -> str:
 
             result = run_background(ctx, goal, conversation_id=f"bg:{run_id}",
                                     on_event=on_event,
-                                    stop_check=stop_flag.is_set)
+                                    stop_check=stop_flag.is_set,
+                                    metadata={
+                                        "source": "background",
+                                        "run_id": run_id,
+                                    })
             # Traceability: link the WebUI run to the real Task/Job.
             with _background_runs_lock:
                 info = _background_runs.get(run_id)
@@ -1469,7 +1473,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         b = get_backend(cfg)
         ctx = b.get("context")
         result = run_background(ctx, task.prompt,
-                                conversation_id=f"queue:{task.id}")
+                                conversation_id=f"queue:{task.id}",
+                                metadata={
+                                    "source": "taskqueue",
+                                    "queue_id": task.id,
+                                })
         task.cozmo_task_id = result.task_id
         return result.answer
 

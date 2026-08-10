@@ -211,3 +211,51 @@ complete, and focus shifts to the rest of the assistant.
 
 See `docs/ROADMAP-phaseG.md` — legacy removal, cleanup, technical debt, migration
 completion. No new Brain features.
+
+---
+
+## 2026-08-09 → 08-10 — Milestone 5: durable execution architecture
+
+Milestone 5 rebuilt Cozmo's execution model around durable intent. The throughline
+of the milestone is the architecture rule: *an integration provides I/O, never its
+own execution pipeline.* Each phase landed as its own checkpoint commit:
+
+- **Phase 0–4** — `conversation_id` threading; live `TaskStore`; `PlannerEngine`
+  + `Plan`/`PlanStep`; sequential Plan execution with lifecycle events; Job
+  lifecycle (`Job`/`Checkpoint`/`ExecutionHistory`) with recovery.
+- **Phase 5A–5D** — continuation detection; `ExecutionHistory`; runtime resume and
+  end-to-end continuation (new attempt, never resurrect the interrupted Job).
+- **Phase E-1** — `ExecutionCoordinator`: the single ownership seam owning
+  Task/Plan/Job/history for one attempt, extracted from WebUI `Session`.
+- **Phase E-2** — Telegram integration boundary + SDK correctness: lazy
+  `python-telegram-bot` import, thin adapter, off-loop worker bridge.
+
+### Phase E-3 — execution surface unification (this entry)
+
+All remaining surfaces converge on the coordinator seam; no normal surface calls
+Runtime directly anymore:
+
+- **CLI** — `CliSessionAdapter` (stable `cli:<session_id>` identity) renders the
+  coordinator stream (tokens / errors / continuation candidates).
+- **Telegram** — `telegram:<chat_id>` identity; full-flow tests prove an allowed
+  chat drives Task/Plan/Job/History and a denied chat creates nothing.
+- **TaskQueue** — worker is dispatch-only; each prompt becomes a real TaskStore
+  Task via `run_background` (no fake/orphan task ids).
+- **Background runs** — `run_background` replaces the old orphan-job
+  (`schedule-<run_id>` fake task id) pattern with a real Task/Plan/Job/History
+  chain; attempts tagged `source=background` / `run_id`.
+- **Scheduler** — input producer only; `_scheduled_trigger` → coordinator;
+  attempts tagged `source=schedule` / `schedule_id`. The 5E audit's duplicate
+  scheduler instances are consolidated into the `CozmoContext` singleton (guard
+  test asserts a single `Scheduler()` construction point).
+- **E-3.6** — configuration compatibility: surfaces never hardcode model
+  selection; model resolution stays centralized (ctx `ModelService` +
+  orchestrator `ModelRouter`). Guard test enforces it.
+- **Cross-surface regression** — one execution per surface → exactly one
+  Task/Job/history entry (WebUI/CLI/Telegram/TaskQueue/Background/Scheduler).
+
+Manual Telegram real-device validation steps live in `docs/telegram-setup.md`
+(no secrets). Suite state at this checkpoint: 979 passed; the only reds are 8
+pre-existing, ordering-dependent `test_tool_retrieval.py` failures (Brain-wired
+`search_memory` hits a live embedding backend when run late in the suite; they
+pass in isolation, unrelated to E-3).

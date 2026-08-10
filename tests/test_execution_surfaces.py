@@ -17,6 +17,7 @@ stores/coordinator):
 
 import asyncio
 import threading
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -330,6 +331,118 @@ def test_telegram_continuation_uses_coordinator_path(task_store, job_store):
     assert task.conversation_id == "conv-1"
 
 
+# ---- 5E-2B full-flow: TelegramBot adapter + coordinator handler ------------
+
+class _TGBotApp:
+    def __init__(self):
+        self.handlers = []
+
+    def add_handler(self, handler):
+        self.handlers.append(handler)
+
+    def run_polling(self, allowed_updates=None):
+        pass
+
+
+class _TGBotBuilder:
+    def __init__(self):
+        self._token = None
+
+    def token(self, token):
+        self._token = token
+        return self
+
+    def build(self):
+        return _TGBotApp()
+
+
+class _TGMsgFilter:
+    def __invert__(self):
+        return self
+
+    def __and__(self, other):
+        return self
+
+
+class _TGFakeMsg:
+    def __init__(self, text):
+        self.text = text
+        self.replied = None
+
+    async def reply_text(self, text):
+        self.replied = text
+        return True
+
+
+class _TGFakeUpdate:
+    def __init__(self, text, chat_id):
+        self.message = _TGFakeMsg(text)
+        self.effective_chat = types.SimpleNamespace(id=chat_id)
+
+
+def _installed_fake_tg_sdk(monkeypatch):
+    """Install a faked python-telegram-bot surface (mirrors test_telegram_boundary)."""
+    import sys
+
+    sdk = types.ModuleType("telegram")
+    sdk.Update = object
+    sdk.Bot = object
+    sdk.ext = types.ModuleType("telegram.ext")
+
+    def _app_builder():
+        return _TGBotBuilder()
+    sdk.ext.Application = type("Application", (), {"builder": staticmethod(_app_builder)})
+    sdk.ext.CommandHandler = type("CommandHandler", (),
+                                  {"__init__": lambda self, name, cb: None})
+    sdk.ext.MessageHandler = type("MessageHandler", (),
+                                  {"__init__": lambda self, _f, cb: None})
+    sdk.ext.filters = types.SimpleNamespace(TEXT=_TGMsgFilter(), COMMAND=_TGMsgFilter())
+    monkeypatch.setitem(sys.modules, "telegram", sdk)
+    monkeypatch.setitem(sys.modules, "telegram.ext", sdk.ext)
+    return sdk
+
+
+def _tg_bot(ctx, monkeypatch, *, allowed=()):
+    from cozmo.services.telegram import build_telegram_handler
+    from cozmo.telegram_bot import TelegramBot
+
+    sdk = _installed_fake_tg_sdk(monkeypatch)
+    handler = build_telegram_handler(ctx)
+    return TelegramBot("TOKEN", handler, allowed_chat_ids=allowed, sdk=sdk)
+
+
+def test_telegram_allowed_chat_executes_full_chain(task_store, job_store, monkeypatch):
+    """E-3.2: an allowed chat flows bot → coordinator → Task/Plan/Job/History."""
+    from cozmo.jobs.manager import JobManager
+
+    jm = JobManager(store=job_store)
+    ctx = _FakeCtx(task_store, jm)
+    bot = _tg_bot(ctx, monkeypatch)
+
+    update = _TGFakeUpdate("build the widget", chat_id=5)
+    asyncio.run(bot.handle_message(update, None))
+
+    assert "build it" in (update.message.replied or "")
+    _assert_fresh_invariants(task_store, jm, "telegram:5")
+
+
+def test_telegram_denied_chat_rejected_without_execution(
+        task_store, job_store, monkeypatch):
+    """E-3.2: a non-allowed chat is denied before any Task/Job is created."""
+    from cozmo.jobs.manager import JobManager
+
+    jm = JobManager(store=job_store)
+    ctx = _FakeCtx(task_store, jm)
+    bot = _tg_bot(ctx, monkeypatch, allowed=["1"])
+
+    update = _TGFakeUpdate("build the widget", chat_id=99)
+    asyncio.run(bot.handle_message(update, None))
+
+    assert "not allowed" in (update.message.replied or "")
+    assert task_store.list() == []
+    assert jm.list() == []
+
+
 # ---- 5E-2C TaskQueue worker -> Coordinator -----------------------------------
 
 def test_task_queue_worker_routes_through_coordinator(task_store, job_manager,
@@ -428,6 +541,23 @@ def test_background_on_event_streams_items(task_store, job_manager):
     assert "plan.completed" in kinds
 
 
+def test_background_job_metadata_identifies_source(task_store, job_store):
+    """E-3.4: background attempts are tagged with their source/run metadata."""
+    from cozmo.jobs.manager import JobManager
+    from cozmo.services.background import run_background
+
+    jm = JobManager(store=job_store)
+    ctx = _FakeCtx(task_store, jm)
+    run_background(ctx, "build the widget", conversation_id="background:run1",
+                   metadata={"source": "background", "run_id": "run1"})
+
+    task = task_store.list()[0]
+    job = jm.list_by_task(task.id)[0]
+    assert job.metadata.get("source") == "background"
+    assert job.metadata.get("run_id") == "run1"
+    assert job.metadata.get("intent") is not None   # coordinator base metadata kept
+
+
 # ---- 5E-2E Scheduler -> Background -> Coordinator -----------------------------
 
 def test_scheduler_trigger_reaches_coordinator_chain(task_store, job_manager,
@@ -448,6 +578,34 @@ def test_scheduler_trigger_reaches_coordinator_chain(task_store, job_manager,
     _assert_fresh_invariants(task_store, job_manager, "schedule:sched1")
 
 
+def test_scheduler_job_metadata_identifies_schedule(task_store, job_store,
+                                                     tmp_path, monkeypatch):
+    """E-3.5: scheduled attempts carry schedule identity; no fake task id."""
+    import cozmo.scheduler as sched_mod
+    from cozmo.jobs.manager import JobManager
+    from cozmo.scheduler import ScheduledRun
+    from cozmo.services.background import run_background
+
+    monkeypatch.setattr(sched_mod, "SCHEDULES_PATH", tmp_path / "schedules.json")
+    jm = JobManager(store=job_store)
+    ctx = _FakeCtx(task_store, jm)
+    scheduler = sched_mod.Scheduler()
+    scheduler.on_trigger = lambda s: run_background(
+        ctx, s.goal, conversation_id=f"schedule:{s.id}",
+        metadata={"source": "schedule", "schedule_id": s.id,
+                  "schedule_description": s.description})
+
+    scheduler.on_trigger(ScheduledRun(id="sched9", goal="build the widget",
+                                      description="nightly"))
+
+    task = task_store.list()[0]
+    job = jm.list_by_task(task.id)[0]
+    assert job.metadata.get("source") == "schedule"
+    assert job.metadata.get("schedule_id") == "sched9"
+    assert job.metadata.get("schedule_description") == "nightly"
+    assert task.conversation_id == "schedule:sched9"
+
+
 def test_context_scheduled_trigger_routes_to_background(monkeypatch):
     from cozmo.services.context import CozmoContext
 
@@ -463,19 +621,30 @@ def test_context_scheduled_trigger_routes_to_background(monkeypatch):
     ctx._scheduled_trigger(SimpleNamespace(id="s9", goal="g"))
     assert recorded["goal"] == "g"
     assert recorded["kw"]["conversation_id"] == "schedule:s9"
+    assert recorded["kw"]["metadata"]["source"] == "schedule"
+    assert recorded["kw"]["metadata"]["schedule_id"] == "s9"
 
 
 # ---- cross-entry invariants ---------------------------------------------------
 
-@pytest.mark.parametrize("surface", ["cli", "telegram", "background"])
+@pytest.mark.parametrize("surface", [
+    "webui", "cli", "telegram", "background", "taskqueue", "scheduler"])
 def test_each_surface_creates_exactly_one_job_and_history(surface, task_store,
-                                                          job_store):
+                                                          job_store, tmp_path,
+                                                          monkeypatch):
+    """E-3.7: one execution through each surface → exactly 1 Task/1 Job/1 history."""
     jm = JobManager(store=job_store)
     lifecycle = JobLifecycle(jm, task_store=task_store)
     ctx = _FakeCtx(task_store, jm, job_lifecycle=lifecycle)
     text = "build the widget"
 
-    if surface == "cli":
+    if surface == "webui":
+        # WebUI Session.start_run IS this exact coordinator seam (reference).
+        from cozmo.services.execution import build_application_execution
+        runtime, coordinator, _ = build_application_execution(ctx)
+        conv = "webui:reference"
+        list(coordinator.run_stream(runtime, text, conversation_id=conv))
+    elif surface == "cli":
         from cozmo.cli import CliSessionAdapter
         conv = "cli:px"
         CliSessionAdapter(ctx, session_id="px").run(text)
@@ -483,10 +652,40 @@ def test_each_surface_creates_exactly_one_job_and_history(surface, task_store,
         from cozmo.services.telegram import _handle_sync
         conv = "telegram:9"
         _handle_sync(ctx, "9", text)
-    else:
+    elif surface == "background":
         from cozmo.services.background import run_background
         conv = "bg:z"
         run_background(ctx, text, conversation_id=conv)
+    elif surface == "taskqueue":
+        import cozmo.task_queue as tq
+        from cozmo.services.background import run_background
+        from cozmo.task_queue import TaskQueue, TaskStatus
+
+        monkeypatch.setattr(tq, "TASKS_DIR", tmp_path / "tasks")
+        queue = TaskQueue()
+
+        def runner(task):
+            result = run_background(ctx, task.prompt,
+                                    conversation_id=f"queue:{task.id}")
+            task.cozmo_task_id = result.task_id
+            return result.answer
+
+        task = queue.add("d", text)
+        queue.run_task(task, runner)
+        _wait_until(lambda: task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED))
+        conv = f"queue:{task.id}"
+    else:
+        import cozmo.scheduler as sched_mod
+        from cozmo.scheduler import ScheduledRun
+        from cozmo.services.background import run_background
+
+        monkeypatch.setattr(sched_mod, "SCHEDULES_PATH", tmp_path / "schedules.json")
+        sched = sched_mod.Scheduler()
+        sched.on_trigger = lambda s: run_background(
+            ctx, s.goal, conversation_id=f"schedule:{s.id}")
+        sched.on_trigger(ScheduledRun(id="sched-e3", goal=text,
+                                      description="scheduled"))
+        conv = "schedule:sched-e3"
 
     _assert_fresh_invariants(task_store, jm, conv)
     assert len(task_store.list()) == 1
@@ -557,4 +756,76 @@ def test_surface_adapters_stay_thin_adapters():
             elif isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
                 assert not any(mod.startswith(f) for f in forbidden), \
+                    f"{rel} must not import {mod}"
+
+
+def test_scheduler_has_single_construction_point():
+    """Phase 5E audit guard: exactly one scheduler instance per application.
+
+    The application scheduler is the ``CozmoContext`` singleton
+    (``cozmo/services/context.py``). The WebUI reuses that instance via
+    ``ctx.scheduler`` — never a second polling Scheduler — so scheduled
+    triggers all dispatch through the same coordinator path.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "cozmo"
+    constructors = {}
+    for py in root.rglob("*.py"):
+        if "__pycache__" in py.parts or "node_modules" in py.parts:
+            continue
+        text = py.read_text("utf-8")
+        if "Scheduler(" not in text:
+            continue
+        tree = ast.parse(text)
+        sites = []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "Scheduler"):
+                sites.append(node.lineno)
+        if sites:
+            constructors[str(py.relative_to(root)).replace("\\", "/")] = sites
+
+    assert list(constructors) == ["services/context.py"], \
+        f"unexpected Scheduler() construction sites: {constructors}"
+
+    wui = (root / "webui_server.py").read_text("utf-8")
+    assert "Scheduler()" not in wui
+    assert "ctx.scheduler" in wui
+
+
+def test_surfaces_do_not_own_model_selection():
+    """E-3.6: surface adapters must not hardcode model/perf-profile selection.
+
+    Model selection stays centralized (ctx model service + orchestrator model
+    router). CLI / Telegram / TaskQueue / Scheduler / background must NEVER
+    reference model-selection APIs, presets, or performance profiles.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "cozmo"
+    forbidden_attrs = {"force_model", "model_preset", "model_presets",
+                       "performance_profile", "perf_profile", "model_router",
+                       "model_catalog"}
+    forbidden_imports = ("cozmo.models", "cozmo.configuration.catalog",
+                         "cozmo.configuration.presets", "cozmo.runtime.model_router")
+    surfaces = ("cli.py", "services/telegram.py", "services/background.py",
+                "task_queue.py", "scheduler.py", "telegram_bot.py")
+    for rel in surfaces:
+        src = (root / rel).read_text("utf-8")
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and \
+                    node.attr in forbidden_attrs:
+                raise AssertionError(f"{rel} references {node.attr} (model selection must stay centralized)")
+            if isinstance(node, ast.Import):
+                for n in node.names:
+                    assert not any(n.name.startswith(f) for f in forbidden_imports), \
+                        f"{rel} must not import {n.name}"
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                assert not any(mod.startswith(f) for f in forbidden_imports), \
                     f"{rel} must not import {mod}"

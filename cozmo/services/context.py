@@ -218,6 +218,13 @@ class CozmoContext:
         The WebUI overrides ``on_trigger`` with its own broadcast version; this
         default executes without a UI channel. Failures are logged, never
         raised into the polling thread.
+
+        The scheduler is an input producer, not an execution engine: it only
+        supplies the schedule identity + goal and lets the coordinator own the
+        Task/Plan/Job lifecycle. The conversation identity is scoped to the
+        schedule (``schedule:<id>``) so a scheduled run never leaks into a
+        user's conversational Brain thread. Attempts are tagged with their
+        source so schedules compose with continuation/observability.
         """
         from .background import run_background
 
@@ -225,7 +232,16 @@ class CozmoContext:
         if not goal:
             return
         try:
-            run_background(self, goal, conversation_id=f"schedule:{s.id}")
+            run_background(
+                self,
+                goal,
+                conversation_id=f"schedule:{s.id}",
+                metadata={
+                    "source": "schedule",
+                    "schedule_id": s.id,
+                    "schedule_description": getattr(s, "description", "") or "",
+                },
+            )
         except Exception as e:
             log.warning("scheduled run %s failed: %s", s.id, e)
 

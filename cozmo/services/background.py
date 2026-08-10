@@ -46,13 +46,19 @@ class BackgroundRunResult:
 def run_background(ctx, goal: str, *, conversation_id: str = "",
                    on_event: Optional[Callable[[tuple], None]] = None,
                    stop_check: Optional[Callable[[], bool]] = None,
-                   attachments: Optional[list] = None) -> BackgroundRunResult:
+                   attachments: Optional[list] = None,
+                   metadata: Optional[dict] = None) -> BackgroundRunResult:
     """Execute one goal through the coordinator using a fresh runtime.
 
     ``on_event`` receives every streamed item (duck-typed tuples) so the
     caller can surface tool/log progress without owning any lifecycle logic.
     ``stop_check`` mirrors the WebUI stop flag: when it flips mid-stream the
     coordinator stops generation and finalises the Job.
+
+    ``metadata`` is merged into the fresh Job's metadata so background /
+    schedule / queue runs can be traced to their source (e.g.
+    ``{"source": "background", "run_id": ...}``). The coordinator stays the
+    only owner of Job creation — the caller only tags.
 
     Returns a :class:`BackgroundRunResult` with the coordinator-populated
     Task/Job ids so the caller can link queue-schedules to real Tasks.
@@ -68,6 +74,7 @@ def run_background(ctx, goal: str, *, conversation_id: str = "",
         conversation_id=conversation_id or "",
         attachments=attachments,
         stop_check=stop_check,
+        metadata=metadata,
     ):
         if on_event is not None:
             try:

@@ -2,6 +2,24 @@
 
 ## v0.3.0 (unreleased)
 
+### Unified Execution Architecture (Milestone 5, Phase E-3)
+
+Every normal execution surface (WebUI, CLI, Telegram, TaskQueue, background runs,
+scheduler triggers) now flows through a single `ExecutionCoordinator` seam — no
+per-surface execution pipelines, no unplanned direct Runtime calls.
+
+- CLI sessions get a stable `cli:<session_id>` conversation identity
+- Telegram is coordinator-backed with a `telegram:<chat_id>` identity; execution
+  runs on a worker thread so the async event loop never blocks
+- TaskQueue workers, background runs, and scheduled triggers execute through the
+  coordinator: each becomes a real Task → Plan → Job → ExecutionHistory chain
+- Background/scheduled/queued attempts are tagged with their source
+  (`source=background|schedule|taskqueue`, run/schedule ids)
+- Duplicate scheduler instances consolidated into the shared `CozmoContext`
+  singleton
+- Model selection stays centralized (context model service + orchestrator model
+  router); surface adapters never hardcode model/performance-profile behavior
+
 ### Agent Events (WebSocket — new backend events for activity panel)
 
 - Tool category mapping (`_TOOL_CATEGORIES`) in `runtime.py` — tools tagged as `workspace`, `python`, `web`, `git`, `memory`, or `other`
