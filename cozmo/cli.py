@@ -1,6 +1,7 @@
 import argparse
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -66,18 +67,83 @@ def _handle_slash(cmd: str) -> tuple[str, bool]:
     return cmd, False
 
 
+def _format_continuation_candidates(candidates: list) -> str:
+    if not candidates:
+        return "You have resumable work, but nothing is clearly continue-able."
+    lines = ["Multiple pieces of work can be continued:"]
+    for i, c in enumerate(candidates, 1):
+        title = c.get("title", "") or c.get("task_id", "")
+        progress = c.get("progress", "") or ""
+        lines.append(f"  {i}. {title} ({progress} steps done)")
+    lines.append("Mention which one you want to keep going on.")
+    return "\n".join(lines)
+
+
+def _render_run(coordinator, runtime, text: str, conversation_id: str) -> str:
+    """Drive one CLI turn through the ExecutionCoordinator.
+
+    CLI rendering stays CLI-owned: tool/trace items are ignored, the assistant
+    answer is assembled from token chunks exactly like the legacy
+    ``runtime.run()``. Coordinator control messages (continuation candidates /
+    errors) are rendered as text.
+    """
+    parts = []
+    for item in coordinator.run_stream(runtime, text,
+                                       conversation_id=conversation_id):
+        if not item:
+            continue
+        kind = item[0]
+        if kind == "control":
+            payload = item[1]
+            ctype = payload.get("type")
+            if ctype == "error":
+                return payload.get("text", "Error")
+            if ctype == "continuation_candidates":
+                return _format_continuation_candidates(
+                    payload.get("candidates", []))
+        elif kind == "token":
+            parts.append(str(item[1]))
+    return "".join(parts).strip()
+
+
+class CliSessionAdapter:
+    """A CLI session's composition root (mirrors the WebUI ``Session``).
+
+    Owns a session-scoped runtime + ExecutionCoordinator against a stable
+    conversation identity ``cli:<session_id>``. One logical session never
+    creates a second Task/Job pipeline; Task/Plan/Job/History all flow through
+    the same coordinator seam as WebUI chat.
+    """
+
+    def __init__(self, ctx, *, project_index=None, auto: bool = False,
+                 session_id: str = ""):
+        from .services.execution import build_application_execution
+
+        self.session_id = session_id or uuid.uuid4().hex[:8]
+        self.conversation_id = f"cli:{self.session_id}"
+        self.runtime, self.coordinator, _ = build_application_execution(
+            ctx, project_index=project_index, auto=auto)
+
+    def run(self, text: str) -> str:
+        return _render_run(self.coordinator, self.runtime, text,
+                           self.conversation_id)
+
+    def reset(self):
+        self.runtime.reset()
+
+
 def interactive_session(ctx, initial_query: str | None = None):
     ctx.init_knowledge_index()
     _ = ctx.scheduler
-    runtime = ctx.create_runtime()
+    session = CliSessionAdapter(ctx)
     if initial_query:
-        _safe_print(f"\nCozmo: {runtime.run(initial_query)}\n")
+        _safe_print(f"\nCozmo: {session.run(initial_query)}\n")
     while True:
         try:
             user = input("\nYou: ")
             if user.lower() in ("exit", "quit"):
                 break
-            result = runtime.run(user)
+            result = session.run(user)
             _safe_print(f"Cozmo: {result}")
         except (EOFError, KeyboardInterrupt):
             break
@@ -88,11 +154,11 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
 
     ctx.init_knowledge_index()
     _ = ctx.scheduler
-    runtime = ctx.create_runtime(project_index=ProjectIndex(project_path))
-    runtime._perms.auto = auto
+    session = CliSessionAdapter(
+        ctx, project_index=ProjectIndex(project_path), auto=auto)
 
     if query:
-        _safe_print(f"\nCozmo: {runtime.run(query)}\n")
+        _safe_print(f"\nCozmo: {session.run(query)}\n")
         return
 
     HistoryFile = HISTORY_FILE
@@ -106,7 +172,7 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
         event.app.current_buffer.text = ""
         event.app.invalidate()
 
-    session = PromptSession(
+    session_prompt = PromptSession(
         history=FileHistory(str(HistoryFile)),
         completer=FileCompleter(project_path),
         complete_while_typing=True,
@@ -116,7 +182,7 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
     print(f"Session in {project_path}. /help for commands, F2 to switch mode.")
     while True:
         try:
-            line = session.prompt(f"\nYou: ")
+            line = session_prompt.prompt(f"\nYou: ")
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -139,10 +205,10 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
                 break
             cmd = cmd_raw
             if cmd in ("new", "clear"):
-                runtime.reset()
+                session.reset()
                 print("Session cleared.")
             elif cmd == "compact":
-                runtime.reset()
+                session.reset()
                 print("History cleared.")
             elif cmd == "help":
                 print(
@@ -161,12 +227,12 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
         if not line.strip():
             continue
 
-        result = runtime.run(line)
+        result = session.run(line)
         _safe_print(f"Cozmo: {result}")
 
 
 def run_telegram(ctx):
-    from .telegram_bot import TelegramBot
+    from .services.telegram import build_telegram_bot
     from .tools.telegram import set_bot_instance
 
     token = ctx.config.get("telegram", {}).get("bot_token", "")
@@ -174,10 +240,8 @@ def run_telegram(ctx):
         print("Error: telegram.bot_token not set in config")
         return
 
-    runtime = ctx.create_runtime()
-    # headless: no way to ask — 'ask' rules resolve to deny (fail safe)
-
-    bot = TelegramBot(token, runtime)
+    allowed = ctx.config.get("telegram", {}).get("allowed_chat_ids", [])
+    bot = build_telegram_bot(ctx, token, allowed_chat_ids=allowed)
     set_bot_instance(bot)
     print("Cozmo Telegram bot started. Press Ctrl+C to stop.")
     bot.run()

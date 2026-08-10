@@ -146,20 +146,19 @@ def _broadcast_sync(payload: dict):
 
 # ── Background run helpers ────────────────────────────────────────────────
 
-def _start_background_run(goal: str, cfg: dict, job_manager=None) -> str:
-    """Start an agent run in a background thread. Returns run_id."""
+def _start_background_run(goal: str, cfg: dict) -> str:
+    """Start a coordinator-backed background run in a thread. Returns run_id.
+
+    Milestone 5 Phase 5E-2D: Task/Plan/Job/ExecutionHistory are owned by the
+    ExecutionCoordinator (``services.background.run_background``). This
+    function only broadcasts the streamed items for the WebUI. No Job is
+    submitted here — there is no fake ``schedule-<run_id>`` task id anymore.
+    """
     import uuid
+    from .services.background import run_background
+
     run_id = f"bg-{uuid.uuid4().hex[:8]}"
     stop_flag = threading.Event()
-
-    job = None
-    if job_manager:
-        job = job_manager.submit(
-            task_id=f"schedule-{run_id}",
-            strategy="background",
-            metadata={"goal": goal, "type": "scheduled"},
-        )
-        job_manager.start(job.id)
 
     def _emit(event_type: str, **kw):
         kw["type"] = event_type
@@ -168,12 +167,12 @@ def _start_background_run(goal: str, cfg: dict, job_manager=None) -> str:
 
     def _worker():
         try:
-            rt, _, _, _ = build_runtime(cfg)
-            rt.stop_event = stop_flag
+            b = get_backend(cfg)
+            ctx = b.get("context")
             _emit("background_run_update", status="running", goal=goal)
-            for item in rt.run_stream(goal):
-                if stop_flag.is_set():
-                    _emit("background_run_update", status="cancelled", goal=goal)
+
+            def on_event(item):
+                if not item:
                     return
                 kind = item[0]
                 if kind == "tool_call":
@@ -187,22 +186,32 @@ def _start_background_run(goal: str, cfg: dict, job_manager=None) -> str:
                 elif kind == "agent_status":
                     status, goal_text = item[1], item[2]
                     step_text = item[3] if len(item) > 3 else None
-                    _emit("background_run_update", status=status, goal=goal_text, step=step_text)
-                elif kind == "token":
-                    pass
+                    _emit("background_run_update", status=status,
+                          goal=goal_text, step=step_text)
                 elif kind == "thinking":
-                    _emit("background_run_update", status="running", goal=goal, step=item[1])
-                elif kind == "plan":
-                    continue
-                elif kind in ("progress", "agent_state"):
-                    pass
-            if job:
-                job_manager.complete(job.id, result="done")
-            _emit("background_run_update", status="done", goal=goal)
+                    _emit("background_run_update", status="running",
+                          goal=goal, step=item[1])
+                elif kind == "control":
+                    payload = item[1]
+                    if payload.get("type") == "error":
+                        _emit("background_run_update", status="error",
+                              goal=goal, error=payload.get("text", ""))
+
+            result = run_background(ctx, goal, conversation_id=f"bg:{run_id}",
+                                    on_event=on_event,
+                                    stop_check=stop_flag.is_set)
+            # Traceability: link the WebUI run to the real Task/Job.
+            with _background_runs_lock:
+                info = _background_runs.get(run_id)
+                if info:
+                    info["task_id"] = result.task_id
+                    info["job_id"] = result.job_id
+            if stop_flag.is_set():
+                _emit("background_run_update", status="cancelled", goal=goal)
+            else:
+                _emit("background_run_update", status="done", goal=goal)
         except Exception as e:
             import traceback
-            if job:
-                job_manager.complete(job.id, error=str(e))
             _emit("background_run_update", status="error", goal=goal, error=str(e))
             traceback.print_exc()
         finally:
@@ -248,6 +257,8 @@ def _list_background_runs() -> list[dict]:
                 "status": info["status"],
                 "created": info["created"],
                 "ended": info.get("ended", ""),
+                "task_id": info.get("task_id", ""),
+                "job_id": info.get("job_id", ""),
             })
         runs.sort(key=lambda r: r["created"], reverse=True)
         return runs
@@ -262,7 +273,8 @@ def _get_background_run_logs(run_id: str) -> list[dict]:
 
 
 # ── Scheduler ────────────────────────────────────────────────────────────
-from .scheduler import Scheduler
+# The application scheduler is the CozmoContext singleton (see _ensure_scheduler);
+# its trigger dispatches through the shared background/coordinator path.
 
 _scheduler_lock = threading.Lock()
 _scheduler_inst = None
@@ -273,13 +285,15 @@ def _ensure_scheduler(cfg: dict):
     with _scheduler_lock:
         if _scheduler_inst is not None:
             return _scheduler_inst
-        _scheduler_inst = Scheduler()
         b = get_backend(cfg)
-        jm = b.get("job_manager")
-        _scheduler_inst.on_trigger = lambda s: _start_background_run(s.goal, cfg, job_manager=jm)
-        _scheduler_inst.start()
-        from .tools.scheduler_task import init_scheduler_tool
-        init_scheduler_tool(_scheduler_inst)
+        ctx = b.get("context")
+        # Single application scheduler: reuse the composition-root singleton
+        # instead of building a second polling instance (5E-2E). The default
+        # trigger already routes through the coordinator; here we swap in the
+        # WebUI variant that also broadcasts to connected sockets.
+        sched = ctx.scheduler
+        sched.on_trigger = lambda s: _start_background_run(s.goal, cfg)
+        _scheduler_inst = sched
         return _scheduler_inst
 
 
@@ -1445,6 +1459,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     from .task_queue import TaskQueue, TaskStatus
     task_queue = TaskQueue()
 
+    def _queue_execute(task):
+        """Dispatch a queued prompt through the coordinator path (5E-2C).
+
+        Returns the final answer text; links the queue record to the real
+        TaskStore Task (``cozmo_task_id``) so continuation can discover it.
+        """
+        from .services.background import run_background
+        b = get_backend(cfg)
+        ctx = b.get("context")
+        result = run_background(ctx, task.prompt,
+                                conversation_id=f"queue:{task.id}")
+        task.cozmo_task_id = result.task_id
+        return result.answer
+
     @app.get("/api/tasks")
     def list_tasks(status: str = ""):
         s = TaskStatus(status) if status else None
@@ -1465,7 +1493,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         task = task_queue.get(task_id)
         if not task:
             return {"error": "not found"}
-        task_queue.run_task(task, lambda: build_runtime(cfg)[0])
+        task_queue.run_task(task, _queue_execute)
         return task.to_dict()
 
     @app.post("/api/tasks/{task_id}/cancel")

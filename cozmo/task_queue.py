@@ -1,6 +1,15 @@
 """Background task queue for async operations.
 
 Tasks are persisted to disk so they survive restarts.
+
+Ownership (Milestone 5 Phase 5E-2C): the queue is a DISPATCH mechanism only.
+The ``Task`` persisted here is queue bookkeeping (id/status/result for the UI);
+it is deliberately NOT the Milestone 5 Task — that lives in the TaskStore and
+owns intent/plan/history. The worker dispatches each queued prompt through the
+ExecutionCoordinator (``cozmo/services.background.run_background``), which
+creates the real TaskStore Task/Plan/Job/ExecutionHistory. ``Task.cozmo_task_id``
+links the queue record to the resulting TaskStore Task so continuation can
+discover it. No Job is ever created against a fake/orphan task id.
 """
 import json
 import threading
@@ -26,7 +35,8 @@ class Task:
     def __init__(self, id: str, description: str, prompt: str,
                  agent_type: str = "general", status: TaskStatus = TaskStatus.PENDING,
                  created: str = "", result: str = "", error: str = "",
-                 goal: str = "", mode: str = "chat"):
+                 goal: str = "", mode: str = "chat",
+                 cozmo_task_id: str = ""):
         self.id = id
         self.description = description
         self.prompt = prompt
@@ -37,6 +47,7 @@ class Task:
         self.error = error
         self.goal = goal
         self.mode = mode
+        self.cozmo_task_id = cozmo_task_id
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +61,7 @@ class Task:
             "error": self.error,
             "goal": self.goal,
             "mode": self.mode,
+            "cozmo_task_id": self.cozmo_task_id,
         }
 
     @classmethod
@@ -65,6 +77,7 @@ class Task:
             error=d.get("error", ""),
             goal=d.get("goal", ""),
             mode=d.get("mode", "chat"),
+            cozmo_task_id=d.get("cozmo_task_id", ""),
         )
 
 
@@ -141,10 +154,12 @@ class TaskQueue:
             self._save(task)
         return True
 
-    def run_task(self, task: Task, runtime_factory):
+    def run_task(self, task: Task, runner):
         """Run a task in a background thread.
 
-        runtime_factory: callable() -> CozmoRuntime
+        runner: callable(task) -> str  -- executes the prompt through the
+        ExecutionCoordinator (dispatch stays here; Task/Job lifecycle lives in
+        the coordinator). The returned text is stored as the queue task result.
         """
         with self._lock:
             if task.status == TaskStatus.RUNNING:
@@ -154,10 +169,10 @@ class TaskQueue:
 
         def _worker():
             try:
-                runtime = runtime_factory()
-                result = runtime.run(task.prompt)
+                result = runner(task)
+                text = result if isinstance(result, str) else str(result)
                 with self._lock:
-                    task.result = result
+                    task.result = text
                     task.status = TaskStatus.COMPLETED
                     self._save(task)
             except Exception as e:

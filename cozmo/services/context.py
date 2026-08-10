@@ -50,6 +50,7 @@ class CozmoContext:
         self._job_store: object | None = None
         self._job_manager: object | None = None
         self._job_lifecycle: object | None = None
+        self._continuation: object | None = None
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -204,10 +205,29 @@ class CozmoContext:
 
         if self._scheduler is None:
             self._scheduler = Scheduler()
-            self._scheduler.on_trigger = lambda s: None
+            self._scheduler.on_trigger = self._scheduled_trigger
             self._scheduler.start()
             init_scheduler_tool(self._scheduler)
         return self._scheduler
+
+    def _scheduled_trigger(self, s):
+        """Route a scheduled run through the coordinator (headless, 5E-2E).
+
+        Previously a no-op. A schedule now becomes a normal background run:
+        Scheduler → run_background → Coordinator → Task/Plan/Job → Runtime.
+        The WebUI overrides ``on_trigger`` with its own broadcast version; this
+        default executes without a UI channel. Failures are logged, never
+        raised into the polling thread.
+        """
+        from .background import run_background
+
+        goal = getattr(s, "goal", "") or ""
+        if not goal:
+            return
+        try:
+            run_background(self, goal, conversation_id=f"schedule:{s.id}")
+        except Exception as e:
+            log.warning("scheduled run %s failed: %s", s.id, e)
 
     @property
     def orchestrator(self):
@@ -260,6 +280,24 @@ class CozmoContext:
                 task_store=task_store,
             )
         return self._job_lifecycle
+
+    @property
+    def continuation(self):
+        """Read-only continuation resolver (TaskStore + JobStore join).
+
+        Shared across every migrated execution surface (CLI, Telegram, WebUI).
+        The ExecutionCoordinator consumes this to resolve "continue" through
+        the SAME path as WebUI — no per-surface continuation logic.
+        """
+        from .continuation import ContinuationService
+
+        if self._continuation is None:
+            self._continuation = ContinuationService(
+                task_store=getattr(self.orchestrator, "task_store", None),
+                job_store=self.job_store,
+                job_manager=self.job_manager,
+            )
+        return self._continuation
 
     # ── lifecycle ───────────────────────────────────────────────────────
 

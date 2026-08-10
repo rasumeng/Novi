@@ -267,3 +267,45 @@ class ExecutionCoordinator:
         except Exception as e:
             log.warning("failed to persist execution history for %s: %s",
                         task_id, e)
+
+
+def build_application_execution(ctx, *, project_index=None, auto: bool = False):
+    """Compose a synchronous surface's runtime + ExecutionCoordinator (5E-2).
+
+    One composition root for every non-WebUI execution surface (CLI, Telegram,
+    TaskQueue, background runs). Builds a fresh event bus, a runtime wired with
+    the task/job lifecycle projections, and the authoritative coordinator so
+    the surface only ever talks to the coordinator seam — never straight to the
+    runtime.
+
+    Ownership:
+      - The ctx supplies resolved configuration (adapters consume it, they do
+        not own it). The coordinator is never given settings.
+      - ``job_lifecycle`` is threaded from the ctx so coordinator-created Jobs
+        are registered (no duplicate Job from ``plan.started``).
+      - ``auto`` mirrors the legacy CLI ``--auto``: it flags the runtime's
+        permission policy to bypass asks (headless surfaces fail safe by
+        denying, exactly as the previous CLI did).
+
+    Returns ``(runtime, coordinator, event_bus)``.
+    """
+    from ..runtime.event_bus import EventBus
+
+    bus = EventBus()
+    runtime = ctx.create_runtime(
+        project_index=project_index,
+        event_bus=bus,
+        job_lifecycle=getattr(ctx, "job_lifecycle", None),
+    )
+    if auto:
+        perms = getattr(runtime, "_perms", None)
+        if perms is not None:
+            perms.auto = True
+    coordinator = ExecutionCoordinator(
+        orchestrator=ctx.orchestrator,
+        job_manager=ctx.job_manager,
+        task_store=getattr(ctx.orchestrator, "task_store", None),
+        continuation=getattr(ctx, "continuation", None),
+        job_lifecycle=getattr(ctx, "job_lifecycle", None),
+    )
+    return runtime, coordinator, bus
