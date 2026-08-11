@@ -1,4 +1,4 @@
-"""Milestone 5 Phase 6A — genuine process-boundary recovery.
+"""Milestone 5 Phase 6A/6B — genuine process-boundary recovery.
 
 Runs TWO genuinely separate Python interpreter processes:
 
@@ -8,13 +8,16 @@ Runs TWO genuinely separate Python interpreter processes:
         |
         v  disk
     Process B (tests/recovery_driver.py --phase b)
-        fresh interpreter → same stores → load Task/Job/Checkpoint → resolve
-        continuation → reopen a NEW attempt → resume → prove remaining steps
-        execute (Step 1 is never skipped) and ExecutionHistory stays correct
+        fresh interpreter → same stores → startup recovery marks the Job
+        INTERRUPTED (preserving checkpoint, emitting job.interrupted, never
+        auto-resuming) → resolve continuation → explicitly reopen a NEW attempt
+        → resume → prove remaining steps execute (Step 1 is never skipped) and
+        ExecutionHistory stays correct
 
 This is NOT manager-A → manager-B inside one process: each phase is its own
 Python process with its own module state. The test fails under the old
-off-by-one (resolved next_step would be checkpoint.step + 1).
+off-by-one (resolved next_step would be checkpoint.step + 1) and when startup
+slips back into auto-resume.
 """
 
 import json
@@ -70,6 +73,18 @@ def test_recovery_across_real_process_boundary(tmp_path):
     assert report["model_calls"] == 2                  # steps 1+2 only
     assert report["started_indexes"] == [1, 2]         # Step 1 never skipped
     assert report["history"] == [original_id, report["resumed_job_id"]]
+
+    # ── Phase 6B startup-interruption semantics ───────────────────────────
+    # The old job was left RUNNING by Process A's crash; the startup recovery
+    # hook in Process B must have marked it INTERRUPTED and emitted the event.
+    assert report["original_status"] == "interrupted"
+    assert report["recovery_marked"] == 1              # exactly one Job swept
+    assert report["interrupted_event"] is True         # job.interrupted fired
+    assert report["no_auto_resume"] is True            # nothing executed early
+    assert report["jobs_after_recovery"] == 1          # no new Job auto-created
+    assert report["jobs_after_resume"] == 2            # only the explicit one
+    assert job_files / f"{original_id}.json"          # original Job preserved
+    assert (job_files / f"{original_id}.checkpoint.json").exists()
 
     # Resumed attempt persisted as its own Job; original still recorded.
     resumed_file = job_files / f"{report['resumed_job_id']}.json"

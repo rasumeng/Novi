@@ -170,9 +170,11 @@ def _recovery_assertions(root: Path) -> dict:
     from cozmo.orchestrator import Orchestrator
     from cozmo.orchestrator.task_store import TaskStore
     from cozmo.runtime.event_bus import EventBus
+    from cozmo.runtime.event_bus import EventType
     from cozmo.services.continuation import ContinuationService
     from cozmo.services.execution import ExecutionCoordinator
     from cozmo.services.job_lifecycle import JobLifecycle
+    from cozmo.services.recovery import INTERRUPT_EVENT, recover_interrupted_jobs
 
     task_store = TaskStore(persist_dir=root / "tasks")
     job_store = JobStore()
@@ -183,13 +185,55 @@ def _recovery_assertions(root: Path) -> dict:
     _require(task.plan is not None and task.plan.step_count == 3,
              "Process B: 3-step Plan must survive on disk")
 
-    # 2. Resolve the continuation (read-only resolver over disk state).
+    # 2. Startup recovery: the previous process crashed while the Job was still
+    #    RUNNING. The composition hook must recognize that abandonment,
+    #    transition the Job to INTERRUPTED, preserve everything, and emit the
+    #    job.interrupted lifecycle event — WITHOUT executing anything.
+    bus = EventBus()
+    events = []
+    bus.on_any(lambda ev: events.append(ev))
+
+    marked = recover_interrupted_jobs(job_store, bus=bus)
+    _require(len(marked) == 1,
+             f"Process B: exactly one Job must be marked interrupted, got "
+             f"{len(marked)}")
+    _require(marked[0]["status"] == "interrupted",
+             f"Process B: marked status must be interrupted, got "
+             f"{marked[0]['status']}")
+    interrupted_id = marked[0]["job_id"]
+
+    original = job_store.load(interrupted_id)
+    _require(original is not None, "Process B: original Job must be loadable")
+    _require(original.status is JobStatus.INTERRUPTED,
+             f"Process B: original Job must be INTERRUPTED after startup "
+             f"recovery, got {original.status.value}")
+    _require(original.checkpoint is not None
+             and original.checkpoint.step == 1,
+             f"Process B: checkpoint must survive intact with step 1, got "
+             f"{original.checkpoint.step if original.checkpoint else None}")
+    _require(original.checkpoint.completed_steps == ["plan-r-s1"],
+             f"Process B: completed steps must survive intact, got "
+             f"{original.checkpoint.completed_steps}")
+    _require(original.task_id == "task-r",
+             "Process B: Task reference must survive intact")
+    _require(original.checkpoint.plan_id == "plan-r",
+             "Process B: Plan reference must survive intact")
+    _require(len(job_store.list_ids()) == 1,
+             "Process B: startup recovery must not create a new Job")
+    jobs_after_recovery = len(job_store.list_ids())
+
+    _require(any(e.type == INTERRUPT_EVENT for e in events),
+             "Process B: startup recovery must emit job.interrupted")
+    _require(not any(e.type == EventType.STEP_STARTED for e in events)
+             and not any(e.type == EventType.PLAN_STARTED for e in events),
+             "Process B: recovery must never start execution (no auto-resume)")
+    original_id = original.id
+
+    # 3. Resolve the continuation (read-only resolver over the interrupted
+    #    Job). next_step must EQUAL checkpoint.step == 1 — no +1.
     service = ContinuationService(task_store=task_store, job_store=job_store)
     target = service.recommended(conversation_id=CONVERSATION_ID)
     _require(target is not None, "Process B: resumable work must be found")
-
-    # 3. The resolved resume pointer must EQUAL checkpoint.step — no +1.
-    #    Under the old off-by-one this was cp.step + 1 and the process fails.
     cp = target.checkpoint
     _require(cp is not None, "Process B: target must carry a checkpoint")
     _require(cp.step == 1, "Process B: checkpoint survived with step == 1")
@@ -198,23 +242,12 @@ def _recovery_assertions(root: Path) -> dict:
              f"next_step={target.next_step} cp.step={cp.step}")
 
     manager = JobManager(store=job_store)
-    original = job_store.load(target.job_id)
-    _require(original is not None, "Process B: original Job must be loadable")
-    _require(original.checkpoint.step == 1,
-             "Process B: original Job checkpoint survived intact")
-    original_id = original.id
 
     # 4. Resume execution through the production coordinator seam with a real
     #    CozmoRuntime (deterministic model double — no Ollama needed). The
-    #    coordinator reopens the interrupted Job into a NEW attempt.
-    bus = EventBus()
+    #    coordinator EXPLICITLY reopens the interrupted Job into a NEW attempt.
     lifecycle = JobLifecycle(manager, task_store=task_store).subscribe(bus)
     fake = _FakeModel(["b-result", "c-result"])       # Steps 1 and 2 only
-
-    from cozmo.runtime.event_bus import EventType
-
-    events = []
-    bus.on_any(lambda ev: events.append(ev))
 
     from cozmo.runtime.runtime import CozmoRuntime
 
@@ -270,10 +303,13 @@ def _recovery_assertions(root: Path) -> dict:
              f"Process B: resumed checkpoint must record steps 1+2, got "
              f"{final_cp.completed_steps}")
 
-    # 7. Original Job preserved, resumed Job distinct + finalised.
+    # 7. Original Job preserved (INTERRUPTED, historical), resumed Job distinct.
     original_now = job_store.load(original_id)
     _require(original_now.id == original_id,
              "Process B: original Job must remain preserved")
+    _require(original_now.status is JobStatus.INTERRUPTED,
+             f"Process B: original Job must stay INTERRUPTED, got "
+             f"{original_now.status.value}")
     _require(original_now.checkpoint.step == 1,
              "Process B: original Job checkpoint must stay at step 1")
     resumed_now = job_store.load(resumed_id)
@@ -298,6 +334,12 @@ def _recovery_assertions(root: Path) -> dict:
         "model_calls": fake.calls,
         "started_indexes": started,
         "history": tasks_now.execution_history.all_job_ids,
+        "original_status": original_now.status.value,
+        "recovery_marked": len(marked),
+        "interrupted_event": any(e.type == INTERRUPT_EVENT for e in events),
+        "no_auto_resume": True,
+        "jobs_after_recovery": jobs_after_recovery,
+        "jobs_after_resume": len(job_store.list_ids()),
     }
 
 

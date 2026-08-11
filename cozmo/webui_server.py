@@ -352,6 +352,16 @@ def build_runtime(cfg: dict):
     """Construct a per-session runtime cheaply from the shared backend."""
     b = get_backend(cfg)
     event_bus = EventBus()
+    # Milestone 5 Phase 6B: attach the SAME JobLifecycle observer used by every
+    # other execution surface (CLI, Telegram, background, scheduler) so WebUI
+    # executions persist step checkpoints through the shared durable seam. The
+    # ExecutionCoordinator created in ``Session`` registers its Job with this
+    # observer, so ``plan.started`` never falls back to creating a second Job.
+    ctx = b.get("context")
+    job_lifecycle = getattr(ctx, "job_lifecycle", None) if ctx is not None else None
+    from .services.job_lifecycle import JobLifecycle
+    if job_lifecycle is not None and isinstance(job_lifecycle, JobLifecycle):
+        job_lifecycle.subscribe(event_bus)
     runtime = CozmoRuntime(
         model_service=b["model_service"],
         memory=b["memory"],
@@ -409,6 +419,13 @@ class Session:
         b = get_backend(cfg)
         self.task_store = getattr(self.orchestrator, "task_store", None)
         self.continuation = b.get("continuation")
+        # Phase 6B: the shared JobLifecycle observer is subscribed to this
+        # session's event bus inside ``build_runtime``. Pass it to the
+        # coordinator so coordinator-created Jobs are registered (checkpoints +
+        # completion) and ``plan.started`` never creates a second Job.
+        self.job_lifecycle = getattr(
+            b.get("context"), "job_lifecycle", None
+        ) if b.get("context") is not None else None
 
         # Milestone 5 Phase 5E-1: Session.start_run delegates to the shared
         # ExecutionCoordinator (single ownership of Task/Plan/Job/Runtime).
@@ -420,6 +437,7 @@ class Session:
             job_manager=self.job_manager,
             task_store=self.task_store,
             continuation=self.continuation,
+            job_lifecycle=self.job_lifecycle,
         )
 
         # Bridge EventBus→WebSocket: forward runtime events

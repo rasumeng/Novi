@@ -183,14 +183,38 @@ class JobStore:
             return None
 
 
+# Statuses the startup sweep transitions to INTERRUPTED (Phase 6B).
+#
+# A persisted execution whose previous process disappeared while it was still
+# "in flight" is abandoned work: RUNNING mid-plan, COMPLETING, or queued but
+# never started (CREATED/PENDING/QUEUED). PAUSED is deliberately preserved — a
+# pause is a user-initiated, intentional state whose resume path is
+# JobManager.resume, not startup recovery. Terminal statuses (DONE/COMPLETED/
+# ERROR/FAILED/CANCELLED) are never touched. INTERRUPTED itself is not in the
+# set, which is what makes the sweep idempotent.
+INTERRUPTIBLE_FROM_STARTUP = frozenset({
+    JobStatus.RUNNING,
+    JobStatus.COMPLETING,
+    JobStatus.CREATED,
+    JobStatus.PENDING,
+    JobStatus.QUEUED,
+})
+
+
 def find_interrupted_jobs(store: "JobStore") -> list[dict]:
     """Return running/paused jobs left behind by a crash — candidates to resume.
 
     Startup detection (Phase 4D): Jobs persisted as RUNNING/PAUSED are
     interrupted work. This enumerates them so a future continuation flow can
     ask "Continue previous task?" with the exact playing fields a resume
-    needs (task_id, plan_id, next step index, completed steps). It performs no
-    automatic resume.
+    needs (task_id, plan_id, next step index, completed steps).
+
+    Note (Phase 6B): this DISCOVERY helper reports both RUNNING and PAUSED as
+    candidates, because PAUSED is genuinely resumable work. The startup SWEEP
+    (``mark_interrupted`` / ``recover_interrupted_jobs``) deliberately does
+    NOT transition PAUSED — a pause is an intentional state whose resume path
+    is JobManager.resume. Discovery and transition are intentionally scoped
+    differently. It performs no automatic resume.
     """
     candidates = []
     for job in store.list():
@@ -227,15 +251,26 @@ def find_interrupted_jobs(store: "JobStore") -> list[dict]:
 
 
 def mark_interrupted(store: JobStore) -> list[dict]:
-    """Startup recovery: flip RUNNING jobs to INTERRUPTED and persist.
+    """Startup recovery: flip abandoned nonterminal Jobs to INTERRUPTED.
 
-    INTERRUPTED is preferred over auto-resume. Returns the same enrichment
-    rows ``recover_interrupted_jobs`` produces so the continuation layer can
-    still ask the user. Persists every transition.
+    Transitions every persisted Job whose status is in
+    ``INTERRUPTIBLE_FROM_STARTUP`` (RUNNING / COMPLETING / CREATED / PENDING /
+    QUEUED) to INTERRUPTED and persists the result. PAUSED is preserved (a
+    deliberate user pause — JobManager.resume remains its path) and terminal
+    statuses are untouched. INTERRUPTED is not in the transition set, so
+    running the sweep a second time is a no-op that returns no rows — the
+    operation is idempotent and never re-emits transitions.
+
+    The original Job object, its checkpoint, and its Task/Plan references are
+    preserved verbatim; nothing is executed, resurrected, or deleted.
+
+    Returns the enrichment rows so the continuation layer can still surface the
+    interrupted work. ``next_step`` is exactly checkpoint.step (Phase 6A
+    contract — the completed-step count / 0-based next index, never +1).
     """
     marked = []
     for job in store.list():
-        if job.status != JobStatus.RUNNING:
+        if job.status not in INTERRUPTIBLE_FROM_STARTUP:
             continue
         job.status = JobStatus.INTERRUPTED
         store.save(job)

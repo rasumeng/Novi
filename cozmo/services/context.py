@@ -315,6 +315,30 @@ class CozmoContext:
             )
         return self._continuation
 
+    # ── startup recovery (Milestone 5 Phase 6B) ───────────────────────────
+
+    def recover_jobs(self, bus=None) -> list[dict]:
+        """Application/composition startup hook: recognize interrupted work.
+
+        Marks every persisted execution left nonterminal by a previous process
+        as INTERRUPTED (preserving its checkpoint and Task/Plan references,
+        emitting the established ``job.interrupted`` event). It never executes
+        work and never resurrects a Job — explicit continuation through
+        ``JobManager.reopen`` is the only resume path.
+
+        ``bus`` (optional, duck-typed EventBus) carries the lifecycle events
+        for passive projections (e.g. the timeline). Lives on the composition
+        root so every surface (WebUI, CLI, Telegram, background, scheduler)
+        benefits from the same recovery behavior; the operation is idempotent.
+        """
+        from .recovery import recover_interrupted_jobs
+
+        try:
+            return recover_interrupted_jobs(self.job_store, bus=bus)
+        except Exception as e:
+            log.warning("startup job recovery failed: %s", e)
+            return []
+
     # ── lifecycle ───────────────────────────────────────────────────────
 
     def init_knowledge_index(self):
@@ -374,5 +398,12 @@ class CozmoContext:
         _ = self.embedding_service
         self.init_knowledge_index()
         _ = self.brain
+        # Startup interruption recovery (Phase 6B): recognize executions
+        # abandoned by a previous process BEFORE any new surface can start one.
+        # Emits job.interrupted on the Brain bus (already built above) so the
+        # timeline projection observes it where connected.
+        self.recover_jobs(
+            bus=self._brain_event_bus if self._brain_event_bus is not None else None,
+        )
         _ = self.scheduler
         log.info("CozmoContext: all services initialized")
