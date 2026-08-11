@@ -1,234 +1,303 @@
-"""Phase E — layered retrieval resolver tests."""
+"""M2.4 — Automatic Resolution Layer tests.
 
-from cozmo.brain.brain import Brain
-from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
-from cozmo.brain.types import (
-    KnowledgeForm,
-    KnowledgeHit,
-    KnowledgeItem,
-    QueryContext,
-    Scenario,
-    ScenarioStatus,
+Verifies deterministic role resolution, trusted>supported preference, never
+selecting incompatible, experimental last-resort, missing-trusted fallback,
+hardware-confidence behaviour, complete + non-empty role maps, separate
+embeddings, and the config-integration path (llm.meta.source = automatic,
+derived evidence NOT persisted).
+"""
+
+import pytest
+
+from cozmo.configuration.catalog import ModelFact
+from cozmo.configuration.discovery import ModelStatus
+from cozmo.configuration.hardware import (
+    DetectionConfidence,
+    GpuConfidence,
+    GpuInfo,
+    HardwareProfile,
+)
+from cozmo.configuration.qualification import Qualification
+from cozmo.configuration.resolver import (
+    ALL_ROLES,
+    resolve_automatic,
+    apply_automatic,
+)
+from cozmo.configuration.bootstrap import build_registry
+from cozmo.configuration.manager import Configuration
+
+
+def hw(gpu="", vram=None, gpu_conf=GpuConfidence.UNKNOWN, ram=None,
+       conf=DetectionConfidence.UNKNOWN) -> HardwareProfile:
+    return HardwareProfile(
+        gpu=GpuInfo(vendor="nvidia" if gpu else "", name=gpu,
+                    vram_total_gb=vram, confidence=gpu_conf),
+        ram_gb=ram, confidence=conf,
+    )
+
+
+HW_HIGH = hw("RTX 4060", 8.0, GpuConfidence.KNOWN_VRAM, 32.0, DetectionConfidence.HIGH)
+HW_MED = hw("GTX 1080", None, GpuConfidence.KNOWN_NO_VRAM, 16.0, DetectionConfidence.MEDIUM)
+HW_LOW = hw("", None, GpuConfidence.UNKNOWN, 16.0, DetectionConfidence.LOW)
+HW_UNKNOWN = hw("", None, GpuConfidence.UNKNOWN, None, DetectionConfidence.UNKNOWN)
+
+
+def _facts(**kw):
+    out = {}
+    for _alias, spec in kw.items():
+        name, qual, caps, *rest = spec
+        extra = rest[0] if rest else {}
+        out[name] = ModelFact(name=name, qualification=qual,
+                              capabilities=caps, **extra)
+    return out
+
+
+CATALOG = _facts(
+    qwen3_8b=("qwen3:8b", Qualification.TRUSTED,
+              ["chat", "reasoning", "coding", "tools"]),
+    qwen2_5vl=("qwen2.5vl:7b", Qualification.TRUSTED,
+               ["chat", "vision", "tools"]),
+    gemma4=("gemma4", Qualification.TRUSTED,
+            ["chat", "reasoning", "tools"], {"min_vram_gb": 12.0,
+             "caveats": ["sluggish on 8 GB VRAM"]}),
+    llama31=("llama3.1:8b", Qualification.SUPPORTED,
+             ["chat", "reasoning", "tools"]),
+    qwen_coder_15=("qwen2.5-coder:1.5b", Qualification.SUPPORTED,
+                   ["chat", "coding", "tools"]),
+    experimental=("exp:model", Qualification.EXPERIMENTAL,
+                  ["chat", "reasoning"]),
+    incompatible=("bad:model", Qualification.INCOMPATIBLE, ["chat"]),
+    nomic=("nomic-embed-text", Qualification.SUPPORTED, ["embeddings"]),
 )
 
-
-class FakeBackend:
-    """In-memory stand-in for the injected read callables."""
-
-    def __init__(self):
-        self.scenarios = {}
-        self.knowledge = []  # KnowledgeHit rows with scenario_id key
-        self.memory = []
-        self.knowledge_calls = []
-        self.memory_calls = []
-        self.loaded = []
-
-    def load(self, scenario_id):
-        self.loaded.append(scenario_id)
-        return self.scenarios.get(scenario_id)
-
-    def query_scoped(self, query, scenario_id=None, k=5, distance_threshold=0.5):
-        self.knowledge_calls.append((query, scenario_id, k, distance_threshold))
-        return [h for h in self.knowledge if h.item.scenario_id == scenario_id]
-
-    def query_memory(self, query, k, threshold):
-        self.memory_calls.append((query, k, threshold))
-        return self.memory
+ALL_INSTALLED = list(CATALOG.keys())
 
 
-def make_scenario(sid="scn-1", summary="Working on the Cozmo build."):
-    return Scenario(
-        id=sid,
-        name="Build",
-        purpose=summary,
-        project_id=None,
-        status=ScenarioStatus.ACTIVE,
-        summary=summary,
-    )
+# ── Deterministic resolution with known hardware ──────────────────────────
 
 
-def knowledge_row(sid, score, text):
-    return KnowledgeHit(
-        item=KnowledgeItem(
-            id=f"kn-{score}",
-            content=text,
-            form=KnowledgeForm.ATOMIC,
-            confidence=score,
-            scenario_id=sid,
-        ),
-        score=score,
-        distance=1.0 - score,
-    )
+def test_deterministic_full_role_map_with_known_hardware():
+    r1 = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    r2 = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    assert r1.role_map == r2.role_map  # deterministic
+    assert set(r1.role_map.keys()) == set(ALL_ROLES)
 
 
-def memory_row(text, score=0.3):
-    return {"id": "mem", "text": text, "score": score, "metadata": {}}
+def test_complete_role_map_never_empty():
+    r = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    for role in ALL_ROLES:
+        assert r.role_map[role], f"role {role} must never be empty"
+    assert all(r.roles[role].model == r.role_map[role] for role in ALL_ROLES)
 
 
-def build(suf=0.4):
-    fb = FakeBackend()
-    res = LayeredRetrievalResolver(
-        load_scenario=fb.load,
-        query_knowledge=fb.query_scoped,
-        query_memory=fb.query_memory,
-        sufficiency=suf,
-    )
-    return res, fb
+def test_internal_roles_never_empty_and_derived():
+    r = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    for role in ("classifier", "router", "orchestrator"):
+        assert r.role_map[role]
+        assert r.roles[role].source == "automatic"
+        assert r.roles[role].capability == "reasoning/coding"
 
 
-def test_scenario_anchors_recall_and_gates_at_knowledge():
-    res, fb = build()
-    fb.scenarios["scn-1"] = make_scenario()
-    fb.knowledge = [knowledge_row("scn-1", 0.9, "Build uses uv and ruff.")]
-
-    result = res.recall("how is the build run?", QueryContext(scenario_id="scn-1"))
-
-    assert fb.loaded == ["scn-1"]
-    assert fb.memory_calls == []
-    sources = [i.source for i in result.items]
-    assert sources == ["scenario", "knowledge"]
-    assert result.metrics["gate"] == "knowledge"
-    assert result.metrics["plan"].scoped_knowledge == 1
-    assert result.metrics["plan"].layers == ("scenario", "knowledge")
+# ── Trusted preference / capability mapping ───────────────────────────────
 
 
-def test_sufficiency_gate_expands_to_global_knowledge():
-    res, fb = build(suf=0.6)
-    fb.scenarios["scn-1"] = make_scenario()
-    fb.knowledge = [
-        knowledge_row("scn-1", 0.2, "low-relevance scoped item"),
-        knowledge_row(None, 0.9, "high-relevance global knowledge"),
-    ]
-
-    result = res.recall(
-        "some query",
-        QueryContext(scenario_id="scn-1", top_k=3, distance_threshold=0.9),
-    )
-
-    assert fb.memory_calls == []
-    assert result.metrics["gate"] == "knowledge"
-    assert result.metrics["plan"].global_knowledge == 1
-    assert result.metrics["plan"].scoped_knowledge == 1
+def test_trusted_preferred_over_supported_for_role():
+    # qwen3:8b (trusted) beats llama3.1:8b (supported) for chat even though
+    # both provide chat; trusted is chosen.
+    installed = ["qwen3:8b", "llama3.1:8b"]
+    r = resolve_automatic(HW_HIGH, installed, CATALOG)
+    assert r.role_map["chat"] == "qwen3:8b"
+    assert r.role_map["planner"] == "qwen3:8b"  # reasoning, trusted
 
 
-def test_gate_fails_into_conversation_memory():
-    res, fb = build(suf=0.8)
-    fb.scenarios["scn-1"] = make_scenario()
-    fb.knowledge = [
-        knowledge_row("scn-1", 0.4, "weak scoped"),
-        knowledge_row(None, 0.3, "weak global"),
-    ]
-    fb.memory = [memory_row("user once said use connection pooling")]
-
-    result = res.recall("what did they say about pooling?", QueryContext(scenario_id="scn-1"))
-
-    assert fb.memory_calls == [("what did they say about pooling?", 5, 0.5)]
-    assert result.metrics["gate"] == "conversation"
-    assert result.metrics["plan"].layers == ("scenario", "knowledge", "conversation")
-    assert any(i.source == "memory" for i in result.items)
+def test_vision_role_uses_vision_model():
+    r = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    assert r.role_map["vision"] == "qwen2.5vl:7b"
 
 
-def test_no_scenario_skips_scenario_layer():
-    res, fb = build()
-    fb.knowledge = [knowledge_row(None, 0.9, "global knowledge hit")]
-
-    result = res.recall("anything", QueryContext())
-
-    assert fb.loaded == []
-    assert result.metrics["plan"].scenario_id is None
-    assert result.metrics["plan"].layers == ("knowledge",)
+def test_incompatible_never_selected():
+    installed = ["bad:model", "qwen3:8b"]
+    r = resolve_automatic(HW_HIGH, installed, CATALOG)
+    for role, model in r.role_map.items():
+        assert model != "bad:model", f"incompatible selected for {role}"
 
 
-def test_weak_results_after_memory_failure_keeps_knowledge():
-    res, fb = build(suf=0.9)
-    fb.knowledge = [knowledge_row(None, 0.2, "weak global")]
-    fb.memory = []
-
-    result = res.recall("q", QueryContext())
-
-    assert result.metrics["gate"] == "conversation"
-    assert fb.memory_calls == [("q", 5, 0.5)]
+def test_incompatible_only_installed_leaves_roles_empty():
+    r = resolve_automatic(HW_HIGH, ["bad:model"], CATALOG)
+    # incompatible is never selectable; roles end up empty (never fabricated).
+    assert all(r.role_map[role] == "" for role in ALL_ROLES)
 
 
-def test_memory_backend_failure_does_not_raise():
-    res, fb = build(suf=0.9)
-    fb.knowledge = [knowledge_row(None, 0.2, "weak global")]
-    fb.memory = None  # backend raises when touched
-
-    def boom(*args):
-        raise RuntimeError("memory store down")
-
-    res = LayeredRetrievalResolver(
-        load_scenario=fb.load,
-        query_knowledge=fb.query_scoped,
-        query_memory=boom,
-        sufficiency=0.9,
-    )
-
-    result = res.recall("q", QueryContext())
-    assert result.metrics["gate"] == "conversation"
-    assert not any(i.source == "memory" for i in result.items)
-    assert all(i.source == "knowledge" for i in result.items)
+# ── Missing-trusted fallback ──────────────────────────────────────────────
 
 
-# ── Brain wiring ──────────────────────────────────────────────────────────
+def test_missing_trusted_falls_back_to_supported():
+    # qwen3:8b not installed; only supported models present.
+    installed = ["llama3.1:8b", "qwen2.5-coder:1.5b"]
+    r = resolve_automatic(HW_HIGH, installed, CATALOG)
+    assert r.roles["chat"].qualification == Qualification.SUPPORTED
+    assert r.role_map["coder"] == "qwen2.5-coder:1.5b"
+    assert any("trusted" not in reason for reason in r.roles["chat"].reasons)
 
 
-class MemoryManagerStub:
-    def __init__(self, rows):
-        self.rows = rows
-
-    def query(self, **kwargs):
-        return self.rows
-
-
-class FakeLayerStore:
-    def __init__(self, scenario=None):
-        self.scenario = scenario
-
-    def get(self, scenario_id):
-        return self.scenario
+def test_experimental_last_resort_when_no_trusted_supported():
+    installed = ["exp:model"]
+    r = resolve_automatic(HW_HIGH, installed, CATALOG)
+    assert r.roles["chat"].qualification == Qualification.EXPERIMENTAL
+    assert r.role_map["chat"] == "exp:model"
+    assert any("experimental" in c.lower() for c in r.roles["chat"].caveats)
 
 
-class FakeKnowledgeLayer:
-    def __init__(self, rows):
-        self.rows = rows
-
-    def query_scoped(self, text, *, scenario_id=None, k=5, distance_threshold=0.5, forms=None, tags=None):
-        return [h for h in self.rows if h.item.scenario_id == scenario_id]
+# ── Hardware confidence behaviour ─────────────────────────────────────────
 
 
-class FakeScenarioLayer:
-    def __init__(self, scenario):
-        self.store = FakeLayerStore(scenario)
+def test_gpu_known_vram_known_respects_gemma_caveat():
+    # On an 8 GB system, gemma4 (min_vram_gb=12) must not win reasoning over
+    # qwen3:8b (trusted, no VRAM mismatch) merely because it is trusted.
+    r = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    assert r.roles["planner"].model == "qwen3:8b"
+    assert r.roles["planner"].qualification == Qualification.TRUSTED
 
 
-def test_brain_recall_routes_through_resolver_when_layers_present():
-    scenario = make_scenario()
-    brain = Brain(
-        memory=FakeKnowledgeBackend(),
-        knowledge_layer=FakeKnowledgeLayer(
-            [knowledge_row("scn-1", 0.9, "Build uses uv and ruff.")]
-        ),
-        scenario_layer=FakeScenarioLayer(scenario),
-    )
+def test_higher_vram_lifts_gemma_vram_demotion():
+    # On 24 GB, gemma4's min_vram_gb hint is met -> not demoted -> its trust
+    # grade lets it win reasoning over a merely-supported alternative.
+    hw_24 = hw("RTX 4090", 24.0, GpuConfidence.KNOWN_VRAM, 64.0,
+               DetectionConfidence.HIGH)
+    installed = ["gemma4", "llama3.1:8b"]  # trusted vs supported
+    r = resolve_automatic(hw_24, installed, CATALOG)
+    assert r.roles["planner"].model == "gemma4"
 
-    result = brain.recall("how is the build run?", QueryContext(scenario_id="scn-1"))
-
-    assert result.metrics["gate"] == "knowledge"
-    assert result.metrics["plan"].scenario_id == "scn-1"
-    sources = [i.source for i in result.items]
-    assert "scenario" in sources
-    assert "knowledge" in sources
+    # On 8 GB the same pair: gemma4 is demoted, so the supported model is used.
+    r8 = resolve_automatic(HW_HIGH, installed, CATALOG)
+    assert r8.roles["planner"].model == "llama3.1:8b"
 
 
-def test_brain_recall_no_layers_is_legacy_memory():
-    brain = Brain(memory=FakeKnowledgeBackend())
-    result = brain.recall("anything", QueryContext())
-    assert result.metrics == {}
-    assert all(i.source == "memory" for i in result.items)
+def test_gpu_unknown_vram_unknown_is_conservative():
+    # Medium software confidence; no VRAM used for filtering -> trusted chosen,
+    # never a fabricated VRAM claim.
+    r = resolve_automatic(HW_MED, ALL_INSTALLED, CATALOG)
+    assert r.roles["chat"].qualification == Qualification.TRUSTED
+    assert r.hardware_confidence == DetectionConfidence.MEDIUM
 
 
-class FakeKnowledgeBackend:
-    def query(self, **kwargs):
-        return [{"text": "user prefers python", "score": 0.8, "metadata": {}}]
+def test_unknown_hardware_is_provisional_and_conservative():
+    r = resolve_automatic(HW_UNKNOWN, ALL_INSTALLED, CATALOG)
+    assert r.provisional is True
+    assert r.roles["chat"].qualification == Qualification.TRUSTED
+    assert r.hardware_confidence == DetectionConfidence.UNKNOWN
+
+
+def test_low_hardware_is_provisional():
+    assert resolve_automatic(HW_LOW, ALL_INSTALLED, CATALOG).provisional is True
+    assert resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG).provisional is False
+
+
+# ── Embeddings separate ───────────────────────────────────────────────────
+
+
+def test_embeddings_resolve_separately():
+    r = resolve_automatic(HW_HIGH, ALL_INSTALLED, CATALOG)
+    assert r.embedding_model == "nomic-embed-text"
+    assert r.roles["chat"].model != r.embedding_model
+
+
+# ── Registered settings: models.mode + llm.meta.source ────────────────────
+
+REAL_INSTALLED = [
+    "qwen3:8b", "qwen2.5vl:7b", "gemma4", "llama3.1:8b",
+    "qwen2.5-coder:7b", "nomic-embed-text",
+]
+
+
+def _make_cfg(tmp_path, bus=None):
+    reg = build_registry()
+    cfg = Configuration(reg, tmp_path / "cozmo.toml", bus=bus)
+    cfg.initialize()
+    return cfg
+
+
+def test_mode_and_source_settings_registered(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    assert cfg.has_config("models.mode")
+    assert cfg.has_config("llm.meta.source")
+    setting = cfg.registry.get("models.mode")
+    assert setting.type.value == "enum"
+    assert setting.visibility.value == "hidden"
+    meta = cfg.registry.get("llm.meta.source")
+    assert meta.type.value == "enum"
+    assert meta.visibility.value == "hidden"
+
+
+def test_mode_and_source_validate_allowed_enum_values(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    for setting_id in ("models.mode", "llm.meta.source"):
+        cfg.set(setting_id, "automatic")
+        cfg.set(setting_id, "custom")
+        with pytest.raises(Exception):
+            cfg.set(setting_id, "bogus")
+        with pytest.raises(Exception):
+            cfg.set(setting_id, 123)
+
+
+def test_mode_and_source_persist_through_framework(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    cfg.set("models.mode", "custom")
+    cfg.set("llm.meta.source", "custom")
+    assert cfg.get("models.mode") == "custom"
+    assert cfg.get("llm.meta.source") == "custom"
+
+
+def test_mode_and_source_default_automatic(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    assert cfg.get("models.mode", default="automatic") == "automatic"
+    assert cfg.get("llm.meta.source", default="automatic") == "automatic"
+
+
+# ── Config integration ────────────────────────────────────────────────────
+
+
+def test_apply_automatic_persists_roles_and_source(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    apply_automatic(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    for role in ALL_ROLES:
+        assert cfg.get(f"llm.roles.{role}.model"), f"{role} must be persisted"
+    assert cfg.get("llm.meta.source") == "automatic"
+    assert cfg.get("models.mode") == "automatic"
+    assert cfg.get("embedding.model") == "nomic-embed-text"
+
+
+def test_apply_emits_config_event(tmp_path):
+    from cozmo.configuration.events import ConfigBus
+    bus = ConfigBus()
+    paths = []
+    bus.on_any(lambda ev: paths.append(ev.path))
+    cfg = _make_cfg(tmp_path, bus=bus)
+    apply_automatic(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    assert "llm.roles.chat.model" in paths
+    assert "llm.meta.source" in paths
+    assert "models.mode" in paths
+
+
+def test_apply_survives_config_reload(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    apply_automatic(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    path = cfg.store.path
+    cfg2 = Configuration(build_registry(), path)
+    cfg2.initialize()
+    for role in ALL_ROLES:
+        assert cfg2.get(f"llm.roles.{role}.model")
+    assert cfg2.get("llm.meta.source") == "automatic"
+    assert cfg2.get("models.mode") == "automatic"
+
+
+def test_apply_does_not_persist_derived_eligibility(tmp_path):
+    # role map + mode + provenance persist, but derived evidence NEVER leaks.
+    cfg = _make_cfg(tmp_path)
+    apply_automatic(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    raw = cfg.state.as_dict()
+    joined = {k.lower() for k in raw}
+    assert not any("eligib" in k for k in joined)
+    assert not any("hardwarefit" in k for k in joined)
+    assert not any("caveat" in k for k in joined)
+    assert not any("qualif" in k for k in joined)

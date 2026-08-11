@@ -167,6 +167,9 @@ def _bind_apply_hooks(cfg: Configuration):
     cfg.registry.require_owner("mcp", mcp_apply)
     cfg.registry.require_owner("providers", lambda p, v, prev: None)
     cfg.registry.require_owner("tools", lambda p, v, prev: None)
+    # connectors/integrations apply hooks arrive with M5 (IntegrationManager).
+    # Bound here so settings under this owner persist + propagate cleanly.
+    cfg.registry.require_owner("integrations", lambda p, v, prev: None)
 
 
 # Subsystem hooks: namespaced lists of callables subsystems register to react

@@ -13,10 +13,16 @@ from typing import Any, Callable
 
 
 class Category(str, Enum):
-    GENERAL = "general"      # how Cozmo behaves
-    MODELS = "models"        # what Cozmo runs
-    ADVANCED = "advanced"    # how Cozmo executes
-    DEVELOPER = "developer"  # diagnostics + experimental
+    GENERAL = "general"        # overview / status
+    MODELS = "models"          # Automatic / Custom model configuration
+    AGENT = "agent"            # visibility + autonomy controls
+    MEMORY = "memory"          # memory behavior + data controls
+    SKILLS = "skills"          # skill management
+    CONNECTORS = "connectors"  # connector management
+    PERMISSIONS = "permissions"  # tool / permission policy
+    DEVELOPER = "developer"    # expert / diagnostics / experimental
+    # ADVANCED retained for legacy settings not yet re-categorized.
+    ADVANCED = "advanced"      # how Cozmo executes (legacy bucket)
 
 
 class SettingType(str, Enum):
@@ -66,6 +72,16 @@ def require_number(value: Any) -> str | None:
     return None
 
 
+def require_nonnegative_int(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "expected an integer"
+    if value < 0:
+        return "must be zero or greater"
+    return None
+
+
 @dataclass
 class Setting:
     """One configurable value, owned by exactly one subsystem."""
@@ -84,6 +100,10 @@ class Setting:
     visibility: Visibility = Visibility.USER
     # sensor: how the value enters the system. Only "direct" exists today.
     sensor: str = "direct"
+    # namespace: when True, the setting id owns every descendant sub-path
+    # (``<id>.<any>.<leaf>``). Used for dynamic collections such as per-server
+    # MCP config or per-tool permissions whose leaves cannot be pre-registered.
+    namespace: bool = False
 
     def validate(self, value: Any) -> list[str]:
         errors = []
@@ -108,6 +128,7 @@ class Setting:
             "restart_required": self.restart_required,
             "depends": self.depends,
             "visibility": self.visibility.value,
+            "namespace": self.namespace,
         }
 
 

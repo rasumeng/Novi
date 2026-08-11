@@ -72,10 +72,31 @@ class ConfigRegistry:
     # ── reads ────────────────────────────────────────────────────────
 
     def has(self, setting_id: str) -> bool:
-        return setting_id in self._settings
+        return self._resolve(setting_id) is not None
+
+    def resolve(self, setting_id: str) -> Setting | None:
+        """Return the Setting owning ``setting_id``.
+
+        Exact id matches first; otherwise a registered namespace owning the
+        id's prefix. ``None`` when nothing owns the id.
+        """
+        return self._resolve(setting_id)
+
+    def _resolve(self, setting_id: str) -> Setting | None:
+        s = self._settings.get(setting_id)
+        if s is not None:
+            return s
+        # Longest matching namespace (dynamic sub-paths under a collection).
+        parts = setting_id.split(".")
+        for i in range(len(parts) - 1, 0, -1):
+            prefix = ".".join(parts[:i])
+            parent = self._settings.get(prefix)
+            if parent is not None and parent.namespace:
+                return parent
+        return None
 
     def get(self, setting_id: str) -> Setting:
-        s = self._settings.get(setting_id)
+        s = self._resolve(setting_id)
         if s is None:
             raise UnknownSettingError(
                 f"unknown setting '{setting_id}'"
@@ -94,25 +115,28 @@ class ConfigRegistry:
         return [s for s in self._settings.values() if s.category == category]
 
     def owner_for(self, setting_id: str) -> str:
-        s = self._settings.get(setting_id)
+        s = self._resolve(setting_id)
         return s.owner if s else ""
 
     def validate(self, setting_id: str, value: Any) -> list[str]:
         setting = self.get(setting_id)
+        resolve = self._resolve(setting_id)
+        is_namespace_leaf = resolve is not None and resolve.namespace and resolve is not setting
         errors = []
-        if setting.type in (SettingType.ENUM, SettingType.MODEL) and value not in (None, ""):
-            if setting.options and not any(o.value == value for o in setting.options):
-                allowed = ", ".join(str(o.value) for o in setting.options)
-                errors.append(f"must be one of: {allowed}")
-        if setting.type == SettingType.BOOL and not isinstance(value, bool) and value not in (None,):
-            if value not in (0, 1, "true", "false"):
-                errors.append("must be a boolean")
-        if setting.type == SettingType.INT and value not in (None, ""):
-            if not isinstance(value, int) or isinstance(value, bool):
-                errors.append("must be an integer")
-        if setting.type == SettingType.FLOAT and value not in (None, ""):
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                errors.append("must be a number")
+        if not is_namespace_leaf:
+            if setting.type in (SettingType.ENUM, SettingType.MODEL) and value not in (None, ""):
+                if setting.options and not any(o.value == value for o in setting.options):
+                    allowed = ", ".join(str(o.value) for o in setting.options)
+                    errors.append(f"must be one of: {allowed}")
+            if setting.type == SettingType.BOOL and not isinstance(value, bool) and value not in (None,):
+                if value not in (0, 1, "true", "false"):
+                    errors.append("must be a boolean")
+            if setting.type == SettingType.INT and value not in (None, ""):
+                if not isinstance(value, int) or isinstance(value, bool):
+                    errors.append("must be an integer")
+            if setting.type == SettingType.FLOAT and value not in (None, ""):
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    errors.append("must be a number")
         errors.extend(setting.validate(value))
         return errors
 

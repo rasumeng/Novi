@@ -861,11 +861,15 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.put("/api/config")
     def put_config(body: dict):
-        """Legacy bulk-write endpoint — routed through the framework.
+        """Legacy bulk-write compatibility endpoint — delegates to the framework.
 
-        Each key present in the body is applied via configuration.set (validated,
-        persisted, emitted). Unknown keys with no registered setting surface a
-        warning instead of silently writing raw dict state.
+        Kept for existing callers during migration. Every key resolves through
+        the configuration registry (exact or namespace sub-path) and is applied
+        via ``configuration.set`` — the single authoritative
+        validate → persist → apply → emit path. A key that is not a registered
+        setting (or under a registered namespace) is surfaced as such rather
+        than silently writing raw dict state, so there is exactly one
+        persistence mechanism.
         """
         results = []
         for k, v in body.items():
@@ -878,8 +882,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 except Exception as e:
                     results.append({"id": k, "ok": False, "error": str(e)})
             else:
-                # Déprioritized: fall back to raw merge for keys not in schema.
-                results.append({"id": k, "ok": True, "raw": True, "value": v})
+                results.append({"id": k, "ok": False, "raw": False,
+                                "error": f"'{k}' is not a registered setting"})
         _sync_config_snapshot()
         # notify the shared backend so in-memory state matches disk
         with _backend_lock:

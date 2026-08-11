@@ -18,11 +18,15 @@ log = logging.getLogger("cozmo.resources")
 
 @dataclass
 class ResourceSnapshot:
-    """Current resource state."""
+    """Current resource state.
 
-    vram_total_gb: float = 0.0
+    ``vram_total_gb`` / ``vram_free_gb`` are ``None`` when VRAM is UNKNOWN.
+    Consumers must treat ``None`` as "don't know", never as zero.
+    """
+
+    vram_total_gb: Optional[float] = None
     vram_used_gb: float = 0.0
-    vram_free_gb: float = 0.0
+    vram_free_gb: Optional[float] = None
     loaded_models: list[str] = field(default_factory=list)
     active_jobs: int = 0
     queued_jobs: int = 0
@@ -73,7 +77,7 @@ class ResourceManager:
     Thread-safe for concurrent job submissions.
     """
 
-    def __init__(self, vram_total_gb: float = 8.0, max_active_jobs: int = 1):
+    def __init__(self, vram_total_gb: Optional[float] = None, max_active_jobs: int = 1):
         self.vram_total_gb = vram_total_gb
         self.max_active_jobs = max_active_jobs
         self._loaded_models: dict[str, ModelLoadInfo] = {}
@@ -87,25 +91,56 @@ class ResourceManager:
         return sum(m.vram_gb for m in self._loaded_models.values())
 
     @property
-    def vram_free_gb(self) -> float:
+    def vram_known(self) -> bool:
+        """True only when we actually know the total VRAM (never guessed)."""
+        return isinstance(self.vram_total_gb, (int, float)) and self.vram_total_gb >= 0
+
+    @property
+    def vram_free_gb(self) -> Optional[float]:
+        """Free VRAM, or ``None`` when total VRAM is unknown.
+
+        Never substitutes a guess; refusals based on VRAM are skipped instead.
+        """
+        if not self.vram_known:
+            return None
         return self.vram_total_gb - self.vram_used_gb
 
-    def can_load(self, model_name: str, vram_gb: float) -> bool:
-        return self.vram_free_gb >= vram_gb
+    def can_load(self, model_name: str, vram_gb: Optional[float]) -> bool:
+        """Whether a model can load by VRAM, when VRAM is known.
 
-    def load_model(self, model_name: str, vram_gb: float) -> bool:
+        When total VRAM is unknown, we do not pretend to know: the VRAM
+        constraint is refused as a gate but never evaluated as true/false on a
+        fabricated number. Callers holding a numeric ``vram_gb`` requirement
+        should treat an unknown-VRAM manager as "cannot verify" (false).
+        """
+        if not self.vram_known:
+            # VRAM UNKNOWN — do not fabricate free/needed numbers.
+            if vram_gb:
+                return False
+            # No VRAM requirement to enforce; nothing to refuse.
+            return True
+        return self.vram_free_gb >= (vram_gb or 0.0)
+
+    def load_model(self, model_name: str, vram_gb: Optional[float]) -> bool:
         if model_name in self._loaded_models:
             self._loaded_models[model_name].touch()
             return True
         if not self.can_load(model_name, vram_gb):
-            log.warning("insufficient VRAM for %s (need %.1fGB, have %.1fGB)",
-                        model_name, vram_gb, self.vram_free_gb)
+            if self.vram_known:
+                log.warning("insufficient VRAM for %s (need %.1fGB, have %.1fGB)",
+                            model_name, vram_gb or 0.0, self.vram_free_gb)
+            else:
+                log.warning("cannot verify VRAM for %s (VRAM unknown); load refused",
+                            model_name)
             return False
         self._loaded_models[model_name] = ModelLoadInfo(
-            name=model_name, vram_gb=vram_gb,
+            name=model_name, vram_gb=vram_gb or 0.0,
         )
-        log.info("loaded model: %s (%.1fGB, %.1fGB free)",
-                 model_name, vram_gb, self.vram_free_gb)
+        if self.vram_known:
+            log.info("loaded model: %s (%.1fGB, %.1fGB free)",
+                     model_name, vram_gb or 0.0, self.vram_free_gb)
+        else:
+            log.info("loaded model: %s (VRAM unknown)", model_name)
         return True
 
     def unload_model(self, model_name: str) -> bool:
@@ -174,15 +209,22 @@ class ResourceManager:
             fits.sort(key=lambda m: self._loaded_models[m].vram_gb if m in self._loaded_models else 0)
             return fits[0]
 
-        # Try unloading LRU to fit
-        if candidates:
+        # Try unloading LRU to fit (only meaningful when VRAM is known; when
+        # unknown there is no free-VRAM number to compare against, so we do not
+        # unload on the basis of an invented value).
+        if candidates and self.vram_known:
             target = candidates[0]
             needed = min_vram_gb
-            while self.vram_free_gb < needed:
+            while (self.vram_free_gb or 0.0) < needed:
                 freed = self.unload_least_recently_used()
                 if freed is None:
                     return None
             return target
+
+        if candidates and not self.vram_known:
+            # VRAM unknown — cannot rank-fit or unload-to-fit; pick the first
+            # candidate without pretending we measured anything.
+            return candidates[0]
 
         return None
 
