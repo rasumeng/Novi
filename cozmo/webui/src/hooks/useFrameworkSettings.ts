@@ -4,7 +4,6 @@ import {
   fetchDiscovery,
   fetchFrameworkConfig,
   setSetting,
-  applyExperience,
   installModel,
   type SchemaResponse,
   type SettingSchema,
@@ -84,16 +83,6 @@ export function useFrameworkSettings() {
     return ok
   }, [showError])
 
-  const applyPreset = useCallback(async (presetId: string) => {
-    const res = await applyExperience(presetId)
-    if (!res.ok) {
-      showError(res.error ?? "Couldn't apply experience.")
-      return false
-    }
-    void load()
-    return true
-  }, [load, showError])
-
   const install = useCallback(async (name: string) => {
     setInstalls((prev) => ({ ...prev, [name]: { phase: 'queued', pct: 0 } }))
     const res = await installModel(name)
@@ -107,7 +96,16 @@ export function useFrameworkSettings() {
   }, [])
 
   const settingsByCategory = useMemo(() => {
-    const map: Record<string, SettingSchema[]> = { general: [], models: [], advanced: [], developer: [] }
+    const map: Record<string, SettingSchema[]> = {
+      general: [],
+      models: [],
+      agent: [],
+      memory: [],
+      skills: [],
+      connectors: [],
+      permissions: [],
+      developer: [],
+    }
     for (const s of schema?.settings ?? []) {
       map[s.category]?.push(s)
     }
@@ -122,7 +120,6 @@ export function useFrameworkSettings() {
     loading,
     installs,
     set,
-    applyPreset,
     install,
     refreshDiscovery,
     reload: load,

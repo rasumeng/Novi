@@ -41,7 +41,7 @@ export interface SettingSchema {
   id: string
   label: string
   description: string
-  category: 'general' | 'models' | 'advanced' | 'developer'
+  category: 'general' | 'models' | 'agent' | 'memory' | 'skills' | 'connectors' | 'permissions' | 'developer'
   owner: string
   type: string
   default: unknown
@@ -124,19 +124,12 @@ export async function setSetting(settingId: string, value: unknown): Promise<boo
   }
 }
 
-/** Apply an experience preset (routes roles across installed models). */
-export async function applyExperience(presetId: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const r = await fetch(`${API_BASE}/api/configuration/apply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preset: presetId }),
-    })
-    return r.json()
-  } catch {
-    return { ok: false, error: 'request failed' }
-  }
-}
+/**
+ * Backend experience/preset migration compatibility:
+ * the backend `/api/configuration/apply` and the preset machinery remain for
+ * one-way migration only. The frontend no longer exposes experience presets,
+ * so no client is kept here.
+ */
 
 /** Start a model install in the background. Progress arrives over WS. */
 export async function installModel(name: string): Promise<{ ok: boolean; error?: string }> {

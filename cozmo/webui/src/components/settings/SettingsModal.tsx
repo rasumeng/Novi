@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Search, Settings } from 'lucide-react'
+import { X, Search, Settings, SlidersHorizontal } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/cozmo'
 import { fetchConfig, saveConfig, type SchemaResponse } from './api'
 import { useToast } from '@/hooks/useToast'
@@ -11,11 +11,11 @@ import { SECTIONS } from './constants'
 import { GeneralSettings } from './GeneralSettings'
 import { ModelsSettings } from './ModelsSettings'
 import { SettingField } from './SettingField'
-import { ToolsSettings } from './ToolsSettings'
 import { MemorySettings } from './MemorySettings'
 import { SkillsSection } from './SkillsSection'
 import { ConnectorsSection } from './ConnectorsSection'
 import { AgentSettings } from './AgentSettings'
+import { PermissionsSettings } from './PermissionsSettings'
 import type { SectionId, SettingsData, ToolInfo } from './types'
 import type { Skill } from '@/types'
 
@@ -31,7 +31,11 @@ interface Props {
 const PAGE_LABEL: Record<string, string> = {
   general: 'General',
   models: 'Models',
-  advanced: 'Advanced',
+  agent: 'Agent',
+  memory: 'Memory',
+  skills: 'Skills',
+  connectors: 'Connectors',
+  permissions: 'Permissions',
   developer: 'Developer',
 }
 
@@ -82,20 +86,10 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
     updateLegacy(next)
   }
 
-  const activePreset = schema?.settings.find((s) => s.id === 'experience') as
-    | { default?: string } | undefined
-  const activeExperience =
-    typeof framework.values.experience === 'string'
-      ? framework.values.experience
-      : (activePreset?.default as string | undefined) ?? 'medium'
+  const migrateSection = (target: SectionId) => setSection(target)
 
   const filteredSections = useMemo(() => {
-    const pages = [
-      { id: 'general', label: 'General', icon: SECTIONS[0].icon },
-      { id: 'models', label: 'Models', icon: SECTIONS[1].icon },
-      { id: 'advanced', label: 'Advanced', icon: SECTIONS[6].icon },
-      { id: 'developer', label: 'Developer', icon: SECTIONS[0].icon },
-    ]
+    const pages = SECTIONS.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))
     if (!search) return pages
     const q = search.toLowerCase()
     return pages.filter((s) => s.label.toLowerCase().includes(q))
@@ -195,10 +189,11 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 {!framework.loading && section === 'general' && (
                   <GeneralSettings
                     discovery={framework.discovery}
-                    activeExperience={activeExperience}
+                    mode={(framework.values['models.mode'] as string | undefined) ?? 'automatic'}
+                    source={(framework.values['llm.meta.source'] as string | undefined) ?? 'automatic'}
                     installing={framework.installs}
-                    onApply={framework.applyPreset}
                     onInstall={framework.install}
+                    onNavigate={migrateSection}
                     loading={false}
                   />
                 )}
@@ -213,19 +208,29 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                   />
                 )}
 
-                {!framework.loading && section === 'advanced' && (
-                  <AdvancedPage
-                    schema={schema}
-                    framework={framework}
-                    config={legacyConfig}
-                    tools={tools}
+                {!framework.loading && section === 'agent' && (
+                  <AgentSettings config={legacyConfig} setConfig={updateLegacy} setDirty={() => {}} />
+                )}
+
+                {!framework.loading && section === 'memory' && (
+                  <MemorySettings config={legacyConfig} setConfig={updateLegacy} setDirty={() => {}} />
+                )}
+
+                {!framework.loading && section === 'skills' && (
+                  <SkillsSection
                     skills={skills}
-                    updateToolPermission={updateToolPermission}
-                    updateConfig={updateLegacy}
+                    onRefresh={refreshSkills}
                     onCreateSkill={onCreateSkill}
                     onClose={close}
-                    refreshSkills={refreshSkills}
                   />
+                )}
+
+                {!framework.loading && section === 'connectors' && (
+                  <ConnectorsSection config={legacyConfig} setConfig={updateLegacy} setDirty={() => {}} />
+                )}
+
+                {!framework.loading && section === 'permissions' && (
+                  <PermissionsSettings tools={tools} config={legacyConfig} updateToolPermission={updateToolPermission} />
                 )}
 
                 {!framework.loading && section === 'developer' && (
@@ -237,68 +242,6 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
         </motion.div>
       )}
     </AnimatePresence>
-  )
-}
-
-function AdvancedPage({ schema, framework, config, tools, skills, updateToolPermission, updateConfig, onCreateSkill, onClose, refreshSkills }: {
-  schema: SchemaResponse | null
-  framework: ReturnType<typeof useFrameworkSettings>
-  config: SettingsData | null
-  tools: ToolInfo[]
-  skills: Skill[]
-  updateToolPermission: (id: string, mode: string) => void
-  updateConfig: (next: SettingsData) => void
-  onCreateSkill?: () => void
-  onClose: () => void
-  refreshSkills: () => void
-}) {
-  const advanced = schema?.settings.filter((s) => s.category === 'advanced') ?? []
-  return (
-    <div className="space-y-5">
-      <section className="space-y-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Core behavior</h3>
-        {advanced.map((s) => (
-          <SettingField
-            key={s.id}
-            setting={s}
-            value={framework.values[s.id]}
-            onChange={(id, v) => void framework.set(id, v)}
-          />
-        ))}
-      </section>
-
-      <section className="space-y-2 pt-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Memory</h3>
-        <MemorySettings config={config} setConfig={updateConfig} setDirty={() => {}} />
-      </section>
-
-      <section className="space-y-2 pt-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Tools & permissions</h3>
-        <ToolsSettings tools={tools} config={config} updateToolPermission={updateToolPermission} />
-      </section>
-
-      <section className="space-y-2 pt-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Connectors (MCP)</h3>
-        <ConnectorsSection config={config} setConfig={updateConfig} setDirty={() => {}} />
-      </section>
-
-      <section className="space-y-2 pt-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Agent behavior</h3>
-        <AgentSettings config={config} setConfig={updateConfig} setDirty={() => {}} />
-      </section>
-
-      {skills.length > 0 && (
-        <section className="space-y-2 pt-2">
-          <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Skills</h3>
-          <SkillsSection
-            skills={skills}
-            onRefresh={refreshSkills}
-            onCreateSkill={onCreateSkill}
-            onClose={onClose}
-          />
-        </section>
-      )}
-    </div>
   )
 }
 
@@ -314,10 +257,22 @@ function DeveloperPage({ schema, framework, config, updateConfig }: {
   const roles = schema?.settings.filter((s) => s.owner === 'runtime' && s.id.includes('roles')) ?? []
   return (
     <div className="space-y-5">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent flex items-center justify-center shrink-0">
+          <SlidersHorizontal size={17} />
+        </div>
+        <div>
+          <p className="text-sm text-base-100 font-medium">Expert configuration</p>
+          <p className="text-xs text-base-500 mt-0.5">
+            Internal, runtime-level controls and diagnostics. Most people won't need to touch these.
+          </p>
+        </div>
+      </div>
+
       <section className="space-y-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Expert routing</h3>
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Internal model routing</h3>
         <p className="text-xs text-base-500 mb-1">
-          Assign a model to each role. Leave blank to let routing fall back automatically. Custom experiences need this page.
+          Fine-grained per-role model assignment — diagnostic/expert level. Leave blank to let routing resolve automatically.
         </p>
         {roles.map((s) => (
           <SettingField
@@ -354,7 +309,7 @@ function DeveloperPage({ schema, framework, config, updateConfig }: {
       </section>
 
       <section className="space-y-2 pt-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Other developer settings</h3>
+        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Other expert settings</h3>
         {developer.filter((s) => !s.id.includes('roles')).map((s) => (
           <SettingField
             key={s.id}

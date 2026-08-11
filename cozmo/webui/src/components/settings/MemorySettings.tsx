@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Trash2 } from 'lucide-react'
+import { Trash2, Brain } from 'lucide-react'
 import { API_BASE } from './api'
 import type { SettingsData } from './types'
 import { useToast } from '@/hooks/useToast'
@@ -77,6 +77,15 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
   return (
     <div className="space-y-4">
       {dialog}
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent flex items-center justify-center shrink-0">
+          <Brain size={17} />
+        </div>
+        <div>
+          <p className="text-sm text-base-100 font-medium">Memory</p>
+          <p className="text-xs text-base-500 mt-0.5">Browse stored context and tune how Cozmo remembers.</p>
+        </div>
+      </div>
       <p className="text-xs text-base-500">Cozmo remembers useful details from past conversations, so it doesn't have to be told twice.</p>
 
       <div className="flex gap-1 p-0.5 bg-base-800 rounded-lg">

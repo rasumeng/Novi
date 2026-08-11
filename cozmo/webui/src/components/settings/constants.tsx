@@ -1,17 +1,18 @@
-import { Cpu, Wrench, Brain, Puzzle, Cable, Settings, Server, Lightbulb, FileText, GitBranch, Globe, Database, Calendar, Mail, MessageSquare, Map, Search, Activity, Image, Cloud } from 'lucide-react'
+import { Cpu, Bot, Brain, Puzzle, Cable, ShieldCheck, Settings, Server, Lightbulb, FileText, GitBranch, Globe, Database, Calendar, Mail, MessageSquare, Map, Search, Activity, Image, Cloud } from 'lucide-react'
 import type { SectionId } from './types'
 
-// Every section here renders real content — no placeholders. (Knowledge,
-// Integrations, and Appearance were removed rather than shipped as dead ends;
-// re-add them once there's an actual feature behind them.)
+// Every section here renders real content — no placeholders. Ordering matches
+// the locked M4 settings IA. There is no "Advanced" catch-all; Developer is
+// the home for expert/internal configuration.
 export const SECTIONS: { id: SectionId; label: string; icon: React.ElementType }[] = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'models', label: 'Models', icon: Cpu },
+  { id: 'agent', label: 'Agent', icon: Bot },
   { id: 'memory', label: 'Memory', icon: Brain },
-  { id: 'tools', label: 'Tools', icon: Wrench },
-  { id: 'mcp', label: 'Connectors', icon: Cable },
   { id: 'skills', label: 'Skills', icon: Puzzle },
-  { id: 'advanced', label: 'Advanced', icon: Server },
+  { id: 'connectors', label: 'Connectors', icon: Cable },
+  { id: 'permissions', label: 'Permissions', icon: ShieldCheck },
+  { id: 'developer', label: 'Developer', icon: Server },
 ]
 
 export const BUILTIN_ROLES = ['classifier', 'router', 'orchestrator', 'chat', 'coder', 'planner', 'vision'] as const

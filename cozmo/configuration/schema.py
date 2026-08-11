@@ -21,8 +21,10 @@ class Category(str, Enum):
     CONNECTORS = "connectors"  # connector management
     PERMISSIONS = "permissions"  # tool / permission policy
     DEVELOPER = "developer"    # expert / diagnostics / experimental
-    # ADVANCED retained for legacy settings not yet re-categorized.
-    ADVANCED = "advanced"      # how Cozmo executes (legacy bucket)
+    # ADVANCED retained only for migration/back-compat of legacy registrations.
+    # No first-party setting uses it today; expert/internal settings live under
+    # DEVELOPER. Do not surface this category in the user-facing Settings IA.
+    ADVANCED = "advanced"      # legacy bucket (migration only)
 
 
 class SettingType(str, Enum):

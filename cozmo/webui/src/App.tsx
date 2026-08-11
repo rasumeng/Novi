@@ -13,12 +13,12 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<NavItemId>('conversations')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsSection, setSettingsSection] = useState<SectionId>('models')
+  const [settingsSection, setSettingsSection] = useState<SectionId>('general')
   const chat = useCozmoChat()
 
   const handleSectionChange = useCallback((id: NavItemId) => {
     if (id === 'settings') {
-      setSettingsSection('models')
+      setSettingsSection('general')
       setSettingsOpen(true)
       return
     }

@@ -187,14 +187,14 @@ def register_defaults(reg: ConfigRegistry):
     reg.register_group(SettingGroup(
         key="runtime.general",
         label="Behavior",
-        category=Category.ADVANCED,
+        category=Category.DEVELOPER,
         owner="runtime",
         description="How Cozmo executes.",
         settings=[
             Setting(
                 id="runtime.max_steps",
                 label="Max steps",
-                category=Category.ADVANCED,
+                category=Category.DEVELOPER,
                 owner="runtime",
                 type=SettingType.INT,
                 default=8,
@@ -203,7 +203,7 @@ def register_defaults(reg: ConfigRegistry):
             Setting(
                 id="runtime.max_history",
                 label="Max history turns",
-                category=Category.ADVANCED,
+                category=Category.DEVELOPER,
                 owner="runtime",
                 type=SettingType.INT,
                 default=10,
@@ -212,7 +212,7 @@ def register_defaults(reg: ConfigRegistry):
             Setting(
                 id="runtime.max_tool_output_chars",
                 label="Max tool output chars",
-                category=Category.ADVANCED,
+                category=Category.DEVELOPER,
                 owner="runtime",
                 type=SettingType.INT,
                 default=8000,
@@ -221,7 +221,7 @@ def register_defaults(reg: ConfigRegistry):
             Setting(
                 id="runtime.temperatures.chat",
                 label="Chat temperature",
-                category=Category.ADVANCED,
+                category=Category.DEVELOPER,
                 owner="runtime",
                 type=SettingType.FLOAT,
                 default=0.6,
