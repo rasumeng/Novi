@@ -810,6 +810,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     from .configuration.catalog import ModelRecommendationEngine, build_catalog_payload
     from .configuration import presets as presets_mod
     from .configuration.install import ModelInstaller
+    from .configuration.resolver import (
+        apply_automatic,
+        apply_custom,
+        USER_CAPABILITIES,
+    )
 
     configuration = get_configuration()
 
@@ -967,6 +972,50 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         configuration.set("experience", preset_id, by="preset")
         _sync_config_snapshot()
         return {"ok": True, **result}
+
+    # ── Models mode / Custom state-machine (M3.2) ─────────────────
+
+    @app.post("/api/configuration/models/state")
+    def models_state(body: dict):
+        """Drive the Automatic <-> Custom model state machine.
+
+        ``mode``: "automatic" or "custom".
+        ``assign`` (custom only): {capability: model} capability intent to
+        persist under ``models.custom.assign.*`` before re-resolving. Capability
+        keys are limited to the four user-facing ones; embeddings and internal
+        roles are never accepted here.
+
+        All writes route through the Configuration Framework (validate ->
+        persist -> apply -> emit). ``llm.roles.*`` is derived state; custom
+        intent lives only in ``models.custom.assign.*``.
+        """
+        mode = body.get("mode")
+        assign = body.get("assign") or {}
+        by = body.get("by", "webui")
+        url = configuration.get("ollama.url", "http://localhost:11434")
+        discovered = ModelDiscovery(url).installed()
+
+        if mode == "automatic":
+            resolution = apply_automatic(configuration, installed=discovered)
+            _sync_config_snapshot()
+            return {
+                "ok": True, "mode": "automatic", **resolution.to_dict(),
+                "assign": configuration.get("models.custom.assign", {}) or {},
+            }
+
+        if mode == "custom":
+            for cap, model in (assign or {}).items():
+                if cap not in USER_CAPABILITIES:
+                    continue
+                configuration.set(f"models.custom.assign.{cap}", model or "", by=by)
+            resolution = apply_custom(configuration, installed=discovered)
+            _sync_config_snapshot()
+            return {
+                "ok": True, "mode": "custom", **resolution.to_dict(),
+                "assign": configuration.get("models.custom.assign", {}) or {},
+            }
+
+        return {"ok": False, "error": "mode must be 'automatic' or 'custom'"}
 
     # ── Ollama available models ─────────────────────────────────
 

@@ -362,3 +362,132 @@ def apply_automatic(configuration, installed=None, hardware=None):
     configuration.set("models.mode", resolution.mode, by=by)
     configuration.set("llm.meta.source", "automatic", by=by)
     return resolution
+
+
+# ── M3.2 — Custom capability assignment resolution ────────────────────────
+#
+# The user-facing configuration surface is exactly four capabilities. Custom
+# intent is persisted under ``models.custom.assign.*`` and is resolved to the
+# runtime-consumed ``llm.roles.*`` layer BELOW it. Internal runtime roles are
+# derived here and are never surfaced as user selectors.
+
+# Capability -> primary runtime role (locked architecture).
+CAPABILITY_TO_ROLE = {
+    "chat": "chat",
+    "reasoning": "planner",
+    "coding": "coder",
+    "vision": "vision",
+}
+
+USER_CAPABILITIES = list(CAPABILITY_TO_ROLE)
+
+# Internal roles are never empty; they derive from the resolved reasoning model
+# (falling back to coding, then chat) precisely like the Automatic layer.
+INTERNAL_DERIVED_ROLES = ["router", "orchestrator", "classifier"]
+
+
+def _installed_names(installed) -> set[str]:
+    names = set()
+    for m in (installed or []):
+        name = m.name if hasattr(m, "name") else m
+        if name:
+            names.add(name)
+    return names
+
+
+def resolve_custom(configuration, hardware=None, installed=None,
+                   catalog: Optional[dict[str, ModelFact]] = None):
+    """Resolve user Custom capability assignments into ``llm.roles.*``.
+
+    ``models.custom.assign.*`` is the user's explicit intent (capability ->
+    model). Resolution overlays that intent on top of the Automatic baseline:
+
+    * Explicit capability assignments become ``llm.roles.<role>.model``.
+    * An unset capability falls back to the last effective Automatic resolution
+      (never left empty).
+    * A Custom model that is no longer installed is preserved as intent, but the
+      runtime role temporarily falls back to the safe Automatic baseline.
+    * Internal roles (router/orchestrator/classifier) derive from reasoning ->
+      coding -> chat so they are never empty.
+
+    Custom intent is NEVER written back from a fallback: it lives solely in
+    ``models.custom.assign.*``.
+    """
+    if catalog is None:
+        catalog = KNOWN_MODEL_FACTS
+    installed_names = _installed_names(installed)
+
+    auto = resolve_automatic(hardware=hardware, installed=installed_names,
+                             catalog=catalog)
+    baseline = dict(auto.role_map)
+    assign = configuration.get("models.custom.assign", {}) or {}
+
+    role_map = dict(baseline)
+    roles = {}
+    for cap, role in CAPABILITY_TO_ROLE.items():
+        model = assign.get(cap) or ""
+        if not model:
+            # no explicit intent -> inherit last effective Automatic baseline
+            roles[role] = RoleSelection(
+                role=role, model=baseline.get(role, ""), capability=cap,
+                source="automatic",
+                hardware_confidence=auto.hardware_confidence,
+                reasons=["inherited from Automatic resolution"])
+            continue
+        effective = model
+        caveats = []
+        if installed_names and model not in installed_names:
+            # preserve the user's intent; runtime temporarily uses a safe fallback
+            effective = baseline.get(role) or model
+            caveats = [f"'{model}' is not installed — temporarily using '{effective}'"]
+        role_map[role] = effective
+        roles[role] = RoleSelection(
+            role=role, model=model, capability=cap, source="custom",
+            qualification=None, hardware_confidence=auto.hardware_confidence,
+            reasons=["selected by you"], caveats=caveats)
+
+    preferred = (role_map.get("planner")
+                 or role_map.get("coder")
+                 or role_map.get("chat"))
+    for role in INTERNAL_DERIVED_ROLES:
+        role_map[role] = preferred or ""
+        roles[role] = RoleSelection(
+            role=role, model=preferred or "", capability="reasoning/coding",
+            source="custom", hardware_confidence=auto.hardware_confidence,
+            reasons=(["derived from preferred model"] if preferred
+                     else ["no model available for internal role"]))
+
+    return AutomaticResolution(
+        role_map=role_map, roles=roles, mode="custom",
+        embedding_model=auto.embedding_model,
+        embedding_roles=auto.embedding_roles,
+        provisional=auto.provisional,
+        hardware_confidence=auto.hardware_confidence)
+
+
+def apply_custom(configuration, installed=None, hardware=None):
+    """Resolve Custom capability assignments and persist through the framework.
+
+    Writes, via ``configuration.set``:
+        models.custom.assign.*   (already persisted by the caller, unresolved)
+        llm.roles.<role>.model   (chat/coder/planner/vision/router/orchestrator/
+                                   classifier)
+        embedding.model          (resolved internally, unchanged call)
+        models.mode              = "custom"
+        llm.meta.source          = "custom"
+
+    Returns the ``AutomaticResolution`` for Custom. Custom intent in
+    ``models.custom.assign.*`` is never modified here.
+    """
+    by = "custom"
+    if configuration.get("models.mode", "automatic") != "custom":
+        configuration.set("models.mode", "custom", by=by)
+        configuration.set("llm.meta.source", "custom", by=by)
+
+    resolution = resolve_custom(configuration, hardware=hardware, installed=installed)
+    for role, model in resolution.role_map.items():
+        configuration.set(f"llm.roles.{role}.model", model, by=by)
+    if resolution.embedding_model:
+        configuration.set("embedding.model", resolution.embedding_model, by=by)
+    configuration.set("llm.meta.source", "custom", by=by)
+    return resolution

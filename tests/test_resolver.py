@@ -301,3 +301,177 @@ def test_apply_does_not_persist_derived_eligibility(tmp_path):
     assert not any("hardwarefit" in k for k in joined)
     assert not any("caveat" in k for k in joined)
     assert not any("qualif" in k for k in joined)
+
+# -- M3.2 � Custom capability assignment state machine ---------------------
+
+
+def _set_custom_assign(cfg, **kw):
+    for cap, model in kw.items():
+        cfg.set(f"models.custom.assign.{cap}", model or "")
+
+
+def test_custom_maps_capabilities_to_roles(tmp_path):
+    from cozmo.configuration.resolver import resolve_custom
+    cfg = _make_cfg(tmp_path)
+    installed = REAL_INSTALLED + ["qwen2.5-coder:1.5b"]
+    _set_custom_assign(cfg, chat="qwen3:8b", reasoning="llama3.1:8b",
+                       coding="qwen2.5-coder:1.5b", vision="qwen2.5vl:7b")
+    r = resolve_custom(cfg, hardware=HW_HIGH, installed=installed, catalog=CATALOG)
+    assert r.role_map["chat"] == "qwen3:8b"
+    assert r.role_map["planner"] == "llama3.1:8b"
+    assert r.role_map["coder"] == "qwen2.5-coder:1.5b"
+    assert r.role_map["vision"] == "qwen2.5vl:7b"
+    assert r.mode == "custom"
+    for role in ALL_ROLES:
+        assert r.role_map[role], f"{role} must never be empty"
+
+
+def test_custom_internal_roles_derive_and_stay_sourced_custom(tmp_path):
+    from cozmo.configuration.resolver import resolve_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, coding="qwen2.5-coder:1.5b", chat="qwen3:8b")
+    r = resolve_custom(cfg, hardware=HW_HIGH, installed=REAL_INSTALLED, catalog=CATALOG)
+    # internal roles derive from reasoning -> coding -> chat, never empty
+    for role in ("classifier", "router", "orchestrator"):
+        assert r.role_map[role]
+        assert r.roles[role].capability == "reasoning/coding"
+
+
+def test_custom_unset_capability_falls_back_and_is_not_written(tmp_path):
+    from cozmo.configuration.resolver import resolve_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="qwen3:8b", coding="qwen2.5-coder:1.5b")
+    r = resolve_custom(cfg, hardware=HW_HIGH, installed=REAL_INSTALLED, catalog=CATALOG)
+    # reasoning (planner) unset -> baseline automatic, not written back as intent
+    assert r.roles["planner"].source == "automatic"
+    assert cfg.get("models.custom.assign.reasoning", "") in ("", None)
+    assert r.role_map["planner"], "planner never empty"
+
+
+def test_apply_custom_persists_roles_mode_and_source(tmp_path):
+    from cozmo.configuration.resolver import apply_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="qwen3:8b", reasoning="llama3.1:8b",
+                       coding="qwen2.5-coder:1.5b", vision="qwen2.5vl:7b")
+    apply_custom(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    for role in ALL_ROLES:
+        assert cfg.get(f"llm.roles.{role}.model"), f"{role} persisted"
+    assert cfg.get("models.mode") == "custom"
+    assert cfg.get("llm.meta.source") == "custom"
+    assert cfg.get("llm.roles.chat.model") == "qwen3:8b"
+    assert cfg.get("llm.roles.planner.model") == "llama3.1:8b"
+
+
+def test_custom_change_updates_only_that_role(tmp_path):
+    from cozmo.configuration.resolver import apply_custom
+    cfg = _make_cfg(tmp_path)
+    installed = REAL_INSTALLED + ["qwen2.5-coder:1.5b"]
+    _set_custom_assign(cfg, chat="qwen3:8b", coding="qwen2.5-coder:7b")
+    apply_custom(cfg, installed=installed, hardware=HW_HIGH)
+    # change only coding
+    _set_custom_assign(cfg, coding="qwen2.5-coder:1.5b")
+    apply_custom(cfg, installed=installed, hardware=HW_HIGH)
+    assert cfg.get("llm.roles.coder.model") == "qwen2.5-coder:1.5b"
+    assert cfg.get("llm.roles.chat.model") == "qwen3:8b"  # untouched
+
+
+def test_custom_assign_survives_reload(tmp_path):
+    from cozmo.configuration.resolver import apply_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="qwen3:8b", coding="qwen2.5-coder:1.5b")
+    apply_custom(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    path = cfg.store.path
+    cfg2 = Configuration(build_registry(), path)
+    cfg2.initialize()
+    assert cfg2.get("models.mode") == "custom"
+    assert cfg2.get("llm.meta.source") == "custom"
+    assert cfg2.get("models.custom.assign.chat") == "qwen3:8b"
+    assert cfg2.get("models.custom.assign.coding") == "qwen2.5-coder:1.5b"
+    assert cfg2.get("llm.roles.chat.model") == "qwen3:8b"
+
+
+def test_return_to_automatic_preserves_custom_intent(tmp_path):
+    from cozmo.configuration.resolver import apply_custom, apply_automatic
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="qwen3:8b", coding="qwen2.5-coder:1.5b")
+    apply_custom(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    apply_automatic(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    assert cfg.get("models.mode") == "automatic"
+    assert cfg.get("llm.meta.source") == "automatic"
+    # user's custom intent is preserved, not deleted
+    assert cfg.get("models.custom.assign.chat") == "qwen3:8b"
+    assert cfg.get("models.custom.assign.coding") == "qwen2.5-coder:1.5b"
+
+
+def test_missing_custom_model_preserves_intent_and_falls_back(tmp_path):
+    from cozmo.configuration.resolver import apply_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="gone:model", coding="qwen3:8b")
+    apply_custom(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    # explicit intent survived
+    assert cfg.get("models.custom.assign.chat") == "gone:model"
+    assert cfg.get("models.mode") == "custom"
+    # runtime role temporarily fell back to a safe installed model (baseline)
+    assert cfg.get("llm.roles.chat.model"), "chat must not be empty"
+    # a valid custom model is still respected verbatim
+    assert cfg.get("llm.roles.coder.model") == "qwen3:8b"
+
+
+def test_custom_does_not_write_embeddings(tmp_path):
+    from cozmo.configuration.resolver import apply_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="qwen3:8b")
+    apply_custom(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    assign = cfg.get("models.custom.assign", {}) or {}
+    assert "embedding" not in assign
+    assert "embeddings" not in assign
+    assert set(assign.keys()) <= {"chat", "reasoning", "coding", "vision"}
+
+
+def test_custom_does_not_persist_derived_evidence(tmp_path):
+    from cozmo.configuration.resolver import apply_custom
+    cfg = _make_cfg(tmp_path)
+    _set_custom_assign(cfg, chat="qwen3:8b")
+    apply_custom(cfg, installed=REAL_INSTALLED, hardware=HW_HIGH)
+    raw = cfg.state.as_dict()
+    joined = {k.lower() for k in raw}
+    assert not any("caveat" in k for k in joined)
+    assert not any("hardwarefit" in k for k in joined)
+
+def test_full_custom_flow_reload_survives(tmp_path):
+    """End-to-end M3.2 flow on the real framework: enter Custom (seeded from
+    Automatic), change one capability, leave another unset, return to Automatic,
+    then re-enter Custom without losing earlier explicit choices."""
+    from cozmo.configuration.resolver import apply_automatic, apply_custom
+    installed = REAL_INSTALLED + ["qwen2.5-coder:1.5b"]
+    hardware = HW_HIGH
+
+    cfg = _make_cfg(tmp_path)
+    # automatic baseline -> effective roles
+    apply_automatic(cfg, installed=installed, hardware=hardware)
+    auto_chat = cfg.get("llm.roles.chat.model")
+
+    # enter Custom seeded from the effective assignments
+    _set_custom_assign(cfg, chat=auto_chat, coding=cfg.get("llm.roles.coder.model"))
+    apply_custom(cfg, installed=installed, hardware=hardware)
+    assert cfg.get("models.mode") == "custom"
+    assert cfg.get("llm.meta.source") == "custom"
+
+    # change only coding; reasoning stays unset (inherits Auto fallback)
+    _set_custom_assign(cfg, coding="qwen2.5-coder:1.5b")
+    apply_custom(cfg, installed=installed, hardware=hardware)
+    assert cfg.get("llm.roles.coder.model") == "qwen2.5-coder:1.5b"
+    assert cfg.get("llm.roles.chat.model") == auto_chat
+    assert cfg.get("models.custom.assign.reasoning", "") in ("", None)
+
+    # return to Automatic: resolver reruns, custom intent preserved
+    apply_automatic(cfg, installed=installed, hardware=hardware)
+    assert cfg.get("models.mode") == "automatic"
+    assert cfg.get("llm.meta.source") == "automatic"
+    assert cfg.get("models.custom.assign.coding") == "qwen2.5-coder:1.5b"
+
+    # re-enter Custom: prior explicit choice still present, survives full reload
+    cfg2 = Configuration(build_registry(), cfg.store.path)
+    cfg2.initialize()
+    assert cfg2.get("models.custom.assign.coding") == "qwen2.5-coder:1.5b"
+    assert cfg2.get("models.custom.assign.chat") == auto_chat

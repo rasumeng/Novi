@@ -5,6 +5,7 @@ import {
   fetchFrameworkConfig,
   setSetting,
   installModel,
+  setModelsState as setModelsStateApi,
   type SchemaResponse,
   type SettingSchema,
   type DiscoveryPayload,
@@ -95,6 +96,16 @@ export function useFrameworkSettings() {
     setDiscovery(disc)
   }, [])
 
+  const setModelsState = useCallback(async (mode: 'automatic' | 'custom', assign?: Record<string, string>) => {
+    const res = await setModelsStateApi(mode, assign)
+    if (res.ok) {
+      await load()
+    } else {
+      showError(res.error ?? "Couldn't update model configuration.")
+    }
+    return res
+  }, [load, showError])
+
   const settingsByCategory = useMemo(() => {
     const map: Record<string, SettingSchema[]> = {
       general: [],
@@ -122,6 +133,7 @@ export function useFrameworkSettings() {
     set,
     install,
     refreshDiscovery,
+    setModelsState,
     reload: load,
   }
 }

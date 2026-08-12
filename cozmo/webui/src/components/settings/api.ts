@@ -56,6 +56,13 @@ export interface SchemaResponse {
   groups: { key: string; label: string; description: string; category: string; owner: string; settings: SettingSchema[] }[]
 }
 
+export interface ModelEligibility {
+  hardwareFit: string
+  hardwareConfidence: string
+  eligibleAutomatic: boolean
+  eligibleCustom: boolean
+}
+
 export interface DiscoveredModelEntry {
   name: string
   status: 'installed' | 'available' | 'missing'
@@ -63,9 +70,12 @@ export interface DiscoveredModelEntry {
   capabilities: Record<string, boolean>
   recommended: boolean
   tier: 'supported' | 'experimental'
+  qualification?: string
   reasons: string[]
   displayName: string
   approxRamGb: number | null
+  caveats?: string[]
+  eligibility?: ModelEligibility
 }
 
 export interface DiscoveryPayload {
@@ -138,6 +148,30 @@ export async function installModel(name: string): Promise<{ ok: boolean; error?:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
+
+/**
+ * Drive the M3.2 Automatic <-> Custom model state machine on the backend.
+ *
+ * ``mode``: "automatic" | "custom".
+ * ``assign``: capability -> model intent to persist for Custom mode before the
+ * backend resolves everything to ``llm.roles.*`` through the Configuration
+ * Framework. Capability keys are limited to chat/reasoning/coding/vision.
+ */
+export async function setModelsState(
+  mode: 'automatic' | 'custom',
+  assign?: Record<string, string>,
+): Promise<{ ok: boolean; mode?: string; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/models/state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, assign }),
     })
     return r.json()
   } catch {

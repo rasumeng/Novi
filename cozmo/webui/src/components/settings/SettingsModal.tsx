@@ -205,6 +205,15 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     onInstall={framework.install}
                     onRefresh={framework.refreshDiscovery}
                     loading={false}
+                    mode={(framework.values['models.mode'] as string | undefined) ?? 'automatic'}
+                    source={(framework.values['llm.meta.source'] as string | undefined) ?? 'automatic'}
+                    customAssign={{
+                      chat: (framework.values['models.custom.assign.chat'] as string | undefined) ?? '',
+                      reasoning: (framework.values['models.custom.assign.reasoning'] as string | undefined) ?? '',
+                      coding: (framework.values['models.custom.assign.coding'] as string | undefined) ?? '',
+                      vision: (framework.values['models.custom.assign.vision'] as string | undefined) ?? '',
+                    }}
+                    onSetModelsState={framework.setModelsState}
                   />
                 )}
 

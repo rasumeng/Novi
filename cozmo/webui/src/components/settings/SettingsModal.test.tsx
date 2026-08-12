@@ -26,6 +26,7 @@ const frameworkMock = {
   set: vi.fn(),
   install: vi.fn().mockResolvedValue(true),
   refreshDiscovery: vi.fn().mockResolvedValue(undefined),
+  setModelsState: vi.fn().mockResolvedValue({ ok: true }),
   reload: vi.fn(),
 }
 
