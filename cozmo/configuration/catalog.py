@@ -222,3 +222,59 @@ def build_catalog_payload(installed_models: list) -> dict:
         "hardware": {"ramGb": engine.hardware.ram_gb},
         "models": entries,
     }
+
+
+# Capabilities a user can pick / that get recommended for the four user-facing
+# roles. Anything outside this set (notably ``embeddings``) is internal and must
+# never surface as a setup item, recommendation, or install target.
+USER_FACING_CAPABILITIES = frozenset(("chat", "reasoning", "coding", "vision"))
+
+
+def build_available_recommendations(
+    installed_names=frozenset(),
+    hardware: Optional[HardwareProfile] = None,
+) -> list[dict]:
+    """Catalog models Cozmo recommends but the machine does not have installed.
+
+    M3.4 — this is the "recommended but missing" signal that drives the
+    explicit-consent setup flow. Evidence is catalog qualification + hardware
+    fit only (the same recommendation engine that powers the installed list).
+    It deliberately does NOT read configuration, does NOT run the resolver, and
+    never installs anything — installing always requires an explicit user
+    action through the model-install endpoint.
+
+    Embedding-only models are excluded outright: ``embedding.model`` stays an
+    internal setting, so embeddings never appear as a recommendation, setup
+    item, or install target.
+    """
+    engine = ModelRecommendationEngine(hardware=hardware)
+    from .eligibility import HardwareFit, hardware_fit_for  # local import: avoid cycle
+    installed = set(installed_names or ())
+    out = []
+    for name, fact in KNOWN_MODEL_FACTS.items():
+        if name in installed:
+            continue
+        if not any(c in USER_FACING_CAPABILITIES for c in fact.capabilities):
+            continue  # embedding-only model: internal, never surfaced
+        rec = engine.for_model(name)
+        if not rec["recommended"]:
+            continue
+        # A model that is known NOT to fit the detected hardware is never pushed
+        # as a setup install — installing it could not change Automatic resolution.
+        # Same fit signal the eligibility + recommendation layers already use.
+        if hardware_fit_for(fact, engine.hardware) == HardwareFit.DOES_NOT_FIT:
+            continue
+        out.append({
+            "name": name,
+            "status": "available",
+            "size": None,
+            "capabilities": {c: True for c in fact.capabilities},
+            "recommended": True,
+            "tier": rec["tier"],
+            "qualification": rec["qualification"],
+            "reasons": rec["reasons"],
+            "displayName": rec["displayName"],
+            "approxRamGb": rec["approxRamGb"],
+            "caveats": rec["caveats"],
+        })
+    return out

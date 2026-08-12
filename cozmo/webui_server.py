@@ -807,16 +807,30 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         register_apply_hook,
     )
     from .configuration.discovery import ModelDiscovery, query_ollama_tags
-    from .configuration.catalog import ModelRecommendationEngine, build_catalog_payload
+    from .configuration.catalog import (
+        ModelRecommendationEngine,
+        build_available_recommendations,
+        build_catalog_payload,
+    )
     from .configuration import presets as presets_mod
     from .configuration.install import ModelInstaller
     from .configuration.resolver import (
         apply_automatic,
         apply_custom,
+        recompute_automatic_if_active,
         USER_CAPABILITIES,
     )
 
     configuration = get_configuration()
+    # Serialize recomputation triggered by concurrent lifecycle events (e.g.
+    # overlapping model installs) so configuration writes never interleave.
+    recompute_lock = threading.Lock()
+
+    # M3.4: one in-flight pull per model name — explicit consent starts a single
+    # install; duplicate consents while one is running are coalesced, never
+    # spawning a second download thread.
+    _installing_models: set[str] = set()
+    _installing_lock = threading.Lock()
 
     # Broadcast configuration changes to connected WebSocket clients.
     try:
@@ -829,6 +843,33 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         # existing runtime consumers keep reading a fresh snapshot.
         cfg.clear()
         cfg.update(configuration.snapshot())
+
+    def _after_models_changed():
+        """M3.3 — model-set lifecycle seam.
+
+        Runs after model install completion / explicit discovery refresh. In
+        Automatic mode it reconciles ``llm.roles.*`` with the current hardware
+        + installed models through ``recompute_automatic_if_active`` (idempotent,
+        compare-and-apply, no events when nothing changed). In Custom mode it is
+        a strict NOOP — user assignments are authoritative and never rewritten.
+        """
+        with recompute_lock:
+            try:
+                url = configuration.get("ollama.url", "http://localhost:11434")
+                installed = ModelDiscovery(url).installed()
+                resolution, changed = recompute_automatic_if_active(
+                    configuration, installed=installed)
+                if resolution is not None and changed:
+                    _broadcast_sync({"type": "models_resolved",
+                                     "resolution": resolution.to_dict()})
+            except Exception as e:
+                print(f"[cozmo] model recompute failed: {e}")
+        _sync_config_snapshot()
+
+    # M3.3 startup: in Automatic mode ensure the persisted llm.roles.* state
+    # reflects the current hardware + installed models before the UI serves.
+    # Idempotent (only writes on actual change) and never installs anything.
+    _after_models_changed()
 
     def _sanitize_config(cfg: dict) -> dict:
         safe = {}
@@ -1017,6 +1058,43 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
         return {"ok": False, "error": "mode must be 'automatic' or 'custom'"}
 
+    @app.post("/api/configuration/models/recompute")
+    def models_recompute():
+        """M3.3 — explicit discovery refresh seam.
+
+        Reconciles ``llm.roles.*`` with current hardware + installed models when
+        Automatic is active (covers model removal and hardware refresh, which
+        have no inbound event). When Custom is active this is a strict NOOP —
+        user assignments are authoritative and never rewritten. Never installs
+        or downloads anything.
+        """
+        _after_models_changed()
+        return {
+            "ok": True,
+            "mode": configuration.get("models.mode", "automatic"),
+            "assign": configuration.get("models.custom.assign", {}) or {},
+        }
+
+    @app.post("/api/configuration/models/setup/dismiss")
+    def models_setup_dismiss(body: dict):
+        """M3.4 — record an explicit decline of a recommended-model install.
+
+        Persists the user's "not now" choice under
+        ``models.automatic.setup.dismissed`` through the Configuration Framework
+        (sole persistence authority). It never installs anything and never
+        touches ``models.custom.assign.*`` or ``models.mode``; the model stays
+        installable from the Model library with a fresh explicit consent.
+        """
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "model name required"}
+        current = configuration.get("models.automatic.setup.dismissed", []) or []
+        if name not in current:
+            configuration.set(
+                "models.automatic.setup.dismissed", [*current, name], by="webui")
+            _sync_config_snapshot()
+        return {"ok": True, "name": name}
+
     # ── Ollama available models ─────────────────────────────────
 
     @app.get("/api/ollama/models")
@@ -1032,7 +1110,17 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         url = configuration.get("ollama.url", "http://localhost:11434")
         discovery = ModelDiscovery(url)
         installed = discovery.installed()
+        installed_names = {m.name for m in installed if m.name}
         payload = build_catalog_payload(installed)
+        # M3.4: surfaced catalog models Cozmo recommends that are NOT installed.
+        # They carry status "available" so the Model library can offer an
+        # explicit-consent install and the Automatic setup card can surface the
+        # "recommended model unavailable" state. Embeddings are never included
+        # by ``build_available_recommendations``.
+        payload["models"] = payload["models"] + [
+            e for e in build_available_recommendations(installed_names)
+            if e["name"] not in {m["name"] for m in payload["models"]}
+        ]
         # Add availability/missing signal for models referenced in config.
         referenced = set()
         roles = configuration.get("llm.roles", {})
@@ -1042,10 +1130,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         emb = configuration.get("embedding.model", "")
         if emb:
             referenced.add(emb)
-        installed_names = {m.name for m in installed}
         missing = [n for n in referenced if n and n not in installed_names]
         payload["missingModels"] = missing
         payload["installedNames"] = sorted(installed_names)
+        payload["dismissedRecommended"] = (
+            configuration.get("models.automatic.setup.dismissed", []) or [])
         payload["presets"] = presets_mod.get_presets()
         payload["activeExperience"] = configuration.get("experience", "medium")
         payload["roles"] = {
@@ -1062,16 +1151,31 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         name = (body.get("name") or "").strip()
         if not name:
             return {"ok": False, "error": "model name required"}
+        with _installing_lock:
+            if name in _installing_models:
+                return {"ok": True, "name": name, "already_installing": True}
+            _installing_models.add(name)
         url = configuration.get("ollama.url", "http://localhost:11434")
 
         def progress(p):
             _broadcast_sync({"type": "install_progress", **p})
 
-        threading.Thread(
-            target=ModelInstaller(url, progress).pull,
-            args=(name,),
-            daemon=True,
-        ).start()
+        def _install_and_recompute():
+            try:
+                try:
+                    ModelInstaller(url, progress).pull(name)
+                except Exception as e:
+                    # A failed pull emits an "error" install_progress event and
+                    # never reaches recomputation, leaving configuration intact.
+                    print(f"[cozmo] model install failed for '{name}': {e}")
+                # M3.3: a completed install is a model-set change. Automatic mode
+                # re-resolves llm.roles.*; Custom mode is left untouched.
+                _after_models_changed()
+            finally:
+                with _installing_lock:
+                    _installing_models.discard(name)
+
+        threading.Thread(target=_install_and_recompute, daemon=True).start()
         return {"ok": True, "name": name}
 
     # seed default skills on startup

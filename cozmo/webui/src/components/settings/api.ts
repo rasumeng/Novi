@@ -83,6 +83,7 @@ export interface DiscoveryPayload {
   models: DiscoveredModelEntry[]
   missingModels: string[]
   installedNames: string[]
+  dismissedRecommended: string[]
   presets: { id: string; label: string; description: string; lightweight: boolean }[]
   activeExperience: string
   roles: Record<string, string>
@@ -108,6 +109,7 @@ export async function fetchDiscovery(): Promise<DiscoveryPayload> {
     models: [],
     missingModels: [],
     installedNames: [],
+    dismissedRecommended: [],
     presets: [],
     activeExperience: 'medium',
     roles: {},
@@ -172,6 +174,41 @@ export async function setModelsState(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode, assign }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
+
+/**
+ * M3.3 — explicit Automatic recomputation seam (model removal / hardware
+ * refresh). NOOP while Custom mode is active; never installs anything.
+ */
+export async function recomputeModels(): Promise<{ ok: boolean; mode?: string; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/models/recompute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
+
+/**
+ * M3.4 — record an explicit decline of a recommended-model install. The user
+ * simply says "not now"; nothing is installed and the model stays installable
+ * from the Model library with a fresh explicit consent.
+ */
+export async function dismissRecommendedModel(name: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/models/setup/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
     })
     return r.json()
   } catch {

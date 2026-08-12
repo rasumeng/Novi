@@ -203,6 +203,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     discovery={framework.discovery}
                     installing={framework.installs}
                     onInstall={framework.install}
+                    onDismiss={framework.dismissRecommended}
                     onRefresh={framework.refreshDiscovery}
                     loading={false}
                     mode={(framework.values['models.mode'] as string | undefined) ?? 'automatic'}

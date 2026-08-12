@@ -17,6 +17,7 @@ interface Props {
   discovery: DiscoveryPayload | null
   installing: Record<string, { phase: string; pct: number | null }>
   onInstall: (name: string) => Promise<boolean>
+  onDismiss?: (name: string) => Promise<boolean>
   onRefresh: () => Promise<void>
   loading: boolean
   mode?: string
@@ -52,7 +53,7 @@ const NOOP = async (): Promise<ModelsState> => ({ ok: true })
  * Embeddings and internal runtime roles (classifier/router/orchestrator/planner)
  * are deliberately NOT exposed here — those live in Developer.
  */
-export function ModelsSettings({ discovery, installing, onInstall, onRefresh, loading, mode, source, customAssign, onSetModelsState }: Props) {
+export function ModelsSettings({ discovery, installing, onInstall, onDismiss, onRefresh, loading, mode, source, customAssign, onSetModelsState }: Props) {
   const [query, setQuery] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -116,6 +117,17 @@ export function ModelsSettings({ discovery, installing, onInstall, onRefresh, lo
   const missingCount = discovery.missingModels.length
   const installedCount = discovery.models.filter((m) => m.status === 'installed').length
 
+  // M3.4: catalog models Cozmo recommends for Automatic that are NOT installed
+  // and the user has not explicitly declined. Embeddings are never surfaced
+  // here (backend excludes them; capability filter below is defense-in-depth).
+  const userCapabilityKeys = CAPABILITIES.map((c) => c.key)
+  const missingRecommended = discovery.models.filter(
+    (m) =>
+      m.status === 'available' &&
+      !discovery.dismissedRecommended?.includes(m.name) &&
+      Object.keys(m.capabilities ?? {}).some((c) => userCapabilityKeys.includes(c)),
+  )
+
   return (
     <div className="space-y-6">
       {/* A. Configuration Mode */}
@@ -132,6 +144,16 @@ export function ModelsSettings({ discovery, installing, onInstall, onRefresh, lo
           <AlertTriangle size={14} className="text-err shrink-0" />
           <p className="text-xs text-err">{stateError}</p>
         </div>
+      )}
+
+      {/* M3.4 — explicit-consent setup for missing recommended models (Automatic only) */}
+      {isAutomatic && (
+        <RecommendedSetup
+          models={missingRecommended}
+          installing={installing}
+          onInstall={onInstall}
+          onDismiss={onDismiss}
+        />
       )}
 
       {/* 3. Current Assignments */}
@@ -330,6 +352,90 @@ function ModeCard({ active, icon, title, desc, accent, children }: {
       <p className="text-[11px] text-base-500 leading-relaxed">{desc}</p>
       {children}
     </div>
+  )
+}
+
+// ── M3.4 — Recommended model setup (explicit consent) ─────────────────────
+
+function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
+  models: DiscoveredModelEntry[]
+  installing: Record<string, { phase: string; pct: number | null }>
+  onInstall: (name: string) => Promise<boolean>
+  onDismiss?: (name: string) => Promise<boolean>
+}) {
+  if (models.length === 0) return null
+  return (
+    <section aria-label="Recommended model setup">
+      <div className="p-4 rounded-xl border border-sky-500/30 bg-sky-500/5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Sparkles size={14} className="text-sky-400 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-base-100">Recommended model unavailable</p>
+            <p className="text-[11px] text-base-500 leading-relaxed mt-0.5">
+              Cozmo would prefer these for Automatic mode on your hardware, but they are not installed.
+              Installing happens only when you choose — skipping keeps your current eligible models.
+            </p>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {models.map((m) => {
+            const busy = installing[m.name]
+            const caps = Object.keys(m.capabilities ?? {}).filter((c) =>
+              ['chat', 'reasoning', 'coding', 'vision'].includes(c))
+            return (
+              <div key={m.name} className="p-3 rounded-lg bg-base-900/60 border border-base-700">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-base-100 font-mono truncate">{m.displayName}</p>
+                      <StatusBadge status="available" />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1 mt-1">
+                      {caps.map((c) => (
+                        <span key={c} className="text-[10px] text-sky-400 capitalize bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 rounded">
+                          {c}
+                        </span>
+                      ))}
+                      {m.approxRamGb != null && (
+                        <span className="text-[10px] text-base-500">~{m.approxRamGb} GB RAM footprint</span>
+                      )}
+                    </div>
+                    {m.reasons.length > 0 && (
+                      <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
+                        <Sparkles size={11} /> {m.reasons.join(' · ')}
+                      </p>
+                    )}
+                    {busy && (
+                      <p className="text-[11px] text-base-500 mt-1">
+                        {busy.phase === 'done' ? 'Install complete' : `${busy.phase}${busy.pct != null ? ` — ${busy.pct}%` : ''}`}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {onDismiss && !busy && (
+                      <button
+                        onClick={() => void onDismiss(m.name)}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg border border-base-700 text-base-400 hover:text-base-200 hover:border-base-600 transition-colors"
+                      >
+                        Not now
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void onInstall(m.name)}
+                      disabled={!!busy}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-60"
+                    >
+                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                      {busy ? 'Installing…' : 'Install & use'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </section>
   )
 }
 

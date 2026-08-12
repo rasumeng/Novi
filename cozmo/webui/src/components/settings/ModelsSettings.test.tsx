@@ -12,6 +12,7 @@ const DISCOVERY: DiscoveryPayload = {
   ],
   missingModels: ['nomic-embed-text'],
   installedNames: ['llama3.1:8b', 'qwen2.5-coder:7b'],
+  dismissedRecommended: [],
   presets: [],
   activeExperience: 'medium',
   roles: { chat: 'llama3.1:8b', planner: 'llama3.1:8b', coder: 'qwen2.5-coder:7b', vision: '' },
@@ -24,6 +25,7 @@ function renderPage(props?: {
   source?: string
   customAssign?: Record<string, string>
   onSetModelsState?: StateFn
+  onDismiss?: (name: string) => Promise<boolean>
   discovery?: DiscoveryPayload
 }) {
   return render(
@@ -31,6 +33,7 @@ function renderPage(props?: {
       discovery={props?.discovery ?? DISCOVERY}
       installing={{}}
       onInstall={vi.fn()}
+      onDismiss={props?.onDismiss}
       onRefresh={vi.fn()}
       loading={false}
       mode={props?.mode ?? 'automatic'}
@@ -223,5 +226,86 @@ describe('ModelsSettings — M3.2 state machine', () => {
     expect(labels).toContain('Qwen 2.5 Coder 7B')
     // The missing embedding model is NOT offered as a capability choice.
     expect(labels).not.toContain('Nomic Embed Text')
+  })
+})
+
+describe('ModelsSettings — M3.4 consent', () => {
+  const RECO = (dismissed: string[] = []): DiscoveryPayload => ({
+    hardware: { ramGb: 32 },
+    models: [
+      { name: 'llama3.1:8b', displayName: 'Llama 3.1 8B', status: 'installed', size: null, capabilities: {}, recommended: true, tier: 'supported', qualification: 'supported', reasons: ['Tested with Cozmo'], caveats: [], approxRamGb: 5, eligibility: { hardwareFit: 'fits', hardwareConfidence: 'high', eligibleAutomatic: true, eligibleCustom: true } },
+      { name: 'qwen2.5vl:7b', displayName: 'Qwen 2.5 VL 7B', status: 'available', size: null, capabilities: { chat: true, vision: true }, recommended: true, tier: 'supported', qualification: 'trusted', reasons: ['Qualified: trusted', 'Best for your hardware'], caveats: [], approxRamGb: 8 },
+      { name: 'nomic-embed-text', displayName: 'Nomic Embed Text', status: 'available', size: null, capabilities: { embeddings: true }, recommended: false, tier: 'supported', qualification: 'supported', reasons: ['Works with Memory'], caveats: [], approxRamGb: 1 },
+    ],
+    missingModels: [],
+    installedNames: ['llama3.1:8b'],
+    dismissedRecommended: dismissed,
+    presets: [],
+    activeExperience: 'medium',
+    roles: { chat: 'llama3.1:8b', planner: 'llama3.1:8b', coder: 'llama3.1:8b', vision: 'llama3.1:8b' },
+  })
+
+  it('shows recommended-but-missing models with explicit consent actions', () => {
+    const onDismiss = vi.fn().mockResolvedValue(true)
+    renderPage({ discovery: RECO(), onDismiss })
+    const setup = within(screen.getByLabelText('Recommended model setup'))
+    expect(setup.getByText('Recommended model unavailable')).toBeTruthy()
+    expect(setup.getByText('Qwen 2.5 VL 7B')).toBeTruthy()
+    expect(setup.getByRole('button', { name: /install & use/i })).toBeTruthy()
+    expect(setup.getByRole('button', { name: /not now/i })).toBeTruthy()
+  })
+
+  it('does not install anything before an explicit consent click', () => {
+    const onInstall = vi.fn().mockResolvedValue(true)
+    render(<ModelsSettings discovery={RECO()} installing={{}} onInstall={onInstall} onDismiss={vi.fn().mockResolvedValue(true)} onRefresh={vi.fn()} loading={false} mode="automatic" />)
+    expect(onInstall).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /install & use/i }))
+    expect(onInstall).toHaveBeenCalledTimes(1)
+    expect(onInstall).toHaveBeenCalledWith('qwen2.5vl:7b')
+  })
+
+  it('Not now dismisses the recommendation without installing', () => {
+    const onDismiss = vi.fn().mockResolvedValue(true)
+    const onInstall = vi.fn()
+    render(<ModelsSettings discovery={RECO()} installing={{}} onInstall={onInstall} onDismiss={onDismiss} onRefresh={vi.fn()} loading={false} mode="automatic" />)
+    fireEvent.click(screen.getByRole('button', { name: /not now/i }))
+    expect(onDismiss).toHaveBeenCalledWith('qwen2.5vl:7b')
+    expect(onInstall).not.toHaveBeenCalled()
+  })
+
+  it('dismissed models disappear from the setup card', () => {
+    renderPage({ discovery: RECO(['qwen2.5vl:7b']) })
+    expect(screen.queryByText('Recommended model unavailable')).toBeNull()
+  })
+
+  it('embeddings never appear in the setup/install UI', () => {
+    renderPage({ discovery: RECO() })
+    const section = within(screen.getByLabelText('Recommended model setup'))
+    expect(section.queryByText(/embed/i)).toBeNull()
+    expect(section.queryByText('Nomic Embed Text')).toBeNull()
+    // Only the chat/vision recommended model is offered for install.
+    expect(section.getAllByRole('button', { name: /install & use/i })).toHaveLength(1)
+  })
+
+  it('consent card is hidden entirely in Custom mode', () => {
+    renderPage({ mode: 'custom', source: 'custom', customAssign: { chat: 'llama3.1:8b' }, discovery: RECO() })
+    expect(screen.queryByText('Recommended model unavailable')).toBeNull()
+  })
+
+  it('install is disabled and Not now hidden while an install is in flight', () => {
+    render(
+      <ModelsSettings
+        discovery={RECO()}
+        installing={{ 'qwen2.5vl:7b': { phase: 'installing', pct: 40 } }}
+        onInstall={vi.fn().mockResolvedValue(true)}
+        onDismiss={vi.fn().mockResolvedValue(true)}
+        onRefresh={vi.fn()}
+        loading={false}
+        mode="automatic"
+      />
+    )
+    const setup = within(screen.getByLabelText('Recommended model setup'))
+    expect((setup.getByRole('button', { name: /installing/i }) as HTMLButtonElement).disabled).toBe(true)
+    expect(setup.queryByRole('button', { name: /not now/i })).toBeNull()
   })
 })

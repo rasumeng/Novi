@@ -337,6 +337,75 @@ def resolve_automatic(
     return resolution
 
 
+def _set_if_changed(configuration, setting_id: str, value, by: str) -> bool:
+    """Persist ``value`` only when it actually differs from current state.
+
+    Returns True when a write (and therefore a config event / apply hook)
+    happened. Equal-value writes are skipped entirely so idempotent
+    recomputation never re-emits configuration events (no event loop).
+    """
+    if configuration.get(setting_id, None) == value:
+        return False
+    configuration.set(setting_id, value, by=by)
+    return True
+
+
+def recompute_automatic_if_active(configuration, installed=None, hardware=None,
+                                  catalog=None):
+    """M3.3 — reconcile Automatic ``llm.roles.*`` with current external state.
+
+    The single integration seam that connects the M2.4 resolver to real model
+    set / hardware lifecycle triggers (startup, model install completion,
+    explicit discovery refresh).
+
+    * ``models.mode != "automatic"`` → NOOP, returns ``(None, False)``. Custom
+      intent (``models.custom.assign.*``) is user-owned and never touched.
+    * Automatic → ``resolve_automatic`` re-runs against the current hardware +
+      installed models and only the values that actually changed are persisted
+      through the framework (compare → write → emit). A recomputation that
+      yields the same resolved state performs no writes and emits no events.
+    * ``models.mode`` and ``llm.meta.source`` stay ``"automatic"``.
+    * Never installs or downloads models. ``resolve_automatic`` remains the sole
+      decision function; this only decides whether to apply its result.
+
+    Empty-evidence guard: when discovery reports no usable installed model but a
+    non-empty role map is already persisted, the empty result is treated as
+    inconclusive (provider unavailable / cold start) rather than authoritative —
+    it is never applied. This prevents wiping a working role map on a transient
+    Ollama outage while keeping removals of individual models truthful (a valid
+    fallback still wins whenever any model remains).
+
+    Returns ``(AutomaticResolution | None, changed: bool)``.
+    """
+    if configuration.get("models.mode", "automatic") != "automatic":
+        return None, False
+
+    resolution = resolve_automatic(hardware=hardware, installed=installed,
+                                   catalog=catalog)
+
+    # Empty-evidence guard — never wipe a working role map on inconclusive
+    # discovery.
+    if not any(resolution.role_map.values()):
+        current = [configuration.get(f"llm.roles.{role}.model") or ""
+                   for role in ALL_ROLES]
+        if any(current):
+            return resolution, False
+
+    by = "automatic"
+    changed = False
+    for role, model in resolution.role_map.items():
+        if _set_if_changed(configuration, f"llm.roles.{role}.model", model, by):
+            changed = True
+    if resolution.embedding_model and _set_if_changed(
+            configuration, "embedding.model", resolution.embedding_model, by):
+        changed = True
+    if _set_if_changed(configuration, "models.mode", "automatic", by):
+        changed = True
+    if _set_if_changed(configuration, "llm.meta.source", "automatic", by):
+        changed = True
+    return resolution, changed
+
+
 def apply_automatic(configuration, installed=None, hardware=None):
     """Resolve Automatic and persist the result through the configuration
     framework (the single authoritative validate -> persist -> apply -> emit

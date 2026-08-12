@@ -6,6 +6,8 @@ import {
   setSetting,
   installModel,
   setModelsState as setModelsStateApi,
+  recomputeModels,
+  dismissRecommendedModel,
   type SchemaResponse,
   type SettingSchema,
   type DiscoveryPayload,
@@ -61,6 +63,11 @@ export function useFrameworkSettings() {
         const msg = JSON.parse(e.data)
         if (msg.type === 'config_updated' && msg.event?.path) {
           setValues((prev) => ({ ...prev, [msg.event.path]: msg.event.value }))
+        } else if (msg.type === 'models_resolved') {
+          // M3.3: Automatic recomputation completed on the backend — re-read
+          // the authoritative config + discovery so the Models page reflects
+          // the new resolved assignments.
+          void load()
         } else if (msg.type === 'install_progress' && msg.name) {
           setInstalls((prev) => ({
             ...prev,
@@ -92,9 +99,39 @@ export function useFrameworkSettings() {
   }, [showError])
 
   const refreshDiscovery = useCallback(async () => {
+    // M3.3: an explicit rescan is a discovery-refresh lifecycle event. Ask the
+    // backend to reconcile Automatic llm.roles.* first (NOOP under Custom),
+    // then re-read the live inventory + roles.
+    try {
+      await recomputeModels()
+    } catch {
+      /* recomputation is best-effort; discovery still refreshes */
+    }
     const disc = await fetchDiscovery()
     setDiscovery(disc)
   }, [])
+
+  // M3.4: user declined a recommended-model install ("not now"). Records the
+  // choice through the backend so it stays dismissed; the model remains
+  // installable from the Model library with a fresh explicit consent.
+  const dismissRecommended = useCallback(async (name: string) => {
+    const res = await dismissRecommendedModel(name)
+    if (!res.ok) {
+      showError(res.error ?? `Couldn't dismiss ${name}.`)
+      return false
+    }
+    setDiscovery((d) =>
+      d
+        ? {
+            ...d,
+            dismissedRecommended: d.dismissedRecommended?.includes(name)
+              ? d.dismissedRecommended
+              : [...(d.dismissedRecommended ?? []), name],
+          }
+        : d,
+    )
+    return true
+  }, [showError])
 
   const setModelsState = useCallback(async (mode: 'automatic' | 'custom', assign?: Record<string, string>) => {
     const res = await setModelsStateApi(mode, assign)
@@ -133,6 +170,7 @@ export function useFrameworkSettings() {
     set,
     install,
     refreshDiscovery,
+    dismissRecommended,
     setModelsState,
     reload: load,
   }
