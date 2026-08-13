@@ -227,7 +227,7 @@ export interface McpServerDetail {
   config: {
     command: string
     args: string[]
-    env: Record<string, string>
+    env: Record<string, string | { configured: boolean; masked: boolean }>
   }
   diagnostics: {
     transport: string

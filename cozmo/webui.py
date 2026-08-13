@@ -59,6 +59,13 @@ class WebUIBackend:
         telegram = TelegramLifecycle(ctx)
         telegram.start(ctx.config)
 
+        # M5.6: bind the Telegram tool to the lifecycle-owned runtime client.
+        # The tool never reads a module-global bot; it resolves the ACTIVE
+        # client (owned by the lifecycle) at call time so it tracks start/stop/
+        # restart and fails safely while disabled.
+        from .tools.telegram import make_telegram_send
+        registry.register("telegram_send", make_telegram_send(telegram.get_runtime_client))
+
         # M5.4: Connector Registry — thin identity/status seam over the two
         # connectors. The registry describes them; MCPManager/TelegramLifecycle
         # keep owning lifecycle. Status is the connectors' own (safe) surface.

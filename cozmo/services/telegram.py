@@ -132,6 +132,19 @@ class TelegramLifecycle:
         with self._lock:
             self._stop_locked()
 
+    # ── runtime client access (M5.6 injection seam) ────────────────
+
+    def get_runtime_client(self):
+        """The active TelegramBot runtime client, or None when not running.
+
+        M5.6: the lifecycle OWNS the active runtime client. Tools reach it only
+        through this accessor (never a module-global). Returns None while
+        disabled, stopped, errored, or between stop and next start, so a bound
+        tool fails safely whenever Telegram is unavailable.
+        """
+        with self._lock:
+            return self._bot
+
     # ── status ────────────────────────────────────────────────────
 
     def get_status(self) -> dict:

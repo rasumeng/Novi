@@ -1677,16 +1677,21 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         if not server_cfg:
             return {"ok": False, "error": f"server '{name}' not found in config"}
         try:
-            from .runtime.mcp_host import MCPHost
+            from .runtime.mcp.runtime_client import MCPRuntimeClient
             import asyncio
-            mcp = MCPHost({"servers": {name: server_cfg}})
             async def _test():
-                await mcp.connect({name: server_cfg})
-                wrappers = await mcp.get_tool_wrappers()
-                await mcp.disconnect()
-                return len(wrappers)
-            count = asyncio.run(_test())
-            return {"ok": True, "tools": count}
+                client = MCPRuntimeClient(name)
+                try:
+                    await client.connect(server_cfg)
+                except Exception as e:
+                    return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+                wrappers = await client.list_tools()
+                await client.close()
+                return {"ok": True, "tools": len(wrappers)}
+            result = asyncio.run(_test())
+            if not result.get("ok"):
+                return result
+            return result
         except Exception as e:
             print(f"[cozmo] MCP test failed for '{name}': {e!r}")
             return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}

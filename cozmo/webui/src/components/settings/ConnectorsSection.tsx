@@ -523,10 +523,10 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-base-500 mb-2">Configuration</p>
                   <div className="space-y-2">
-                    {(Object.entries(serverDetail.config.env) as [string, string][]).map(([key, val]) => (
+                    {(Object.entries(serverDetail.config.env ?? {})).map(([key, val]) => (
                       <div key={key}>
                         <label className="block text-[10px] text-base-500 mb-0.5">{key}</label>
-                        <input value={val} readOnly type="password" className="w-full bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-xs text-base-200 font-mono outline-none" />
+                        <input value={typeof val === 'string' ? val : '••••••••'} readOnly type="password" className="w-full bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-xs text-base-200 font-mono outline-none" />
                       </div>
                     ))}
                   </div>

@@ -233,7 +233,6 @@ def coding_session(ctx, project_path: Path, query: str | None = None, auto: bool
 
 def run_telegram(ctx):
     from .services.telegram import build_telegram_bot
-    from .tools.telegram import set_bot_instance
 
     token = ctx.config.get("telegram", {}).get("bot_token", "")
     if not token:
@@ -242,7 +241,6 @@ def run_telegram(ctx):
 
     allowed = ctx.config.get("telegram", {}).get("allowed_chat_ids", [])
     bot = build_telegram_bot(ctx, token, allowed_chat_ids=allowed)
-    set_bot_instance(bot)
     print("Cozmo Telegram bot started. Press Ctrl+C to stop.")
     bot.run()
 
@@ -338,27 +336,34 @@ def main():
                 stop_ollama(proc)
 
     elif args.command == "mcp":
-        from .runtime.mcp_host import MCPHost
+        from .runtime.mcp.runtime_client import MCPRuntimeClient
         import asyncio
 
         async def _run_mcp():
             cfg = config.load()
-            mcp_cfg = cfg.get("mcp", {}).get("servers", {})
-            mcp = MCPHost(cfg.get("mcp", {}))
+            mcp_cfg = cfg.get("mcp", {}).get("servers", {}) or {}
+            from .tools import TOOL_REGISTRY
             if args.action == "connect":
-                print("[mcp] Connecting to servers...")
-                await mcp.connect(mcp_cfg)
-                wrappers = await mcp.get_tool_wrappers()
-                print(f"[mcp] Got {len(wrappers)} tool wrappers")
-                from .tools import TOOL_REGISTRY
-                for w in wrappers:
-                    TOOL_REGISTRY[w.__name__] = w
-                    print(f"  Registered: {w.__name__}")
+                for name, server_cfg in mcp_cfg.items():
+                    print(f"[mcp] Connecting to {name}...")
+                    client = MCPRuntimeClient(name)
+                    try:
+                        await client.connect(server_cfg)
+                    except Exception as e:
+                        print(f"[mcp] Failed to connect to {name}: {e}")
+                        continue
+                    wrappers = await client.list_tools()
+                    print(f"[mcp] Got {len(wrappers)} tool wrappers from {name}")
+                    for w in wrappers:
+                        TOOL_REGISTRY[w.__name__] = w
+                        print(f"  Registered: {w.__name__}")
+                    await client.close()
             elif args.action == "list":
-                for name, _ in mcp.sessions:
+                for name in mcp_cfg:
                     print(f"  {name}")
             elif args.action == "disconnect":
-                await mcp.disconnect()
+                for name in mcp_cfg:
+                    print(f"  {name}")
 
         asyncio.run(_run_mcp())
 

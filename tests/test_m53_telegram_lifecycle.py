@@ -240,23 +240,24 @@ def test_apply_hook_fires_on_telegram_set(tmp_path, ctx, factory):
 
 
 def test_cli_telegram_command_unchanged(monkeypatch):
-    """``cozmo telegram`` still builds + runs the bot, ignoring ``enabled``."""
+    """``cozmo telegram`` still builds + runs the bot, ignoring ``enabled``.
+
+    M5.6: the CLI builds its own command-scoped bot directly (the allowed
+    exception) and no longer registers a module-global ``set_bot_instance``.
+    """
     import cozmo.cli as cli_mod
     import cozmo.services.telegram as tg_svc
-    import cozmo.tools.telegram as tg_tools
 
     seen = {}
 
     def fake_build(ctx, token, *, allowed_chat_ids=()):
         seen["token"] = token
         seen["allowed"] = list(allowed_chat_ids)
-        return FakeBot(token=token, allowed=allowed_chat_ids)
-
-    def fake_set_bot(bot):
-        seen["set_bot"] = bot
+        bot = FakeBot(token=token, allowed=allowed_chat_ids)
+        seen["bot"] = bot
+        return bot
 
     monkeypatch.setattr(tg_svc, "build_telegram_bot", fake_build)
-    monkeypatch.setattr(tg_tools, "set_bot_instance", fake_set_bot)
 
     class FakeCtx:
         config = {"telegram": {"enabled": False, "bot_token": "CLITOK",
@@ -265,8 +266,7 @@ def test_cli_telegram_command_unchanged(monkeypatch):
     cli_mod.run_telegram(FakeCtx())
     assert seen["token"] == "CLITOK"
     assert seen["allowed"] == [7]
-    assert seen["set_bot"] is not None
-    assert getattr(seen["set_bot"], "ran", False) or seen["set_bot"].ran
+    assert seen["bot"].ran is True  # bot.run() invoked on the CLI's own bot
 
 
 def test_cli_telegram_no_token_prints_error(monkeypatch, ctx, factory):

@@ -295,3 +295,47 @@ Suite: 33 new M5.4 tests green; M5.2 redaction, M5.3 lifecycle, registry /
 executor / configuration regressions green. Full-suite state unchanged from the
 E-3 checkpoint: the only reds are the same 7 pre-existing ordering-dependent
 `test_tool_retrieval.py` failures.
+
+---
+
+## 2026-08-12 — M5.5: MCP seams decomposition + hermetic test suite
+
+Milestone 5.5 decomposed the former all-in-one `MCPManager` into independent,
+independently-testable seams under `cozmo/runtime/mcp/` while keeping every
+legacy surface (webui, CLI, `/api/mcp/test`, M5.2/M5.3/M5.4 suites) working.
+
+- **`cozmo/runtime/mcp/lifecycle.py`** — `MCPLifecycle` seam: owns which
+  configured servers run (mcp.enabled + per-server enabled gating), the
+  background event loop, connect/disconnect/reconnect reconciliation, error
+  isolation (one server's failure never takes the others down), and clean
+  idempotent shutdown. Delegates protocol/session work to the runtime client;
+  passes tool discovery to the discovery seam. No tool execution, no
+  permissions, no config writes.
+- **`cozmo/runtime/mcp/runtime_client.py`** — `MCPRuntimeClient` seam: one
+  server's live connection/session through an injectable host factory
+  (default `MCPHost`). Connect/list_tools/close, failure records `last_error`
+  and re-raises, close idempotent. In-memory only, disposable.
+- **`cozmo/runtime/mcp/discovery.py`** — `MCPToolDiscovery` seam: registers a
+  server's discovered wrappers into the EXISTING `ToolRegistry` (never a
+  second registry), replace-on-rediscover (no duplicate registrations),
+  unregister removes exactly the owning server's tools. Loop-bound
+  async→sync bridging is supplied by the lifecycle; tests inject identity.
+- **`cozmo/runtime/mcp/status.py`** — `MCPStatus` seam: read-only observer of
+  lifecycle + discovery. Safe surface only (name/enabled/connected/state/
+  error/tool count). Never starts/stops/reconnects, never exposes env,
+  commands, tokens, or raw config. Works loop-on and loop-off.
+- **`cozmo/runtime/providers/mcp.py`** — `MCPManager` is now a thin facade that
+  delegates to the same seam instances and keeps the legacy public surface and
+  test-visible internals (`_loop`/`_hosts`/`_server_tools`/`_configured`).
+- **Shared runtime primitives** — the CLI `mcp` command and the WebUI
+  `POST /api/mcp/test` endpoint now drive connections through
+  `MCPRuntimeClient` (the same seam the lifecycle uses) instead of a second,
+  incompatible connection path. `/api/mcp/test` keeps test connections
+  isolated from the configured lifecycle — it builds an ephemeral client and
+  never touches the shared manager's sessions.
+
+Suite: 30 new hermetic M5.5 tests green (all seams instantiated directly with a
+fake runtime — no real MCP servers/subprocesses, no MCPHost, no MCPManager
+facade). Full M5.2 / M5.3 / M5.4 / webui-boot regressions green. Full-suite
+state unchanged: the only reds are the same 7 pre-existing ordering-dependent
+`test_tool_retrieval.py` failures.
