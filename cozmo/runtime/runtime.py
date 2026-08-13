@@ -701,14 +701,20 @@ class CozmoRuntime:
                     step_final = ""
                     step_ok = True
                     step_reason = "completed"
+                    step_tools: list[dict] = []
                     for chunk in self._run_agent_loop(
                             ctx, mm, runnable, intent_str, step_budget, base_msgs,
                             step=plan_step, step_index_base=len(ctx.trace.steps)):
                         if chunk[0] == _LOOP_DONE:
                             step_final, step_reason, step_ok = chunk[1], chunk[2], chunk[3]
                         else:
+                            if chunk[0] == "tool_call" and len(chunk) >= 3:
+                                step_tools.append(("tool_call", chunk))
+                            elif chunk[0] == "tool_result" and len(chunk) >= 4:
+                                step_tools.append(("tool_result", chunk))
                             yield chunk
 
+                    tools_payload = self._build_step_tool_payload(step_tools)
                     if step_ok:
                         plan_step.status = PlanStepStatus.COMPLETED
                         self._emit_bus(EventType.STEP_COMPLETED,
@@ -716,7 +722,8 @@ class CozmoRuntime:
                                        plan_id=plan_ref.id,
                                        step_id=plan_step.id,
                                        index=idx,
-                                       result=step_final[:2000])
+                                       result=step_final[:2000],
+                                       tools=tools_payload)
                         yield ("step.completed", plan_step.id, step_final[:2000])
                         step_finals.append(step_final)
                     else:
@@ -784,6 +791,32 @@ class CozmoRuntime:
             msg = f"I hit an error: {e}"
             yield ("token", msg)
             self._remember(user_input, msg, conversation_id=ctx.conversation_id)
+    def _build_step_tool_payload(self, step_tools: list[tuple[str, tuple]]) -> list[dict]:
+        """Pair tool_call/tool_result chunks into redacted checkpoint records.
+
+        ``step_tools`` is the ordered list of ``("tool_call", chunk)`` /
+        ``("tool_result", chunk)`` pairs captured from the step's agent loop.
+        Tool calls and results interleave in order (one result per call), so
+        pairing by position keeps name/args attached to their result.
+
+        Redaction happens here (runtime side) so anything reaching the
+        composition root's ``STEP_COMPLETED`` event — and from there
+        ``Checkpoint.tool_states`` — is already safe. Never returns None.
+        """
+        from .execution_redaction import build_tool_record
+
+        calls: list[dict] = []
+        pending: list[dict] = []
+        for kind, chunk in step_tools:
+            if kind == "tool_call":
+                pending.append({"name": chunk[1], "args": chunk[2]})
+            elif kind == "tool_result" and pending:
+                call = pending.pop(0)
+                calls.append(build_tool_record(
+                    call["name"], call["args"], chunk[2],
+                    success=not str(chunk[2]).startswith("Error"),
+                ))
+        return calls
     def _emit_bus(self, event_type, **data):
         """Publish a lifecycle event to the runtime event bus, if any."""
         if self.event_bus is None:

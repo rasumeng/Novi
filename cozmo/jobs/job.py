@@ -55,10 +55,21 @@ class Checkpoint:
                           == 0-based global plan index of the NEXT step that
                              must execute.
       Producers write ``completed_step_index + 1`` (never an arbitrary
-      counter). Consumers (ContinuationService.next_step, Runtime
+      counter).       Consumers (ContinuationService.next_step, Runtime
       ``resume_from``, JobStore recovery ``next_step``) must pass this value
       through UNCHANGED — no ``+1`` conversion is permitted anywhere.
       A checkpoint with no completed steps carries ``step == 0``.
+
+    PHASE 6C EXECUTION-CONTEXT CONTRACT:
+      ``tool_states`` and ``messages`` hold a MINIMAL, schema-constrained,
+      REDACTED slice of what a step did — tool invocations (name + redacted
+      args + result preview) and a bounded step summary. They are durable
+      trace for audit/UI, never a replay buffer: resume is at-least-once and
+      is driven exclusively by ``Checkpoint.step`` (the completed-step count),
+      never by re-feeding ``messages`` into a live loop. Producers must ensure
+      anything written here is already redacted (runtime redacts tool args
+      before the ``STEP_COMPLETED`` event); durable state must never carry
+      credentials, config snapshots, or MCP/connector session state.
     """
 
     job_id: str = ""

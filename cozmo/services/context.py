@@ -51,6 +51,7 @@ class CozmoContext:
         self._job_manager: object | None = None
         self._job_lifecycle: object | None = None
         self._continuation: object | None = None
+        self._recovered: bool = False
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -338,6 +339,22 @@ class CozmoContext:
         except Exception as e:
             log.warning("startup job recovery failed: %s", e)
             return []
+
+    def recover_once(self, bus=None) -> list[dict]:
+        """Idempotent recovery sweep, run at most once per CozmoContext.
+
+        ``build_application_execution`` calls this so every non-WebUI surface
+        (CLI, Telegram, TaskQueue, scheduler) shares the startup interruption
+        sweep WebUI gets via ``warmup``. The ``_recovered`` flag keeps it a
+        single scan per process even when the surface constructs executions
+        repeatedly (Telegram builds one per message); ``mark_interrupted`` is
+        already idempotent, so a second scan would be a harmless no-op but a
+        wasted job-store walk.
+        """
+        if self._recovered:
+            return []
+        self._recovered = True
+        return self.recover_jobs(bus=bus)
 
     # ── lifecycle ───────────────────────────────────────────────────────
 

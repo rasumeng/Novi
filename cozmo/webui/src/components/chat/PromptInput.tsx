@@ -408,7 +408,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           ))}
         </div>
       )}
-      <div className="flex items-center justify-between px-2.5 pb-2.5">
+      <div className="flex items-center justify-between px-2.5 pb-1.5">
         <div className="flex items-center gap-1">
           <div className="relative" ref={menuRef}>
             <button

@@ -140,18 +140,61 @@ class JobLifecycle:
         done = self._completed_steps.setdefault(job_id, [])
         if step_id and step_id not in done:
             done.append(step_id)
+        # Step execution context (Phase 6C): tool invocations redacted at the
+        # runtime before they reached this event, and re-redacted HERE at the
+        # durability gate (defense-in-depth — this is the last code path before
+        # durable state). Stored under a step-scoped key so a checkpoint carries
+        # *what the step did* without replaying it — resume is at-least-once,
+        # driven by ``Checkpoint.step`` only.
+        tool_states: dict = {}
+        tools = event.data.get("tools")
+        if isinstance(tools, list):
+            tool_states[f"step:{step_id}"] = self._redact_tools(tools)
+        # Redacted step summary (bounded) — the durable trace of the step.
+        result = event.data.get("result", "")
+        messages: list = []
+        if step_id:
+            messages.append({
+                "kind": "step",
+                "step_id": step_id,
+                "index": index,
+                "output": result[:1000],
+            })
         # Checkpoint captures: job_id, task_id, plan_id, current step index,
-        # completed steps, and (empty) execution state. Additive — never alters
-        # the current run.
+        # completed steps, and the minimal (redacted) execution context.
+        # Additive — never alters the current run.
         cp = Checkpoint(
             job_id=job_id,
             task_id=task_id,
             plan_id=plan_id,
             step=index + 1,      # resume at the step *after* the one just done
             completed_steps=list(done),
-            messages=[],
+            messages=messages,
+            tool_states=tool_states,
         )
         self._manager.checkpoint(job_id, cp)
+
+    def _redact_tools(self, tools: list) -> list:
+        """Final redaction gate before durable state (Phase 6C defense-in-depth).
+
+        Even though the runtime redacts tool args before building the
+        ``STEP_COMPLETED`` payload, this composition-root filter guarantees a
+        secret-shaped key can never reach ``Checkpoint.tool_states`` no matter
+        which producer emitted the event.
+        """
+        from ..runtime.execution_redaction import redact_value
+
+        out: list = []
+        for rec in tools:
+            if not isinstance(rec, dict):
+                continue
+            item = dict(rec)
+            if "args" in item:
+                item["args"] = redact_value(item.get("args"))
+            if isinstance(item.get("result"), str) and len(item["result"]) > 500:
+                item["result"] = item["result"][:500]
+            out.append(item)
+        return out
 
     # ── ExecutionHistory population (Phase 4B) ─────────────────────────
 

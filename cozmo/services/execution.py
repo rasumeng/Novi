@@ -298,10 +298,18 @@ def build_application_execution(ctx, *, project_index=None, auto: bool = False):
         denying, exactly as the previous CLI did).
 
     Returns ``(runtime, coordinator, event_bus)``.
+
+    Startup recovery: any Job left nonterminal by a previous process is
+    marked INTERRUPTED once per CozmoContext (``ctx.recover_once``) before the
+    surface can start new work — parity with the WebUI ``warmup`` sweep, so
+    CLI/Telegram never leave persisted executions stranded.
     """
     from ..runtime.event_bus import EventBus
 
     bus = EventBus()
+    recover = getattr(ctx, "recover_once", None)
+    if recover is not None:
+        recover(bus=bus)
     runtime = ctx.create_runtime(
         project_index=project_index,
         event_bus=bus,
