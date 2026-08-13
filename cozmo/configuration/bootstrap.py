@@ -162,14 +162,22 @@ def _bind_apply_hooks(cfg: Configuration):
             except Exception as e:
                 log.warning("mcp apply hook failed for %s: %s", path, e)
 
+    def integrations_apply(path, value, previous):
+        hooks = _hooks.get("integrations")
+        for fn in hooks:
+            try:
+                fn(path, value, previous)
+            except Exception as e:
+                log.warning("integrations apply hook failed for %s: %s", path, e)
+
     cfg.registry.require_owner("runtime", runtime_apply)
     cfg.registry.require_owner("memory", memory_apply)
     cfg.registry.require_owner("mcp", mcp_apply)
     cfg.registry.require_owner("providers", lambda p, v, prev: None)
     cfg.registry.require_owner("tools", lambda p, v, prev: None)
-    # connectors/integrations apply hooks arrive with M5 (IntegrationManager).
-    # Bound here so settings under this owner persist + propagate cleanly.
-    cfg.registry.require_owner("integrations", lambda p, v, prev: None)
+    # connectors/integrations apply hooks arrive with M5 (Telegram lifecycle
+    # seam). Bound here so settings under this owner persist + propagate live.
+    cfg.registry.require_owner("integrations", integrations_apply)
 
 
 # Subsystem hooks: namespaced lists of callables subsystems register to react

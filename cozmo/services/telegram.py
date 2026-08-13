@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Callable, Optional
 
 from ..telegram_bot import TelegramBot
@@ -87,3 +88,89 @@ def build_telegram_bot(ctx, token: str, *, allowed_chat_ids=()) -> TelegramBot:
     """Wire a TelegramBot adapter to the coordinator-backed handler."""
     return TelegramBot(token, build_telegram_handler(ctx),
                        allowed_chat_ids=allowed_chat_ids)
+
+
+class TelegramLifecycle:
+    """Minimal start/stop/status seam driving the existing TelegramBot.
+
+    M5.3 lifecycle owner: ``telegram.enabled`` under the ``integrations``
+    config owner. NOT the M5.6 connector abstraction — just enough seam so the
+    enabled flag controls the real bot lifecycle from the WebUI/runtime path.
+
+    State machine: ``stopped -> starting -> running`` (or ``error``), then
+    ``running -> stopping -> stopped``. Startup failure never rewrites the
+    persisted configuration — the user's intent stays and the error is exposed
+    through :meth:`get_status` as ``last_error``.
+    """
+
+    def __init__(self, ctx, *, bot_factory=None):
+        self._ctx = ctx
+        self._bot_factory = bot_factory or build_telegram_bot
+        self._bot: TelegramBot | None = None
+        self._enabled = False
+        self._state = "stopped"
+        self._last_error: str | None = None
+        self._lock = threading.Lock()
+
+    # ── lifecycle ─────────────────────────────────────────────────
+
+    def apply(self, config: dict) -> None:
+        """Reconcile the bot against the configured intent (idempotent)."""
+        with self._lock:
+            self._enabled = bool(config.get("telegram", {}).get("enabled", False))
+            if self._enabled:
+                self._start_locked(config)
+            else:
+                self._stop_locked()
+
+    def start(self, config: dict) -> None:
+        """Initial start from the application path. Respects the setting."""
+        self.apply(config)
+
+    def stop(self) -> None:
+        """Stop the bot. Idempotent; safe when never started."""
+        with self._lock:
+            self._stop_locked()
+
+    # ── status ────────────────────────────────────────────────────
+
+    def get_status(self) -> dict:
+        """Safe status surface. Never exposes the token or any secret."""
+        with self._lock:
+            return {
+                "enabled": self._enabled,
+                "state": self._state,
+                "running": self._state == "running",
+                "last_error": self._last_error,
+            }
+
+    # ── internals ─────────────────────────────────────────────────
+
+    def _start_locked(self, config: dict) -> None:
+        if self._state in ("running", "starting"):
+            return
+        token = config.get("telegram", {}).get("bot_token", "")
+        if not token:
+            self._last_error = "telegram.bot_token is not configured"
+            self._state = "error"
+            return
+        self._state = "starting"
+        try:
+            allowed = config.get("telegram", {}).get("allowed_chat_ids", [])
+            bot = self._bot_factory(self._ctx, token, allowed_chat_ids=allowed)
+            bot.start()
+            self._bot = bot
+            self._state = "running"
+            self._last_error = None
+        except Exception as e:
+            self._last_error = f"{type(e).__name__}: {e}"
+            self._state = "error"
+
+    def _stop_locked(self) -> None:
+        if self._bot is not None:
+            try:
+                self._bot.stop()
+            except Exception:
+                pass
+            self._bot = None
+        self._state = "stopped"

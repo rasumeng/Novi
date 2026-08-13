@@ -16,6 +16,7 @@ from .registry import (
     UnknownSettingError,
 )
 from .manager import Configuration, ConfigurationError, ValidationError
+from .redaction import ConfigRedactor
 from .qualification import Qualification
 
 __all__ = [
@@ -34,5 +35,6 @@ __all__ = [
     "Configuration",
     "ConfigurationError",
     "ValidationError",
+    "ConfigRedactor",
     "Qualification",
 ]

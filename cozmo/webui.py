@@ -51,6 +51,14 @@ class WebUIBackend:
         mcp = MCPManager(registry)
         mcp.start(ctx.config)
 
+        # Telegram lifecycle seam (M5.3): the ``telegram.enabled`` setting
+        # drives the bot through the ``integrations`` apply hook. The bot is
+        # only built when the runtime explicitly requests it (enabled == true).
+        from .services.telegram import TelegramLifecycle
+        from .configuration.bootstrap import get_configuration as _get_configuration
+        telegram = TelegramLifecycle(ctx)
+        telegram.start(ctx.config)
+
         # Shared skills
         skills = _load_all_skills()
 
@@ -94,13 +102,20 @@ class WebUIBackend:
 
         def _safe_mcp_refresh(manager, path, value, previous):
             try:
-                manager.refresh_from_config(ctx.config)
+                manager.refresh_from_config(_get_configuration().snapshot())
             except Exception as e:
                 print(f"[cozmo] MCP config refresh failed: {e}")
+
+        def _safe_telegram_refresh(lifecycle, path, value, previous):
+            try:
+                lifecycle.apply(_get_configuration().snapshot())
+            except Exception as e:
+                print(f"[cozmo] Telegram config refresh failed: {e}")
 
         from .configuration.bootstrap import register_apply_hook as _ra
         _ra("runtime", _reload_router)
         _ra("mcp", lambda p, v, prev: _safe_mcp_refresh(mcp, p, v, prev))
+        _ra("integrations", lambda p, v, prev: _safe_telegram_refresh(telegram, p, v, prev))
 
         return {
             "model_service": ctx.model_service,
@@ -110,6 +125,7 @@ class WebUIBackend:
             "brain": ctx.brain,
             "registry": registry,
             "mcp": mcp,
+            "telegram": telegram,
             "skills": skills,
             "capability_registry": capability_registry,
             "model_router": model_router,

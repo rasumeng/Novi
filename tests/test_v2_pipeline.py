@@ -271,6 +271,35 @@ class TestSession:
         result = session._ask_permission("read", {"path": "test.txt"})
         assert result is True
 
+    def test_session_permission_stale_response_dropped(self, session):
+        """A response for the wrong request id must never resolve the gate."""
+        session._perm_request_id = "perm-current"
+        session._perm_allowed = False
+        session._perm_event.clear()
+        session.answer_permission(True, request_id="perm-stale")
+        assert session._perm_allowed is False
+        assert session._perm_event.is_set() is False
+
+        session.answer_permission(True, request_id="perm-current")
+        assert session._perm_allowed is True
+        assert session._perm_event.is_set() is True
+
+    def test_session_permission_stop_invalidates_request(self, session):
+        """stop() must invalidate the in-flight request and unblock with deny."""
+        session._perm_request_id = "perm-abc"
+        session._perm_allowed = False
+        session._perm_event.clear()
+        session.stop()
+        assert session._perm_request_id == ""
+        assert session._perm_allowed is False
+        assert session._perm_event.is_set() is True
+        # a late answer for the invalidated request is dropped, so the event
+        # never flips to granted and the worker, if still waiting, fails closed
+        session._perm_event.clear()
+        session.answer_permission(True, request_id="perm-abc")
+        assert session._perm_allowed is False
+        assert not session._perm_event.is_set()
+
     def test_session_plan_flow(self, session):
         approved = []
         def answer():

@@ -293,6 +293,7 @@ class CozmoRuntime:
             elif k == "permission_mode":
                 self._perm_mode = v
                 self._perms.auto = (v == "bypass")
+                self.tool_executor.set_perm_mode(v)
             elif k == "stop_event":
                 self.stop_event = v
             else:

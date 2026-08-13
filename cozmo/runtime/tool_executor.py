@@ -107,6 +107,9 @@ class ToolExecutor:
     def set_permission_callback(self, callback: Callable | None):
         self._permission_callback = callback
 
+    def set_perm_mode(self, mode: str):
+        self._perm_mode = mode
+
     # ── tool collection ────────────────────────────────────────────────
 
     def build_lc_tools(self) -> dict:

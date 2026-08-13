@@ -1,8 +1,9 @@
 """MCP provider — persistent server connections in a background event loop."""
 
 import asyncio
-import time
 import threading
+import time
+
 from ..mcp_host import MCPHost
 from . import Provider
 
@@ -12,6 +13,19 @@ class MCPManager(Provider):
 
     Extends Provider base class. Connects on startup, keeps connections alive
     across chat sessions, supports health checks and per-server reconnect.
+
+    M5.3 lifecycle:
+      * ``mcp.enabled`` (and per-server ``enabled``) are authoritative. When
+        disabled, no loop is created, no connections are made, and no MCP tools
+        are registered.
+      * ``start`` / ``refresh_from_config`` reconcile runtime state against the
+        configured intent; reapplying unchanged configuration is a no-op.
+      * ``stop`` disconnects every host, unregisters the MCP tools it owns, and
+        stops the background loop. Safe when never started; idempotent.
+
+    MCP remains stateless/runtime-only: every field here is in-memory and
+    disappears on shutdown. Configuration (config.toml) is never rewritten by
+    the runtime — configuration intent is the only thing persisted.
     """
 
     def __init__(self, registry):
@@ -25,26 +39,83 @@ class MCPManager(Provider):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self._server_names: set[str] = set()
+        self._configured: set[str] = set()
+        self._enabled: bool = False
+        self._state: str = "stopped"
+        self._lock = threading.Lock()
+
+    # ── lifecycle ──────────────────────────────────────────────────
 
     def start(self, config: dict, registry=None) -> None:
-        """Connect all configured MCP servers in a background event loop."""
+        """Connect configured MCP servers when ``mcp.enabled`` is true."""
         if registry is not None:
             self._registry = registry
-        servers = config.get("mcp", {}).get("servers", {})
-        if not servers:
+        self.refresh_from_config(config)
+
+    def refresh_from_config(self, config: dict) -> None:
+        """Reconcile runtime connections against the configured intent."""
+        with self._lock:
+            self._apply_config(config)
+
+    def _apply_config(self, config: dict) -> None:
+        enabled = bool(config.get("mcp", {}).get("enabled", True))
+        self._enabled = enabled
+        servers = config.get("mcp", {}).get("servers", {}) or {}
+        # Per-server ``enabled`` is a real config leaf (``mcp.servers.<name>``
+        # is a registered namespace). A falsy value keeps that server out of
+        # the runtime entirely.
+        active = {
+            name: cfg for name, cfg in servers.items() if cfg.get("enabled", True)
+        }
+        self._configured = set(active.keys())
+
+        if not enabled or not active:
+            self._disconnect_all_sync()
+            self._stop_loop()
+            self._state = "stopped"
+            return
+
+        if self._loop is None or self._loop.is_closed():
+            self._state = "starting"
+            self._ensure_loop()
+
+        new_names = set(active.keys())
+        current_names = set(self._server_names)
+
+        for name in sorted(current_names - new_names):
+            self._disconnect_server(name)
+        for name in sorted(new_names - current_names):
+            self._connect_server(name, active[name])
+        for name in sorted(new_names & current_names):
+            if self._server_configs.get(name) != active[name]:
+                self._reconnect_server(name, active[name])
+        self._state = "running"
+
+    def _ensure_loop(self) -> None:
+        if self._loop is not None and not self._loop.is_closed():
             return
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._run_loop, daemon=True)
         self._loop_thread.start()
 
-        future = asyncio.run_coroutine_threadsafe(
-            self._connect_all(servers), self._loop
-        )
-        future.result()
+    def _stop_loop(self) -> None:
+        loop, thread = self._loop, self._loop_thread
+        self._loop = None
+        self._loop_thread = None
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            return
+        if thread:
+            thread.join(timeout=5)
 
     def _run_loop(self):
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
+
+    # ── connection helpers ─────────────────────────────────────────
 
     async def _connect_all(self, servers: dict) -> None:
         for name, cfg in servers.items():
@@ -78,27 +149,142 @@ class MCPManager(Provider):
             return future.result()
         return sync_fn
 
-    # ── status ──────────────────────────────────────────────────
+    def _connect_server(self, name: str, cfg: dict) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._connect_one(name, cfg), loop
+        )
+        try:
+            future.result()
+        except Exception:
+            pass
+
+    def _disconnect_server(self, name: str) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._disconnect_one(name), loop
+        )
+        try:
+            future.result()
+        except Exception:
+            pass
+
+    def _reconnect_server(self, name: str, cfg: dict) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._reconnect_one(name, cfg), loop
+        )
+        try:
+            future.result()
+        except Exception:
+            pass
+
+    async def _disconnect_one(self, name: str) -> None:
+        host = self._hosts.pop(name, None)
+        if host:
+            try:
+                await host.disconnect()
+            except Exception:
+                pass
+        self._unregister_server_tools(name)
+        self._server_names.discard(name)
+        self._server_configs.pop(name, None)
+        self._server_tools.pop(name, None)
+        self._server_startup_time.pop(name, None)
+        self._server_last_ping.pop(name, None)
+        self._server_response_time.pop(name, None)
+
+    def _disconnect_all_sync(self) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            self._unregister_all_tools()
+            self._clear_runtime_state()
+            return
+        future = asyncio.run_coroutine_threadsafe(
+            self._disconnect_all(), loop
+        )
+        try:
+            future.result(timeout=10)
+        except Exception:
+            pass
+
+    async def _disconnect_all(self) -> None:
+        for name, host in self._hosts.items():
+            try:
+                await host.disconnect()
+            except Exception:
+                pass
+        for name in list(self._server_names):
+            self._unregister_server_tools(name)
+        self._clear_runtime_state()
+
+    def _clear_runtime_state(self) -> None:
+        self._hosts.clear()
+        self._server_configs.clear()
+        self._server_tools.clear()
+        self._server_startup_time.clear()
+        self._server_last_ping.clear()
+        self._server_response_time.clear()
+        self._server_names.clear()
+        self._configured = set()
+
+    # ── tool registration cleanup ──────────────────────────────────
+
+    def _unregister_all_tools(self) -> None:
+        for name in list(self._server_tools.keys()):
+            self._unregister_server_tools(name)
+
+    def _unregister_server_tools(self, name: str) -> None:
+        for tool in self._server_tools.get(name, []):
+            try:
+                self._registry.unregister(tool["name"])
+            except Exception:
+                pass
+
+    # ── stop ───────────────────────────────────────────────────────
+
+    def stop(self) -> None:
+        """Disconnect every MCP host, drop MCP tools, stop the background loop.
+
+        Idempotent and safe when MCP was never started.
+        """
+        with self._lock:
+            self._disconnect_all_sync()
+            self._stop_loop()
+            self._state = "stopped"
+
+    # ── status ─────────────────────────────────────────────────────
 
     def get_status(self) -> dict[str, dict]:
         """Return per-server status with tools list.
 
         Returns:
-            {"servers": {"github": {"status": "ok", "tools": [{"name":..., "description":...}]}}}
+            {"<server>": {"status": "ok", "tools": [{"name":..., "description":...}]}}
         """
-        if not self._loop or self._loop.is_closed():
+        with self._lock:
+            loop = self._loop
+            names = list(self._server_names)
+            tool_cache = {n: list(self._server_tools.get(n, [])) for n in names}
+        if not loop or loop.is_closed():
+            keys = names or list(self._server_tools.keys())
             return {
-                n: {"status": "disconnected", "tools": self._server_tools.get(n, [])}
-                for n in list(self._server_names) or list(self._server_tools.keys())
+                n: {"status": "disconnected", "tools": tool_cache.get(n, [])}
+                for n in keys
             }
         future = asyncio.run_coroutine_threadsafe(
-            self._get_status(), self._loop
+            self._get_status(names), loop
         )
         return future.result()
 
-    async def _get_status(self) -> dict[str, dict]:
+    async def _get_status(self, names: list[str]) -> dict[str, dict]:
         result: dict[str, dict] = {}
-        for name in self._server_names:
+        for name in names:
             host = self._hosts.get(name)
             if not host:
                 result[name] = {"status": "disconnected", "tools": self._server_tools.get(name, [])}
@@ -110,33 +296,53 @@ class MCPManager(Provider):
                 result[name] = {"status": "error", "tools": self._server_tools.get(name, [])}
         return result
 
-    # ── server detail ───────────────────────────────────────────
+    def get_lifecycle(self) -> dict:
+        """Safe lifecycle summary. Never exposes config, env, or secrets."""
+        with self._lock:
+            return {
+                "enabled": bool(self._enabled),
+                "state": self._state,
+                "running": self._state == "running",
+                "servers": {
+                    name: {
+                        "enabled": True,
+                        "connected": name in self._hosts,
+                    }
+                    for name in sorted(self._configured)
+                },
+            }
+
+    # ── server detail ─────────────────────────────────────────────
 
     def get_server_detail(self, name: str) -> dict | None:
         """Return rich per-connector detail with diagnostics.
 
         Returns None if server not found.
         """
-        cfg = self._server_configs.get(name)
+        with self._lock:
+            cfg = self._server_configs.get(name)
+            startup = self._server_startup_time.get(name)
+            last_ping = self._server_last_ping.get(name)
+            response = self._server_response_time.get(name)
+            tools = list(self._server_tools.get(name, []))
+            loop = self._loop
         if cfg is None:
             return None
-        if not self._loop or self._loop.is_closed():
+        if not loop or loop.is_closed():
             stats = "disconnected"
         else:
             future = asyncio.run_coroutine_threadsafe(
-                self._probe_server(name), self._loop
+                self._probe_server(name), loop
             )
             try:
                 stats = future.result()
             except Exception:
                 stats = "error"
-        startup = self._server_startup_time.get(name)
-        last_ping = self._server_last_ping.get(name)
         from datetime import datetime, timezone
         return {
             "name": name,
             "status": stats,
-            "tools": self._server_tools.get(name, []),
+            "tools": tools,
             "config": {
                 "command": cfg.get("command", ""),
                 "args": cfg.get("args", []),
@@ -147,7 +353,7 @@ class MCPManager(Provider):
                 "startup_time_ms": round((time.time() - startup) * 1000) if startup else None,
                 "last_connected": datetime.fromtimestamp(startup, tz=timezone.utc).isoformat() if startup else None,
                 "last_ping": datetime.fromtimestamp(last_ping, tz=timezone.utc).isoformat() if last_ping else None,
-                "response_time_ms": self._server_response_time.get(name),
+                "response_time_ms": response,
             },
         }
 
@@ -165,19 +371,22 @@ class MCPManager(Provider):
         except Exception:
             return "error"
 
-    # ── health_check ────────────────────────────────────────────
+    # ── health_check ───────────────────────────────────────────────
 
     def health_check(self) -> dict[str, str]:
-        if not self._loop or self._loop.is_closed():
-            return {n: "disconnected" for n in self._server_names}
+        with self._lock:
+            loop = self._loop
+            names = list(self._server_names)
+        if not loop or loop.is_closed():
+            return {n: "disconnected" for n in names}
         future = asyncio.run_coroutine_threadsafe(
-            self._health_check(), self._loop
+            self._health_check(names), loop
         )
         return future.result()
 
-    async def _health_check(self) -> dict[str, str]:
+    async def _health_check(self, names: list[str]) -> dict[str, str]:
         status: dict[str, str] = {}
-        for name in self._server_names:
+        for name in names:
             host = self._hosts.get(name)
             if not host:
                 status[name] = "disconnected"
@@ -193,16 +402,17 @@ class MCPManager(Provider):
                 status[name] = "error"
         return status
 
-    # ── reconnect ───────────────────────────────────────────────
+    # ── reconnect ──────────────────────────────────────────────────
 
     def reconnect(self, server_name: str) -> bool:
-        if not self._loop or self._loop.is_closed():
+        loop = self._loop
+        if loop is None or loop.is_closed():
             return False
         cfg = self._server_configs.get(server_name)
         if not cfg:
             return False
         future = asyncio.run_coroutine_threadsafe(
-            self._reconnect_one(server_name, cfg), self._loop
+            self._reconnect_one(server_name, cfg), loop
         )
         return future.result()
 
@@ -213,22 +423,21 @@ class MCPManager(Provider):
                 await host.disconnect()
             except Exception:
                 pass
-        for tname in list(self._registry.list()):
-            if tname.name.startswith(f"{name}_"):
-                self._registry.unregister(tname.name)
+        self._unregister_server_tools(name)
         try:
             await self._connect_one(name, cfg)
             return True
         except Exception:
             return False
 
-    # ── refresh (re-discover tools) ─────────────────────────────
+    # ── refresh (re-discover tools) ────────────────────────────────
 
     def refresh(self) -> None:
-        if not self._loop or self._loop.is_closed():
+        loop = self._loop
+        if loop is None or loop.is_closed():
             return
         future = asyncio.run_coroutine_threadsafe(
-            self._refresh_tools(), self._loop
+            self._refresh_tools(), loop
         )
         future.result()
 
@@ -247,94 +456,3 @@ class MCPManager(Provider):
                 self._server_tools[name] = tools
             except Exception:
                 pass
-
-    # ── refresh_from_config — react to Settings save ────────────
-
-    def refresh_from_config(self, config: dict) -> None:
-        new_servers = config.get("mcp", {}).get("servers", {})
-        new_names = set(new_servers.keys())
-        current_names = set(self._server_names)
-
-        to_add = new_names - current_names
-        to_remove = current_names - new_names
-        to_check = new_names & current_names
-
-        for name in to_remove:
-            self._disconnect_server(name)
-
-        for name in to_add:
-            self._connect_server(name, new_servers[name])
-
-        for name in to_check:
-            old_cfg = self._server_configs.get(name, {})
-            new_cfg = new_servers[name]
-            if old_cfg != new_cfg:
-                self._reconnect_server(name, new_cfg)
-
-    def _connect_server(self, name: str, cfg: dict) -> None:
-        if not self._loop or self._loop.is_closed():
-            return
-        future = asyncio.run_coroutine_threadsafe(
-            self._connect_one(name, cfg), self._loop
-        )
-        future.result()
-
-    def _disconnect_server(self, name: str) -> None:
-        if not self._loop or self._loop.is_closed():
-            return
-        future = asyncio.run_coroutine_threadsafe(
-            self._disconnect_one(name), self._loop
-        )
-        future.result()
-
-    def _reconnect_server(self, name: str, cfg: dict) -> None:
-        if not self._loop or self._loop.is_closed():
-            return
-        future = asyncio.run_coroutine_threadsafe(
-            self._reconnect_one(name, cfg), self._loop
-        )
-        future.result()
-
-    async def _disconnect_one(self, name: str) -> None:
-        host = self._hosts.pop(name, None)
-        if host:
-            try:
-                await host.disconnect()
-            except Exception:
-                pass
-        self._server_names.discard(name)
-        self._server_configs.pop(name, None)
-        self._server_tools.pop(name, None)
-        self._server_startup_time.pop(name, None)
-        self._server_last_ping.pop(name, None)
-        self._server_response_time.pop(name, None)
-        for tname in list(self._registry.list()):
-            if tname.name.startswith(f"{name}_"):
-                self._registry.unregister(tname.name)
-
-    # ── stop ────────────────────────────────────────────────────
-
-    def stop(self) -> None:
-        if not self._loop or self._loop.is_closed():
-            return
-        future = asyncio.run_coroutine_threadsafe(
-            self._disconnect_all(), self._loop
-        )
-        future.result()
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        if self._loop_thread:
-            self._loop_thread.join(timeout=5)
-
-    async def _disconnect_all(self) -> None:
-        for name, host in self._hosts.items():
-            try:
-                await host.disconnect()
-            except Exception:
-                pass
-        self._hosts.clear()
-        self._server_configs.clear()
-        self._server_tools.clear()
-        self._server_startup_time.clear()
-        self._server_last_ping.clear()
-        self._server_response_time.clear()
-        self._server_names.clear()

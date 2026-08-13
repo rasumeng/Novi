@@ -26,7 +26,7 @@ export type ServerEvent =
   | { type: 'recent_conversations'; conversations: { id: string; title: string; updatedAt: string }[] }
   | { type: 'project_created'; project: Project; indexed: number }
   | { type: 'project_selected'; project: Project }
-  | { type: 'permission_request'; tool: string; args: Record<string, unknown> }
+  | { type: 'permission_request'; tool: string; args: Record<string, unknown>; id: string }
   | { type: 'reasoning'; text: string }
   | { type: 'model'; text: string }
   | { type: 'agent_status'; text: string; detail?: string; query?: string }
@@ -102,8 +102,8 @@ export class CozmoClient {
   stop() {
     return this.send({ type: 'stop' })
   }
-  answerPermission(allowed: boolean) {
-    return this.send({ type: 'permission_response', allowed })
+  answerPermission(allowed: boolean, requestId?: string) {
+    return this.send({ type: 'permission_response', allowed, id: requestId })
   }
   answerPlan(approved: boolean) {
     return this.send({ type: 'plan_response', approved })

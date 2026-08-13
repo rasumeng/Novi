@@ -18,6 +18,7 @@ import { CONNECTION_LABEL } from './connectionStatus'
 interface PermissionRequest {
   tool: string
   args: Record<string, unknown>
+  id: string
 }
 
 interface Props {
@@ -36,7 +37,7 @@ interface Props {
   onStop: () => void
   onApprovePlan: () => void
   onRejectPlan: () => void
-  onAnswerPermission: (allowed: boolean) => void
+  onAnswerPermission: (allowed: boolean, requestId?: string) => void
   onOpenSettings?: (section: SectionId) => void
   /** Title of whichever conversation owns the current generation, or null when idle. */
   workingActivityTitle?: string | null
@@ -169,7 +170,7 @@ export function Conversation({
                     )}
                     {permission && (
                       <div className="mt-3">
-                        <PermissionPrompt request={permission} onAnswer={onAnswerPermission} />
+                        <PermissionPrompt request={permission} onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)} />
                       </div>
                     )}
                   </div>

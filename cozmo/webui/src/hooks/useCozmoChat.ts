@@ -10,6 +10,7 @@ import { mergeTimeline } from '@/utils/timeline'
 export interface PermissionRequest {
   tool: string
   args: Record<string, unknown>
+  id: string
 }
 
 // The backend agent session is single-flight: only one generation can be in
@@ -380,7 +381,7 @@ export function useCozmoChat() {
           pushTimelineEntry(ev.entry)
           break
         case 'permission_request':
-          setPermission({ tool: ev.tool, args: ev.args })
+          setPermission({ tool: ev.tool, args: ev.args, id: ev.id })
           break
         case 'done': {
           const finishedId = owner?.conversationId
@@ -519,8 +520,8 @@ export function useCozmoChat() {
     }, STOP_FALLBACK_MS)
   }, [finishStreaming])
 
-  const answerPermission = useCallback((allowed: boolean) => {
-    clientRef.current?.answerPermission(allowed)
+  const answerPermission = useCallback((allowed: boolean, requestId?: string) => {
+    clientRef.current?.answerPermission(allowed, requestId)
     setPermission(null)
   }, [])
 

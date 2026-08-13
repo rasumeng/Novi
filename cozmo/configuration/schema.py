@@ -106,6 +106,11 @@ class Setting:
     # (``<id>.<any>.<leaf>``). Used for dynamic collections such as per-server
     # MCP config or per-tool permissions whose leaves cannot be pre-registered.
     namespace: bool = False
+    # Namespace secret classification (M5.2): when ``namespace`` is True, every
+    # descendant value whose path includes one of these segments is treated as
+    # a secret and masked on read surfaces (e.g. ``mcp.servers.<name>.env``).
+    # Keeps dynamic collections redacted without registering every leaf.
+    secret_segments: list[str] = field(default_factory=list)
 
     def validate(self, value: Any) -> list[str]:
         errors = []
@@ -131,6 +136,7 @@ class Setting:
             "depends": self.depends,
             "visibility": self.visibility.value,
             "namespace": self.namespace,
+            "secret_segments": list(self.secret_segments),
         }
 
 

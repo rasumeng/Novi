@@ -5,7 +5,7 @@ WebSocket protocol (/ws/chat), JSON messages:
   client → server:
     {"type": "chat", "content": "..."}                      start a run
     {"type": "stop"}                                         abort the current run
-    {"type": "permission_response", "allowed": bool}
+    {"type": "permission_response", "allowed": bool, "id": "perm-..."}
     {"type": "plan_response", "approved": bool}
     {"type": "set_directory", "path": "..."}                 set project directory (auto-indexes)
     {"type": "set_permission_mode", "mode": "manual"}        set permission mode
@@ -27,7 +27,7 @@ WebSocket protocol (/ws/chat), JSON messages:
     {"type": "recent_conversations", "conversations": [...]}
     {"type": "project_created", "project": {...}, "indexed": N}
     {"type": "project_selected", "project": {...}}
-    {"type": "permission_request", "tool": "...", "args": {...}}
+    {"type": "permission_request", "tool": "...", "args": {...}, "id": "perm-..."}
     {"type": "done"}                                         run finished
     {"type": "error",    "text": "..."}
     {"type": "assistant_event", "entry": {...}}              brain event surfaced to timeline
@@ -44,6 +44,7 @@ import uuid
 import threading
 import mimetypes
 from collections.abc import Callable
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -408,6 +409,8 @@ class Session:
         self.runtime.set_config(stop_event=self.stop_flag)
         self._perm_event = threading.Event()
         self._perm_allowed = False
+        self._perm_request_id = ""
+        self._perm_lock = threading.Lock()
         self._plan_event = threading.Event()
         self._plan_approved = False
         self._worker: threading.Thread | None = None
@@ -442,6 +445,12 @@ class Session:
 
         # Bridge EventBus→WebSocket: forward runtime events
         self.event_bus.on_any(self._on_bus_event)
+
+        # M5.2: wire the WebUI permission prompt into the production execution
+        # path. ``ToolExecutor._check_permission`` calls this callback when the
+        # permission resolver returns "ask", so an interactive Allow/Deny in
+        # the browser is a real user decision instead of a silent deny.
+        self.runtime.tool_executor.set_permission_callback(self._ask_permission)
 
     def _on_bus_event(self, event):
         """Forward EventBus events as WebSocket messages."""
@@ -478,15 +487,25 @@ class Session:
 
     # runs in worker thread — block until the browser answers
     def _ask_permission(self, tool: str, args: dict) -> bool:
-        self._perm_event.clear()
-        self._emit({"type": "permission_request", "tool": tool, "args": args})
+        req_id = f"perm-{uuid.uuid4().hex[:8]}"
+        with self._perm_lock:
+            self._perm_request_id = req_id
+            self._perm_allowed = False
+            self._perm_event.clear()
+        self._emit({"type": "permission_request", "id": req_id, "tool": tool, "args": args})
         if not self._perm_event.wait(timeout=120):
             return False
         return self._perm_allowed
 
-    def answer_permission(self, allowed: bool):
-        self._perm_allowed = bool(allowed)
-        self._perm_event.set()
+    def answer_permission(self, allowed: bool, request_id: str | None = None):
+        # Correlate the response with the in-flight request. A stale response
+        # (user answered a previous prompt, or a new request already started)
+        # is dropped instead of resolving a future permission gate.
+        with self._perm_lock:
+            if request_id is not None and request_id != self._perm_request_id:
+                return
+            self._perm_allowed = bool(allowed)
+            self._perm_event.set()
 
     # runs in worker thread — block until the browser approves/rejects plan
     def _ask_plan(self, plan_text: str) -> bool:
@@ -581,15 +600,52 @@ class Session:
 
     def stop(self):
         self.stop_flag.set()
-        self._perm_allowed = False
-        self._perm_event.set()
+        # Fail closed: any in-flight permission request resolves to deny and a
+        # late response can no longer match a future request.
+        with self._perm_lock:
+            self._perm_request_id = ""
+            self._perm_allowed = False
+            self._perm_event.set()
         self._plan_approved = False
         self._plan_event.set()
 
 
+def _shutdown_backend():
+    """Stop runtime subsystems (M5.3).
+
+    Wired into the FastAPI lifespan so a process restart never leaves MCP
+    subprocesses, connections, or runtime tools behind. Idempotent: stops are
+    safe when the backend (or the subsystem) was never started.
+    """
+    with _backend_lock:
+        backend = _shared_backend
+    if backend is None:
+        return
+    mcp = backend.get("mcp")
+    if mcp is not None:
+        try:
+            mcp.stop()
+        except Exception as e:
+            print(f"[cozmo] MCP shutdown failed: {e}")
+    telegram = backend.get("telegram")
+    if telegram is not None:
+        try:
+            telegram.stop()
+        except Exception as e:
+            print(f"[cozmo] Telegram shutdown failed: {e}")
+
+
 def create_app(cfg: dict | None = None) -> FastAPI:
     cfg = cfg or config.load()
-    app = FastAPI(title="Cozmo WebUI")
+    import asyncio as _asyncio
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        yield
+        await _asyncio.to_thread(_shutdown_backend)
+
+    app = FastAPI(title="Cozmo WebUI", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -798,6 +854,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     from .configuration import (
         Configuration,
+        ConfigRedactor,
         UnknownSettingError,
         ValidationError,
         get_bus,
@@ -822,6 +879,10 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     )
 
     configuration = get_configuration()
+    # M5.2: single schema-driven redactor for every secret read surface. The
+    # persisted values are never mutated; only API / WS / discovery payloads
+    # are masked.
+    redactor = ConfigRedactor(configuration.registry)
     # Serialize recomputation triggered by concurrent lifecycle events (e.g.
     # overlapping model installs) so configuration writes never interleave.
     recompute_lock = threading.Lock()
@@ -832,9 +893,13 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     _installing_models: set[str] = set()
     _installing_lock = threading.Lock()
 
-    # Broadcast configuration changes to connected WebSocket clients.
+    # Broadcast configuration changes to connected WebSocket clients. Values
+    # are redacted so a secret-setting update never broadcasts the actual
+    # secret — clients only see a write-only "configured" placeholder.
     try:
-        get_bus().on_any(lambda ev: _broadcast_sync({"type": "config_updated", "event": ev.to_dict()}))
+        get_bus().on_any(
+            lambda ev: _broadcast_sync(
+                {"type": "config_updated", "event": redactor.redact_event(ev)}))
     except Exception as e:
         print(f"[cozmo] config broadcast hook failed: {e}")
 
@@ -900,10 +965,30 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 out[k] = v
         return out
 
+    def _fill_masked(write: Any, current: Any) -> Any:
+        """Replace masked placeholders in a write with the live stored value.
+
+        Secret read-back values (``{"configured": ..., "masked": true}``) are
+        write-only: when a client echoes one back inside a namespace write,
+        the existing stored value is preserved instead of persisting the mask.
+        """
+        if isinstance(write, dict) and isinstance(current, dict):
+            out = {}
+            for k, v in write.items():
+                if isinstance(v, dict) and redactor.is_masked(v):
+                    out[k] = current.get(k)
+                elif isinstance(v, dict):
+                    base = current.get(k) if isinstance(current.get(k), dict) else {}
+                    out[k] = _fill_masked(v, base)
+                else:
+                    out[k] = v
+            return out
+        return write
+
     @app.get("/api/config")
     def get_config():
         _sync_config_snapshot()
-        return _sanitize_config(cfg)
+        return redactor.redact_tree(_sanitize_config(cfg))
 
     @app.put("/api/config")
     def put_config(body: dict):
@@ -920,9 +1005,19 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         results = []
         for k, v in body.items():
             if registry_has(configuration, k):
+                if redactor.is_secret(k) and isinstance(v, dict) and redactor.is_masked(v):
+                    # masked read-back of a secret — leave the stored value
+                    # untouched instead of persisting the placeholder
+                    results.append({"id": k, "ok": True, "unchanged": True,
+                                    "value": redactor.redact(k, configuration.get(k))})
+                    continue
+                setting = configuration.registry.resolve(k)
+                if setting is not None and setting.namespace and isinstance(v, dict):
+                    v = _fill_masked(v, configuration.get(k) or {})
                 try:
                     configuration.set(k, v, by="webui")
-                    results.append({"id": k, "ok": True, "value": v})
+                    results.append({"id": k, "ok": True,
+                                    "value": redactor.redact(k, configuration.get(k))})
                 except ValidationError as e:
                     results.append({"id": k, "ok": False, "errors": e.errors})
                 except Exception as e:
@@ -953,7 +1048,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     @app.get("/api/configuration")
     def get_configuration_state():
         _sync_config_snapshot()
-        return configuration.snapshot()
+        return redactor.redact_tree(configuration.snapshot())
 
     @app.patch("/api/configuration")
     def patch_configuration(body: dict):
@@ -962,9 +1057,16 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         patches = {k: v for k, v in body.items() if not k.startswith("_")}
         out = []
         for k, v in patches.items():
+            if redactor.is_secret(k) and isinstance(v, dict) and redactor.is_masked(v):
+                out.append({"id": k, "ok": True, "unchanged": True,
+                            "value": redactor.redact(k, configuration.get(k))})
+                continue
+            setting = configuration.registry.resolve(k)
+            if setting is not None and setting.namespace and isinstance(v, dict):
+                v = _fill_masked(v, configuration.get(k) or {})
             try:
                 configuration.set(k, v, by=by)
-                out.append({"id": k, "ok": True, "value": configuration.get(k)})
+                out.append({"id": k, "ok": True, "value": redactor.redact(k, configuration.get(k))})
             except UnknownSettingError:
                 out.append({"id": k, "ok": False, "error": "unknown setting"})
             except ValidationError as e:
@@ -985,9 +1087,14 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def set_configuration_value(setting_id: str, body: dict):
         value = body.get("value")
         by = body.get("by", "web")
+        if redactor.is_secret(setting_id) and isinstance(value, dict) and redactor.is_masked(value):
+            return {"ok": True, "unchanged": True, "setting": setting_id,
+                    "value": redactor.redact(setting_id, configuration.get(setting_id))}
         try:
             configuration.set(setting_id, value, by=by)
-            return {"ok": True, "value": configuration.get(setting_id), "setting": setting_id}
+            return {"ok": True,
+                    "value": redactor.redact(setting_id, configuration.get(setting_id)),
+                    "setting": setting_id}
         except UnknownSettingError as e:
             return {"error": str(e)}
         except ValidationError as e:
@@ -1494,6 +1601,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             return _shared_backend["mcp"].get_status()
         return {}
 
+    @app.get("/api/mcp/lifecycle")
+    def get_mcp_lifecycle():
+        if _shared_backend:
+            return _shared_backend["mcp"].get_lifecycle()
+        return {"enabled": False, "state": "stopped", "running": False, "servers": {}}
+
+    # ── Telegram Status ─────────────────────────────────────────
+
+    @app.get("/api/telegram/status")
+    def get_telegram_status():
+        if _shared_backend:
+            return _shared_backend["telegram"].get_status()
+        return {"enabled": False, "state": "stopped", "running": False, "last_error": None}
+
     # ── MCP Server Detail ───────────────────────────────────────
 
     @app.get("/api/mcp/servers/{name}")
@@ -1854,7 +1975,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 elif mtype == "stop":
                     session.stop()
                 elif mtype == "permission_response":
-                    session.answer_permission(msg.get("allowed", False))
+                    session.answer_permission(msg.get("allowed", False), msg.get("id"))
                 elif mtype == "plan_response":
                     session.answer_plan(msg.get("approved", False))
                 elif mtype == "set_directory":

@@ -288,10 +288,13 @@ def register_defaults(reg: ConfigRegistry):
                 type=SettingType.BOOL,
                 default=True,
                 visibility=Visibility.ADVANCED,
-                restart_required=True,
+                restart_required=False,
             ),
             # Dynamic server collection: ``mcp.servers.<name>`` and its leaves
-            # (command/args/env/permissions) are owned by this namespace.
+            # (command/args/env/permissions) are owned by this namespace. The
+            # ``env`` subtree holds credentials (e.g. ``mcp.servers.<name>.env.
+            # GITHUB_TOKEN``) and is classified as secret so read surfaces mask
+            # values while keeping the variable names visible.
             Setting(
                 id="mcp.servers",
                 label="MCP servers",
@@ -301,6 +304,7 @@ def register_defaults(reg: ConfigRegistry):
                 default={},
                 visibility=Visibility.HIDDEN,
                 namespace=True,
+                secret_segments=["env"],
             ),
         ],
     ))

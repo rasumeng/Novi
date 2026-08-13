@@ -69,6 +69,9 @@ class TelegramBot:
         self.handler = handler
         self.allowed = set(str(c) for c in (allowed_chat_ids or ()))
         self._sdk = sdk or _require_telegram_sdk()
+        self._running = False
+        self._thread = None
+        self._loop = None
         app_builder = self._sdk.ext.Application.builder()
         self.app = app_builder.token(token).build()
         self.app.add_handler(
@@ -125,3 +128,76 @@ class TelegramBot:
 
     def run(self):
         self.app.run_polling(allowed_updates=[])
+
+    # ── lifecycle seam (M5.3) ────────────────────────────────────────
+
+    def start(self, *, poll_interval: float = 1.0) -> bool:
+        """Start polling updates on a background daemon thread (non-blocking).
+
+        Drives the same PTB Application used by :meth:`run`, but on a loop the
+        caller can stop. Idempotent: a running bot is not started twice.
+        Raises the underlying startup error when polling cannot be booted.
+        """
+        if self._running:
+            return False
+        import threading
+
+        ready = threading.Event()
+        error = {"exc": None}
+
+        def _run():
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self.app.initialize())
+                loop.run_until_complete(self.app.updater.start_polling(
+                    poll_interval=poll_interval, allowed_updates=[]))
+                loop.run_until_complete(self.app.start())
+            except Exception as e:
+                error["exc"] = e
+                ready.set()
+                return
+            self._loop = loop
+            ready.set()
+            loop.run_forever()
+            try:
+                loop.run_until_complete(self.app.stop())
+                loop.run_until_complete(self.app.shutdown())
+            except Exception:
+                log.exception("telegram shutdown failed")
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+
+        self._thread = threading.Thread(target=_run, name="cozmo-telegram",
+                                        daemon=True)
+        self._thread.start()
+        ready.wait(timeout=30)
+        if error["exc"] is not None:
+            self._thread = None
+            raise error["exc"]
+        self._running = True
+        return True
+
+    def stop(self) -> bool:
+        """Stop polling and release the bot. Idempotent; safe when not running."""
+        if not self._running:
+            return False
+        self._running = False
+        loop, thread = self._loop, self._thread
+        self._loop = None
+        self._thread = None
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+        if thread:
+            thread.join(timeout=10)
+        return True
+
+    def is_running(self) -> bool:
+        return self._running
