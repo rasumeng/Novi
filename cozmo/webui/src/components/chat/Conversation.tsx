@@ -181,7 +181,7 @@ export function Conversation({
         </div>
       </div>
 
-      <div className="border-t border-base-800 bg-base-950/80 backdrop-blur px-6 py-4">
+      <div className=" border-base-800 bg-base-950/80 backdrop-blur px-6 py-4">
         <div className="max-w-3xl mx-auto">
           {busyReason && (
             <div className="mb-2 text-[11px] text-base-500 px-1">{busyReason}</div>

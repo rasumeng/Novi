@@ -25,8 +25,10 @@ fn repo_root() -> PathBuf {
     if let Ok(root) = std::env::var("COZMO_REPO_ROOT") {
         return PathBuf::from(root);
     }
+
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
+        .and_then(Path::parent)
         .and_then(Path::parent)
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".."))
@@ -72,6 +74,7 @@ fn main() {
         }))
         .plugin(global_shortcut_plugin)
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_os::init())
         .manage(AppState {
             launcher: Arc::new(backend),
         })
@@ -87,6 +90,7 @@ fn main() {
                 .title("Cozmo — AI Agent")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(960.0, 640.0)
+                .decorations(false)
                 // Required to let the frontend use plain HTML5 drag-and-drop
                 // (real File objects) instead of Tauri's own drag-drop event,
                 // which only hands back file paths.
@@ -96,13 +100,7 @@ fn main() {
             // Close-to-tray: closing the window hides it instead of quitting.
             // The tray menu's "Quit Cozmo" (or the OS killing the process) is
             // the only way out, same as most tray-resident desktop apps.
-            let window_for_close = window.clone();
-            window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window_for_close.hide();
-                }
-            });
+            
 
             tray::setup(&app_handle.handle().clone())?;
 

@@ -118,7 +118,7 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
       </div>
 
       {!collapsed && (
-        <div className="px-2 pb-3 border-t border-base-800 pt-2">
+        <div className="px-2 pb-3 border-base-800 pt-2">
           {(() => {
             const Icon = NAV_ITEMS.settings.icon
             return (

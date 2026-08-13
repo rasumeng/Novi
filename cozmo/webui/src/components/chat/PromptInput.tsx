@@ -385,7 +385,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         aria-label={generating ? 'Message Cozmo (stop to interrupt)' : 'Message Cozmo'}
         rows={1}
         disabled={disabled}
-        className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] text-base-100 placeholder:text-base-500 focus:outline-none disabled:opacity-60 max-h-[200px] overflow-y-auto"
+        className="w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] text-base-100 placeholder:text-base-500 focus:outline-none disabled:opacity-60 max-h-[200px] overflow-y-auto"
       />
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 px-4 pb-2">

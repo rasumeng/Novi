@@ -45,7 +45,7 @@ node_modules/
 cozmo.zip
 
 # Tauri desktop
-cozmo\webui\src-tauri\target
-cozmo\webui\src-tauri\gen
+cozmo/webui/src-tauri/target
+cozmo/webui/src-tauri/gen
 desktop/src-tauri/target/
 desktop/src-tauri/gen/

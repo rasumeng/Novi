@@ -3,15 +3,16 @@
   "productName": "Cozmo",
   "version": "0.1.0",
   "identifier": "com.cozmo.desktop",
+
   "build": {
-    "beforeDevCommand": "npm --prefix ../cozmo/webui run dev",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm --prefix ../cozmo/webui run build",
-    "frontendDist": "../../cozmo/webui/dist"
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
   },
+  
   "app": {
     "withGlobalTauri": false,
-    "windows": [],
     "security": {
       "csp": null
     }

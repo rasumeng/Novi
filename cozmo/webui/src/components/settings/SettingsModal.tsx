@@ -132,7 +132,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="flex w-[800px] h-[600px] rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
+            className="flex w-[75vw] h-[75vh] min-w-[700px] min-h-[500px] max-w-[1800px] max-h-[1600px] rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
           >
             <div className="w-48 shrink-0 border-r border-base-800 flex flex-col bg-base-950/50">
               <div className="p-3 border-b border-base-800">

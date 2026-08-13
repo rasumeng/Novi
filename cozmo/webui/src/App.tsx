@@ -7,6 +7,7 @@ import { TimelinePage } from '@/components/timeline/TimelinePage'
 
 import { SettingsModal, SectionId } from '@/components/settings/SettingsModal'
 import { useCozmoChat } from '@/hooks/useCozmoChat'
+import { TitleBar } from '@/components/common/TitleBar'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
 
 export default function App() {
@@ -112,9 +113,10 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen flex bg-base-950 text-base-100 overflow-hidden relative">
-      <div className="absolute inset-0 pointer-events-none z-0" />
-      <div className="relative z-10 flex flex-1">
+    <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
+      <TitleBar />
+
+      <div className="relative z-10 flex flex-1 min-h-0">
         <Sidebar
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((v) => !v)}
@@ -130,8 +132,10 @@ export default function App() {
           jobsCount={chat.backgroundRuns.length}
           generatingConversationId={chat.generatingConversationId}
         />
+
         {renderSection()}
       </div>
+
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
