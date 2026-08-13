@@ -374,6 +374,7 @@ def build_runtime(cfg: dict):
         event_bus=event_bus,
         brain=b.get("brain"),
         orchestrator=b.get("orchestrator"),
+        mcp_permissions=b.get("mcp_permissions"),
     )
     # Drive Task lifecycle from runtime plan events; runtime never touches the
     # store itself.
@@ -1614,6 +1615,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         if _shared_backend:
             return _shared_backend["telegram"].get_status()
         return {"enabled": False, "state": "stopped", "running": False, "last_error": None}
+
+    # ── Connector Registry Status (M5.4) ──────────────────────────
+    # Generic enumeration over the registered connectors. Every payload is the
+    # connector's own SECRET-FREE status surface (M5.2 redaction is preserved —
+    # raw config/env/credentials are never present here).
+
+    @app.get("/api/connectors/status")
+    def get_connectors_status():
+        if not _shared_backend:
+            return {}
+        connectors = _shared_backend.get("connectors")
+        if connectors is None:
+            return {}
+        return connectors.statuses()
 
     # ── MCP Server Detail ───────────────────────────────────────
 

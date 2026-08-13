@@ -92,6 +92,7 @@ class ToolExecutor:
         perm_mode: str = "manual",
         debug_trace: bool = False,
         event_bus=None,
+        mcp_permissions=None,
     ):
         self._registry = registry
         self._perms = perms
@@ -103,6 +104,10 @@ class ToolExecutor:
         self.debug_trace = debug_trace
         self.event_bus = event_bus
         self._permission_callback: Callable | None = None
+        # M5.4: MCP server permission gate (``mcp.servers.<name>.permissions``).
+        # When present it augments the existing resolution by denying explicitly
+        # forbidden MCP operations; it never force-allows.
+        self.mcp_permissions = mcp_permissions
 
     def set_permission_callback(self, callback: Callable | None):
         self._permission_callback = callback
@@ -329,6 +334,15 @@ class ToolExecutor:
                 return True
             if risk == ToolRisk.CRITICAL:
                 return False
+        # M5.4: MCP server-level explicit denial augments the existing engine.
+        # ``decision`` returns "deny" only when the governing server forbids the
+        # operation; None defers to the unchanged PermissionResolver below.
+        if self.mcp_permissions is not None:
+            try:
+                if self.mcp_permissions.decision(name) == "deny":
+                    return False
+            except Exception:
+                pass
         decision = self._perms.resolve(name, args, agent="cozmo")
         if decision == "allow":
             return True

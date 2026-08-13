@@ -259,3 +259,39 @@ Manual Telegram real-device validation steps live in `docs/telegram-setup.md`
 pre-existing, ordering-dependent `test_tool_retrieval.py` failures (Brain-wired
 `search_memory` hits a live embedding backend when run late in the suite; they
 pass in isolation, unrelated to E-3).
+
+---
+
+## 2026-08-12 — M5.4: Connector Registry + MCP server permission consumption
+
+Milestone 5.4 added a thin **Connector Registry** seam and closed the
+`mcp.servers.<name>.permissions` gap without touching M5.1/M5.2/M5.3 behavior.
+
+- **`cozmo/connectors/registry.py`** — `ConnectorRegistry` +
+  `ConnectorDefinition`. Identity only: id/type/label/enabled/identity, plus a
+  per-connector SAFE status callback the registry merely relays. Registration /
+  lookup / enumeration / unregister / duplicate-raise. No lifecycle, no tool
+  execution, no permission evaluation, no persistence — MCPManager and
+  TelegramLifecycle keep owning their connectors. Registered as MCP + Telegram
+  types; runtime state is in-memory only (MCP/Telegram sessions never enter it).
+- **`cozmo/runtime/mcp_permissions.py`** — `MCPPermissionGate`, a config-derived
+  deny gate consuming `mcp.servers.<name>.permissions` (`{op_key: bool}`, the
+  exact shape the Connectors UI already writes). It only DENIES; it never
+  force-allows, so the existing `PermissionResolver` + `ToolExecutor` path stays
+  authoritative. Wired into `ToolExecutor._check_permission` and shared into
+  every WebUI per-session runtime; config changes flow through the existing M5.3
+  `mcp` apply hook (no second event/persistence system).
+- **`cozmo/webui.py` / `webui_server.py`** — composition root builds the registry
+  and gate, refreshes derived connector state on config change, and exposes an
+  additive `GET /api/connectors/status` (existing MCP/Telegram endpoints and the
+  Connectors UI are untouched).
+- **Secret safety** — status surfaces reuse M5.2-safe connectors (MCP
+  `get_lifecycle`, Telegram `get_status`); the registry never reads or returns
+  raw config/env/tokens.
+- **Statelessness** — MCP remains disposable runtime state; starting/reconnecting
+  reconstructs from config, stopping discards it. Nothing is persisted.
+
+Suite: 33 new M5.4 tests green; M5.2 redaction, M5.3 lifecycle, registry /
+executor / configuration regressions green. Full-suite state unchanged from the
+E-3 checkpoint: the only reds are the same 7 pre-existing ordering-dependent
+`test_tool_retrieval.py` failures.

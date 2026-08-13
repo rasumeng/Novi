@@ -59,6 +59,45 @@ class WebUIBackend:
         telegram = TelegramLifecycle(ctx)
         telegram.start(ctx.config)
 
+        # M5.4: Connector Registry — thin identity/status seam over the two
+        # connectors. The registry describes them; MCPManager/TelegramLifecycle
+        # keep owning lifecycle. Status is the connectors' own (safe) surface.
+        from .connectors import ConnectorRegistry, ConnectorDefinition
+        connectors = ConnectorRegistry()
+
+        def _mcp_definition(source=None):
+            mcp_cfg = (source or ctx.config).get("mcp", {}) or {}
+            servers = mcp_cfg.get("servers", {}) or {}
+            return dict(
+                enabled=bool(mcp_cfg.get("enabled", True)),
+                identity={"servers": sorted(str(s) for s in servers.keys())},
+            )
+
+        def _telegram_definition(source=None):
+            tg = (source or ctx.config).get("telegram", {}) or {}
+            return dict(enabled=bool(tg.get("enabled", False)))
+
+        connectors.register(ConnectorDefinition(
+            connector_id="mcp",
+            connector_type="mcp",
+            label="Model Context Protocol",
+            status_fn=mcp.get_lifecycle,
+            **_mcp_definition(),
+        ))
+        connectors.register(ConnectorDefinition(
+            connector_id="telegram",
+            connector_type="telegram",
+            label="Telegram",
+            status_fn=telegram.get_status,
+            **_telegram_definition(),
+        ))
+
+        # M5.4: MCP server permission gate. Shared with every per-session
+        # runtime so ``mcp.servers.<name>.permissions`` is actually consumed by
+        # the existing ToolExecutor permission path. Config-derived, stateless.
+        from .runtime.mcp_permissions import MCPPermissionGate
+        mcp_permissions = MCPPermissionGate(ctx.config.get("mcp", {}) or {})
+
         # Shared skills
         skills = _load_all_skills()
 
@@ -102,13 +141,18 @@ class WebUIBackend:
 
         def _safe_mcp_refresh(manager, path, value, previous):
             try:
-                manager.refresh_from_config(_get_configuration().snapshot())
+                snap = _get_configuration().snapshot()
+                manager.refresh_from_config(snap)
+                mcp_permissions.refresh(snap.get("mcp", {}) or {})
+                connectors.get("mcp").update(**_mcp_definition(snap))
             except Exception as e:
                 print(f"[cozmo] MCP config refresh failed: {e}")
 
         def _safe_telegram_refresh(lifecycle, path, value, previous):
             try:
-                lifecycle.apply(_get_configuration().snapshot())
+                snap = _get_configuration().snapshot()
+                lifecycle.apply(snap)
+                connectors.get("telegram").update(**_telegram_definition(snap))
             except Exception as e:
                 print(f"[cozmo] Telegram config refresh failed: {e}")
 
@@ -126,6 +170,8 @@ class WebUIBackend:
             "registry": registry,
             "mcp": mcp,
             "telegram": telegram,
+            "connectors": connectors,
+            "mcp_permissions": mcp_permissions,
             "skills": skills,
             "capability_registry": capability_registry,
             "model_router": model_router,

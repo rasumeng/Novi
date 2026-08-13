@@ -193,6 +193,7 @@ class CozmoRuntime:
         orchestrator=None,
         debug_trace: bool = False,
         brain=None,
+        mcp_permissions=None,
     ):
         self.model_manager = model_manager
         self.model_service = model_service
@@ -272,6 +273,12 @@ class CozmoRuntime:
             debug_trace=self.debug_trace,
             event_bus=self.event_bus,
         )
+        # M5.4: MCP server permission gate shared from the composition root.
+        # None (CLI/standalone runtimes) = the existing permission path is used
+        # exactly as before; MCP server permissions simply don't apply there.
+        self.mcp_permissions = mcp_permissions
+        if mcp_permissions is not None:
+            self.tool_executor.mcp_permissions = mcp_permissions
         # NOTE: legacy inline-planning knobs were removed in Milestone 5
         # Phase 3 — PlannerEngine is the sole planning authority.
     def set_config(self, **kwargs):
