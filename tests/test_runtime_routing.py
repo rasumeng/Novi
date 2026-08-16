@@ -34,7 +34,7 @@ def make_runtime(memory, brain):
     rt.history = []
     rt.max_history = 10
     rt._summary = ""
-    rt.router_llm = None
+    rt.simple_llm = None
     rt.memory = memory
     rt.brain = brain
     return rt

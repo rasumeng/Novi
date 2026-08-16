@@ -1,27 +1,21 @@
-import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle, Eye } from 'lucide-react'
 import type { DiscoveryPayload } from './api'
 import type { SectionId } from './types'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 interface Props {
   discovery: DiscoveryPayload | null
-  mode: string
-  source: string
   installing: Record<string, { phase: string; pct: number | null }>
   onInstall: (name: string) => Promise<boolean>
   onNavigate: (section: SectionId) => void
   loading: boolean
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  classifier: 'Classifier',
-  router: 'Router',
-  orchestrator: 'Orchestrator',
-  chat: 'Chat',
-  coder: 'Coder',
-  planner: 'Planner',
-  vision: 'Vision',
-}
+const WORKLOADS: { key: string; label: string }[] = [
+  { key: 'general', label: 'General' },
+  { key: 'research', label: 'Research' },
+  { key: 'code', label: 'Code' },
+]
 
 /**
  * General — a concise overview/status surface for Cozmo. This is an
@@ -29,13 +23,12 @@ const ROLE_LABEL: Record<string, string> = {
  * not a configuration dump. It offers quick links into the appropriate
  * settings pages rather than hosting the controls itself.
  */
-export function GeneralSettings({ discovery, mode, source, installing, onInstall, onNavigate, loading }: Props) {
+export function GeneralSettings({ discovery, installing, onInstall, onNavigate, loading }: Props) {
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
 
   const hardware = discovery.hardware
   const missing = discovery.missingModels
-  const assigned = Object.entries(discovery.roles ?? {}).filter(([, model]) => model)
-  const modeLabel = mode === 'custom' ? 'Custom' : 'Automatic'
+  const workloads = discovery.workloads ?? {}
 
   return (
     <div className="space-y-5">
@@ -69,36 +62,31 @@ export function GeneralSettings({ discovery, mode, source, installing, onInstall
           </button>
         </div>
 
-        <div className="flex items-center justify-between p-3 rounded-xl bg-base-900/40 border border-base-700/60 mb-3">
-          <div>
-            <p className="text-sm text-base-100">{modeLabel} mode</p>
-            <p className="text-xs text-base-500 mt-0.5">
-              {source === 'custom'
-                ? 'Models assigned manually.'
-                : 'Cozmo resolves the best models automatically from what’s installed.'}
-            </p>
-          </div>
-          <span className={`text-[10px] font-medium px-2 py-1 rounded-full border shrink-0 ${
-            mode === 'custom'
-              ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
-              : 'text-sky-400 bg-sky-500/10 border-sky-500/20'
-          }`}>
-            {modeLabel}
-          </span>
-        </div>
-
-        {assigned.length > 0 ? (
+        {WORKLOADS.some((w) => workloads[w.key]) ? (
           <div className="space-y-1.5">
-            <p className="text-[11px] text-base-500 font-medium">Active assignments</p>
-            {assigned.slice(0, 4).map(([role, model]) => (
-              <div key={role} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-base-900/40 border border-base-700/40">
-                <span className="text-xs text-base-400">{ROLE_LABEL[role] ?? role}</span>
-                <span className="text-xs text-base-200 font-mono">{model}</span>
-              </div>
-            ))}
+            <p className="text-[11px] text-base-500 font-medium">Selected workloads</p>
+            {WORKLOADS.map((w) => {
+              const model = workloads[w.key] ?? ''
+              if (!model) return null
+              return (
+                <div key={w.key} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-base-900/40 border border-base-700/40">
+                  <span className="flex items-center gap-1.5 text-xs text-base-400">
+                    {w.label}
+                    {w.key === 'general' && discovery.vision_capable && (
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+                        <Eye size={10} /> Vision
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs text-base-200 font-mono">{model}</span>
+                </div>
+              )
+            })}
           </div>
         ) : (
-          <p className="text-xs text-base-500">No explicit role assignments — Cozmo is using its automatic resolution.</p>
+          <p className="text-xs text-base-500">
+            No workloads selected yet — Cozmo is running with its built-in defaults. Choose models from the Models page.
+          </p>
         )}
       </div>
 

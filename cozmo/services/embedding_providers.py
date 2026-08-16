@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 log = logging.getLogger("cozmo.services.embedding")
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-_FALLBACK_DIMENSION = 768  # nomic-embed-text
+_FALLBACK_DIMENSION = 768  # conservative default when the model does not report a dimension
 
 
 class EmbeddingProvider(ABC):

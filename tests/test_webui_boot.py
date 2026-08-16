@@ -22,15 +22,10 @@ def cfg(tmp_path):
     return {
         "llm": {
             "max_tokens": 65536,
-            "default_model": "qwen3:8b",
-            "roles": {
-                "classifier": {"model": ""},
-                "router": {"model": ""},
-                "orchestrator": {"model": ""},
-                "chat": {"model": ""},
-                "coder": {"model": ""},
-                "planner": {"model": ""},
-                "vision": {"model": ""},
+            "workloads": {
+                "general": {"model": "qwen3:8b"},
+                "research": {"model": ""},
+                "code": {"model": ""},
             },
         },
         "embedding": {

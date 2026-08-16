@@ -1,7 +1,7 @@
 """Integration tests for the Cognitive Layer:
 
 1. Memory context assembly (type-filtered, importance-ranked)
-2. ModelRouter with complexity awareness
+2. ModelSelector strict workload contract
 3. LessonStore reflection
 4. Background task scheduler via Job system
 """
@@ -112,70 +112,61 @@ class TestMemoryContextAssembly:
         assert not hasattr(runtime, "_rank_memories")
 
 
-# ── Priority 2: ModelRouter with complexity ────────────────────────────────
+# ── Priority 2: ModelSelector strict contract ───────────────────────────────
 
 
-class TestModelRouterComplexity:
+class TestModelSelectorStrictContract:
+    """Phase 2: workload → configured model verbatim; never substitute/rank/fall back."""
+
     @pytest.fixture
-    def router(self):
-        from cozmo.runtime.model_router import ModelRouter
-        from cozmo.runtime.resources import ResourceManager
+    def selector(self):
+        import types
+        from cozmo.runtime.model_selector import ModelSelector
 
-        rm = ResourceManager(vram_total_gb=16.0)
-        r = ModelRouter(default_model="gemma4:12b", resource_manager=rm)
-        from cozmo.runtime.model_router import ModelInfo
-        r.register(ModelInfo(name="phi4-mini", capability="conversation", vram_required_gb=2.0, is_loaded=True))
-        r.register(ModelInfo(name="qwen3:8b", capability="research", vram_required_gb=4.0))
-        r.register(ModelInfo(name="ornith:9b", capability="coding", vram_required_gb=6.0))
-        r.register(ModelInfo(name="qwen2.5-coder:14b", capability="coding", vram_required_gb=8.0))
-        r.resource_manager.load_model("phi4-mini", 2.0)
-        return r
-
-    def test_preferred_model_used(self, router):
-        """Preferred model is used when its capability matches the requirement."""
-        from cozmo.runtime.model_router import ModelRequirement
-        result = router.resolve(
-            requirements=[ModelRequirement(capability="research")],
-            preferred="qwen3:8b",
+        workloads = {
+            "general": "qwen3:8b",
+            "research": "phi4-mini",
+            "code": "qwen2.5-coder:14b",
+        }
+        svc = types.SimpleNamespace(
+            resolve=lambda w: ("test-provider", workloads.get(w, "")),
         )
-        assert result == "qwen3:8b"
+        return ModelSelector(svc)
 
-    def test_loaded_model_preferred(self, router):
-        """Already-loaded models are preferred over unloaded ones."""
-        from cozmo.runtime.model_router import ModelRequirement
-        router.resource_manager.load_model("ornith:9b", 6.0)
-        result = router.resolve(
-            requirements=[ModelRequirement(capability="coding")],
-        )
-        assert result == "ornith:9b"
+    def test_resolve_returns_configured_model_verbatim(self, selector):
+        assert selector.resolve("general") == "qwen3:8b"
+        assert selector.resolve("research") == "phi4-mini"
+        assert selector.resolve("code") == "qwen2.5-coder:14b"
 
-    def test_complexity_upgrades_capability(self, router):
-        """High complexity score upgrades capability tier."""
-        from cozmo.runtime.model_router import ModelRouter
-        assert ModelRouter._complexity_tier("conversation", None) == "conversation"
-        assert ModelRouter._complexity_tier("conversation", type("CS", (), {"score": 2})()) == "conversation"
-        assert ModelRouter._complexity_tier("conversation", type("CS", (), {"score": 5})()) == "research"
+    def test_no_rank_no_upgrade_no_fallback(self, selector):
+        """A lower-tier model in general must be returned exactly — never upgraded."""
+        assert selector.resolve("general") == "qwen3:8b"
 
-    def test_resolve_with_complexity(self, router):
-        """Complexity score influences model selection."""
-        from cozmo.runtime.model_router import ModelRequirement
-        from cozmo.runtime.resources import ResourceManager
+    def test_unset_workload_raises(self):
+        import types
+        from cozmo.models import ModelUnavailableError
+        from cozmo.runtime.model_selector import ModelSelector
 
-        router.resource_manager = ResourceManager(vram_total_gb=4.0)
-        result = router.resolve(
-            requirements=[ModelRequirement(capability="conversation")],
-            complexity_score=type("CS", (), {"score": 7})(),
-        )
-        # With 4GB VRAM at conversation tier, high complexity should upgrade to research
-        # Only qwen3:8b (4GB, research) fits
-        assert result == "qwen3:8b"
+        svc = types.SimpleNamespace(resolve=lambda w: ("test-provider", ""))
+        sel = ModelSelector(svc)
+        with pytest.raises(ModelUnavailableError):
+            sel.resolve("research")
 
-    def test_default_when_no_candidates(self, router):
-        """When no model fits, return default."""
-        from cozmo.runtime.resources import ResourceManager
-        router.resource_manager = ResourceManager(vram_total_gb=0.5)
-        result = router.resolve()
-        assert result == "gemma4:12b"
+    def test_unknown_workload_name_rejected(self, selector):
+        with pytest.raises(ValueError):
+            selector.resolve("chat")
+
+    def test_missing_configured_model_raises(self):
+        import types
+        from cozmo.models import ModelUnavailableError
+        from cozmo.runtime.model_selector import ModelSelector
+
+        def resolve(w):
+            raise ModelUnavailableError("general", "gemma4:12b", ["qwen3:8b"])
+
+        sel = ModelSelector(types.SimpleNamespace(resolve=resolve))
+        with pytest.raises(ModelUnavailableError):
+            sel.resolve("general")
 
 
 # ── Priority 3: LessonStore reflection ─────────────────────────────────────

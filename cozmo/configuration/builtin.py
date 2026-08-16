@@ -19,19 +19,7 @@ from .schema import (
     require_nonnegative_int,
 )
 
-ROLES = ["classifier", "router", "orchestrator", "chat", "coder", "planner", "vision"]
-
-_EXPERIENCE_OPTIONS = [
-    Option("light", "Light", "Fastest responses, smallest footprint"),
-    Option("medium", "Medium", "Best balance of speed, quality, and memory"),
-    Option("heavy", "Heavy", "Maximum quality on powerful hardware"),
-    Option("custom", "Custom", "Full manual control over routing"),
-]
-
-_MODE_OPTIONS = [
-    Option("automatic", "Automatic", "Cozmo resolves installed models for every role"),
-    Option("custom", "Custom", "Full manual control over model assignment"),
-]
+WORKLOADS = ["general", "research", "code"]
 
 DEFAULT_PROVIDER_OPTIONS = [
     Option("ollama", "Ollama", "Local models via Ollama"),
@@ -46,39 +34,19 @@ def register_defaults(reg: ConfigRegistry):
         label="Models",
         category=Category.MODELS,
         owner="runtime",
-        description="Which models Cozmo runs and how they map to roles.",
+        description="Which models Cozmo runs and how they map to workloads.",
         settings=[
-            Setting(
-                id="experience",
-                label="Experience",
-                description="How Cozmo behaves on this machine.",
-                category=Category.GENERAL,
-                owner="runtime",
-                type=SettingType.ENUM,
-                default="medium",
-                options=_EXPERIENCE_OPTIONS,
-            ),
-            Setting(
-                id="llm.default_model",
-                label="Default model",
-                description="Model used for anything not assigned to a role.",
-                category=Category.GENERAL,
-                owner="runtime",
-                type=SettingType.MODEL,
-                default="",
-            ),
             *[
                 Setting(
-                    id=f"llm.roles.{role}.model",
-                    label=_ROLE_LABEL[role],
-                    description=_ROLE_DESC[role],
-                    category=Category.DEVELOPER,
+                    id=f"llm.workloads.{workload}.model",
+                    label=_WORKLOAD_LABEL[workload],
+                    description=_WORKLOAD_DESC[workload],
+                    category=Category.MODELS,
                     owner="runtime",
                     type=SettingType.MODEL,
                     default="",
-                    visibility=Visibility.DEVELOPER,
                 )
-                for role in ROLES
+                for workload in WORKLOADS
             ],
             Setting(
                 id="llm.max_tokens",
@@ -89,18 +57,6 @@ def register_defaults(reg: ConfigRegistry):
                 type=SettingType.INT,
                 default=65536,
                 visibility=Visibility.DEVELOPER,
-            ),
-            Setting(
-                id="llm.meta.source",
-                label="Model provenance",
-                description="How the current llm.roles.* state was produced: "
-                            "automatic resolution or manual (custom) assignment.",
-                category=Category.MODELS,
-                owner="runtime",
-                type=SettingType.ENUM,
-                default="automatic",
-                options=_MODE_OPTIONS,
-                visibility=Visibility.HIDDEN,
             ),
         ],
     ))
@@ -226,15 +182,6 @@ def register_defaults(reg: ConfigRegistry):
                 type=SettingType.FLOAT,
                 default=0.6,
                 visibility=Visibility.ADVANCED,
-            ),
-            Setting(
-                id="runtime.lightweight_mode",
-                label="Lightweight mode",
-                category=Category.GENERAL,
-                owner="runtime",
-                type=SettingType.BOOL,
-                default=False,
-                visibility=Visibility.HIDDEN,
             ),
         ],
     ))
@@ -415,18 +362,6 @@ def register_defaults(reg: ConfigRegistry):
                 default="",
                 visibility=Visibility.USER,
             ),
-            Setting(
-                id="models.mode",
-                label="Model mode",
-                description="Persisted user intent: automatic resolution or "
-                            "fully manual (custom) model assignment.",
-                category=Category.MODELS,
-                owner="runtime",
-                type=SettingType.ENUM,
-                default="automatic",
-                options=_MODE_OPTIONS,
-                visibility=Visibility.HIDDEN,
-            ),
         ],
     ))
 
@@ -469,18 +404,17 @@ def register_defaults(reg: ConfigRegistry):
     )) 
 
 
-# Role human labels/descriptions.
-_ROLE_LABEL = {
-    "classifier": "Classifier", "router": "Router", "orchestrator": "Orchestrator",
-    "chat": "Conversation", "coder": "Coding", "planner": "Research & planning",
-    "vision": "Vision",
+# Workload human labels/descriptions. A workload is a model selection slot;
+# the selected model's capabilities (vision, reasoning, tools, coding) are
+# derived from the model itself, never configured here.
+_WORKLOAD_LABEL = {
+    "general": "General",
+    "research": "Deep Research",
+    "code": "Code",
 }
-_ROLE_DESC = {
-    "classifier": "Intent detection & message classification",
-    "router": "Task routing and capability dispatch",
-    "orchestrator": "Multi-step plan generation",
-    "chat": "General conversation & Q&A",
-    "coder": "Code generation & editing",
-    "planner": "Deep research & task planning",
-    "vision": "Image analysis & vision tasks",
+_WORKLOAD_DESC = {
+    "general": "Model used for general interaction. Vision is a capability of "
+               "the selected model, not a separate selection.",
+    "research": "Model used for deep research and multi-step planning tasks.",
+    "code": "Model used for code generation and editing.",
 }

@@ -213,11 +213,9 @@ def test_jobs_does_not_import_orchestrator_or_runtime():
 
 def test_runtime_does_not_import_job_or_task_lifecycle():
     """CozmoRuntime executes; it must not own Job or Task lifecycle."""
-    # Legacy exception: engine.py is the (currently unused) checkpointed ReAct
-    # loop. As the Job-checkpoint executor it legitimately consumes
-    # Job.Checkpoint — this is Engine↔Job coordination, not Task/Runtime
-    # collapse. Everything else in runtime/ must stay import-clean.
-    allowed = {"engine.py"}
+    # Legacy engine.py (which consumed Job.Checkpoint) was removed in Phase 3;
+    # every runtime/ module must stay import-clean.
+    allowed = set()
     violations = []
     for p in (COZMO_SRC / "runtime").glob("*.py"):
         if p.name in allowed:
@@ -237,8 +235,6 @@ def test_runtime_never_names_job_store_or_manager():
     """
     violations = []
     for f in (COZMO_SRC / "runtime").glob("*.py"):
-        if f.name == "engine.py":  # legacy checkpoint loop, allowed
-            continue
         rel = f.relative_to(PROJECT_ROOT)
         text = f.read_text("utf-8")
         for i, line in enumerate(text.splitlines(), 1):

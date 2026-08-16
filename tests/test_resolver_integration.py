@@ -1,29 +1,22 @@
-"""M3.3 — Automatic Resolver Integration & Recompute Triggers.
+"""Model selection integration tests (Phase 1).
 
-Covers ``recompute_automatic_if_active`` — the seam that connects the M2.4
-resolver to real model-set / hardware lifecycle events:
+Covers the boundary between pure advisory recommendations and persistent,
+authoritative selection:
 
-* Automatic mode is authoritative: external state changes re-resolve and
-  ``llm.roles.*`` reflects the CURRENT resolution (never stale user intent).
-* Custom mode is isolated: installs/removals/hardware refreshes are strict
-  NOOPs — ``models.custom.assign.*``, ``models.mode``, ``llm.meta.source``
-  and the resolved Custom roles are never rewritten.
-* Idempotency: a recomputation that yields the same resolved state writes
-  nothing and emits no configuration events (no loop).
-* Empty-evidence guard: an inconclusive/empty discovery never wipes a working
-  role map.
-* Runtime application: changed roles reach the existing runtime apply-hook
-  path; unchanged roles do not re-trigger it.
-* Provenance: Automatic recomputation preserves
-  ``models.mode = llm.meta.source = "automatic"``.
-* No auto-installation ever happens here.
+* Selection is user intent persisted verbatim to ``llm.workloads.*`` and is
+  never rewritten by installs, removals, or hardware refreshes.
+* Recommendation is advisory: it reflects the current installed set, but
+  computing it never touches configuration.
+* No silent substitution: an uninstalled model stays selected and is reported
+  ``not-installed``.
+* Empty-evidence (cold start) never fabricates or wipes selection.
+* Runtime application: selection writes reach the runtime apply-hook path.
+* Nothing here ever installs or downloads models.
 
 Hermetic: in-memory / tmp_path config; no network, no Ollama, no services.
 """
 
-import pytest
-
-from cozmo.configuration.bootstrap import build_registry
+from cozmo.configuration.bootstrap import build_registry, DEFAULT_CONFIG
 from cozmo.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
@@ -32,10 +25,9 @@ from cozmo.configuration.hardware import (
 )
 from cozmo.configuration.manager import Configuration
 from cozmo.configuration.resolver import (
-    ALL_ROLES,
-    apply_automatic,
-    apply_custom,
-    recompute_automatic_if_active,
+    WORKLOADS,
+    recommend,
+    apply_selection,
 )
 
 
@@ -52,259 +44,142 @@ HW_HIGH = hw("RTX 4060", 8.0, GpuConfidence.KNOWN_VRAM, 32.0, DetectionConfidenc
 HW_BIG = hw("RTX 4090", 24.0, GpuConfidence.KNOWN_VRAM, 64.0, DetectionConfidence.HIGH)
 
 
-def _make_cfg(tmp_path, bus=None):
-    reg = build_registry()
-    cfg = Configuration(reg, tmp_path / "cozmo.toml", bus=bus)
+def _make_cfg(tmp_path, bus=None, reg=None):
+    reg = reg or build_registry()
+    cfg = Configuration(reg, tmp_path / "cozmo.toml", defaults=DEFAULT_CONFIG,
+                        bus=bus)
     cfg.initialize()
     return cfg
 
 
-def _roles(cfg):
-    return {r: cfg.get(f"llm.roles.{r}.model", "") for r in ALL_ROLES}
+def _selection(cfg):
+    return {w: cfg.get(f"llm.workloads.{w}.model", "") for w in WORKLOADS}
 
 
-def _set_custom_assign(cfg, **kw):
-    for cap, model in kw.items():
-        cfg.set(f"models.custom.assign.{cap}", model or "")
+# ── Selection is persistent and authoritative ─────────────────────────────
 
 
-# ── Automatic + model installation ────────────────────────────────────────
-
-
-def test_automatic_recompute_on_install_reresolves_roles(tmp_path):
+def test_selection_persists_across_reload(tmp_path):
     cfg = _make_cfg(tmp_path)
-    installed = ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"]
-    apply_automatic(cfg, installed=installed, hardware=HW_HIGH)
-    # pre-install: only supported models; no trusted chat and no vision model.
-    assert cfg.get("llm.roles.chat.model") == "llama3.1:8b"
-    assert cfg.get("llm.roles.coder.model") == "qwen2.5-coder:7b"
-    assert cfg.get("llm.roles.vision.model", "") == ""
-
-    # trusted models become installed -> recompute adopts them everywhere.
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=installed + ["qwen3:8b", "qwen2.5vl:7b"], hardware=HW_HIGH)
-    assert changed is True
-    assert resolution is not None
-    assert cfg.get("llm.roles.chat.model") == "qwen3:8b"
-    assert cfg.get("llm.roles.coder.model") == "qwen3:8b"
-    assert cfg.get("llm.roles.planner.model") == "qwen3:8b"
-    assert cfg.get("llm.roles.vision.model") == "qwen2.5vl:7b"
+    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
+                          "code": "qwen2.5-coder:7b"})
+    cfg2 = _make_cfg(tmp_path)
+    assert _selection(cfg2) == {"general": "llama3", "research": "gemma2",
+                                "code": "qwen2.5-coder:7b"}
 
 
-# ── Automatic + model removal ─────────────────────────────────────────────
-
-
-def test_automatic_recompute_on_removal_uses_fallback(tmp_path):
+def test_install_never_rewrites_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    before = ["qwen3:8b", "qwen2.5vl:7b", "qwen2.5-coder:7b",
-              "llama3.1:8b", "nomic-embed-text"]
-    apply_automatic(cfg, installed=before, hardware=HW_HIGH)
-    assert cfg.get("llm.roles.chat.model") == "qwen3:8b"
-    assert cfg.get("llm.roles.coder.model") == "qwen3:8b"
+    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
+                          "code": ""})
+    before = _selection(cfg)
 
-    after = ["qwen2.5-coder:7b", "llama3.1:8b", "nomic-embed-text"]
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=after, hardware=HW_HIGH)
-    assert changed is True
-    # supported fallbacks fill the removed trusted roles; nothing fabricated.
-    assert cfg.get("llm.roles.chat.model") == "llama3.1:8b"
-    assert cfg.get("llm.roles.coder.model") == "qwen2.5-coder:7b"
-    assert cfg.get("llm.meta.source") == "automatic"
-    assert cfg.get("models.mode") == "automatic"
+    # a trusted model appears in the installed set -> advisory recommendations
+    # change, but the persisted selection is untouched.
+    recs = recommend(HW_HIGH, ["llama3", "gemma2", "qwen3:8b"])
+    assert recs.workloads["general"].model == "qwen3:8b"
+    assert _selection(cfg) == before
+    assert cfg.get("llm.workloads.general.model") == "llama3"
 
 
-def test_automatic_empty_discovery_does_not_wipe_working_roles(tmp_path):
+def test_removal_never_rewrites_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_automatic(cfg, installed=["qwen3:8b", "nomic-embed-text"],
-                    hardware=HW_HIGH)
-    before = _roles(cfg)
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=[], hardware=HW_HIGH)
-    # inconclusive (provider unavailable / cold start) -> never wiped.
-    assert changed is False
-    assert resolution is not None
-    assert _roles(cfg) == before
+    apply_selection(cfg, {"general": "gone:model", "research": "",
+                          "code": "llama3"})
+    before = _selection(cfg)
+
+    # model removal changes recommendations (advisory), selection stays.
+    recs = recommend(HW_HIGH, [])
+    assert recs.workloads["general"].model == ""
+    assert _selection(cfg) == before
+    assert cfg.get("llm.workloads.general.model") == "gone:model"
 
 
-# ── Custom isolation ──────────────────────────────────────────────────────
-
-
-def test_custom_model_install_is_noop(tmp_path):
+def test_hardware_change_never_rewrites_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    _set_custom_assign(cfg, chat="llama3.1:8b", coding="qwen2.5-coder:7b")
-    apply_custom(cfg, installed=["llama3.1:8b", "qwen2.5-coder:7b",
-                                 "nomic-embed-text"], hardware=HW_HIGH)
-    assert cfg.get("models.mode") == "custom"
-    before = _roles(cfg)
-
-    # a new trusted model appears -> Custom intent is NOT overwritten.
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=["llama3.1:8b", "qwen2.5-coder:7b", "qwen3:8b",
-                        "nomic-embed-text"], hardware=HW_HIGH)
-    assert resolution is None
-    assert changed is False
-    assert _roles(cfg) == before
-    assert cfg.get("models.custom.assign.chat") == "llama3.1:8b"
-    assert cfg.get("models.mode") == "custom"
-    assert cfg.get("llm.meta.source") == "custom"
+    apply_selection(cfg, {"general": "gemma4", "research": "gemma4",
+                          "code": ""})
+    before = _selection(cfg)
+    installed = ["gemma4", "llama3.1:8b"]
+    recs_small = recommend(HW_HIGH, installed)      # gemma4 demoted
+    recs_big = recommend(HW_BIG, installed)         # not demoted
+    assert recs_small.workloads["research"].model == "llama3.1:8b"
+    assert recs_big.workloads["research"].model == "gemma4"
+    assert _selection(cfg) == before
 
 
-def test_custom_model_removal_preserves_intent_and_fallback(tmp_path):
+# ── No silent substitution ────────────────────────────────────────────────
+
+
+def test_not_installed_selection_is_kept_and_reported(tmp_path):
     cfg = _make_cfg(tmp_path)
-    _set_custom_assign(cfg, chat="gone:model", coding="qwen2.5-coder:7b")
-    installed = ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"]
-    apply_custom(cfg, installed=installed, hardware=HW_HIGH)
-    # M3.2 behavior intact: intent preserved, runtime role fell back safely.
-    assert cfg.get("models.custom.assign.chat") == "gone:model"
-    assert cfg.get("llm.roles.chat.model") == "llama3.1:8b"  # safe fallback
-    assert cfg.get("llm.roles.coder.model") == "qwen2.5-coder:7b"
-
-    # the custom 'chat' model stays absent across a lifecycle refresh -> NOOP.
-    before = _roles(cfg)
-    resolution, changed = recompute_automatic_if_active(cfg, installed=installed,
-                                                        hardware=HW_HIGH)
-    assert resolution is None and changed is False
-    assert _roles(cfg) == before
-    assert cfg.get("models.custom.assign.chat") == "gone:model"
-    assert cfg.get("models.mode") == "custom"
+    out = apply_selection(cfg, {"general": "missing:model", "research": "",
+                                "code": ""}, installed=["llama3"])
+    assert cfg.get("llm.workloads.general.model") == "missing:model"
+    assert out["workloads"]["general"]["status"] == "not-installed"
+    # no automatic fallback substituted into config
+    assert cfg.get("llm.workloads.general.model") != "llama3"
 
 
-# ── Hardware change ───────────────────────────────────────────────────────
-
-
-def test_automatic_hardware_change_reresolves_assignments(tmp_path):
+def test_empty_discovery_never_fabricates_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    installed = ["gemma4", "llama3.1:8b", "qwen2.5vl:7b", "nomic-embed-text"]
-    apply_automatic(cfg, installed=installed, hardware=HW_HIGH)
-    # On 8 GB, gemma4 (min_vram hint) is demoted -> supported llama wins.
-    assert cfg.get("llm.roles.planner.model") == "llama3.1:8b"
-
-    # 24 GB lifts the demotion -> trusted gemma4 wins for reasoning.
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=installed, hardware=HW_BIG)
-    assert changed is True
-    assert cfg.get("llm.roles.planner.model") == "gemma4"
+    apply_selection(cfg, {"general": "", "research": "", "code": ""})
+    recs = recommend(HW_HIGH, [])
+    assert all(recs.workloads[w].model == "" for w in WORKLOADS)
+    assert all(cfg.get(f"llm.workloads.{w}.model") == "" for w in WORKLOADS)
 
 
-def test_custom_hardware_change_keeps_assignments_authoritative(tmp_path):
+# ── Advisory recommendations track the installed set ──────────────────────
+
+
+def test_recommendations_reflect_installed_set_change(tmp_path):
     cfg = _make_cfg(tmp_path)
-    _set_custom_assign(cfg, chat="llama3.1:8b", reasoning="gemma4")
-    installed = ["gemma4", "llama3.1:8b", "nomic-embed-text"]
-    apply_custom(cfg, installed=installed, hardware=HW_BIG)
-    assert cfg.get("llm.roles.planner.model") == "gemma4"
-
-    # hardware refreshes to a state that would demote gemma4 -> untouched.
-    before = _roles(cfg)
-    resolution, changed = recompute_automatic_if_active(cfg, installed=installed,
-                                                        hardware=HW_HIGH)
-    assert resolution is None and changed is False
-    assert _roles(cfg) == before
-    assert cfg.get("models.custom.assign.reasoning") == "gemma4"
-    assert cfg.get("llm.meta.source") == "custom"
+    r1 = recommend(HW_HIGH, ["llama3.1:8b"])
+    r2 = recommend(HW_HIGH, ["llama3.1:8b", "qwen3:8b"])
+    assert r1.workloads["general"].model == "llama3.1:8b"
+    assert r2.workloads["general"].model == "qwen3:8b"
+    # config unchanged by either computation
+    assert _selection(cfg) == {"general": "", "research": "", "code": ""}
 
 
-# ── Startup ───────────────────────────────────────────────────────────────
+def test_recommendation_contains_derived_evidence_only():
+    recs = recommend(HW_HIGH, ["qwen2.5vl:7b"])
+    g = recs.workloads["general"]
+    assert g.model == "qwen2.5vl:7b"
+    assert g.vision_capable is True
+    assert g.capabilities  # derived, advisory-only
+    assert not hasattr(g, "persisted")
 
 
-def test_automatic_startup_produces_current_resolution(tmp_path):
-    # First run on a fresh config: recompute populates llm.roles.*.
+# ── Writes go through the framework ───────────────────────────────────────
+
+
+def test_apply_selection_writes_only_workloads(tmp_path):
     cfg = _make_cfg(tmp_path)
-    installed = ["qwen3:8b", "qwen2.5vl:7b", "nomic-embed-text"]
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=installed, hardware=HW_HIGH)
-    assert changed is True
-    assert cfg.get("models.mode") == "automatic"
-    assert cfg.get("llm.meta.source") == "automatic"
-    assert cfg.get("llm.roles.chat.model") == "qwen3:8b"
-
-    # Restart: load the persisted file again -> recompute is a no-op (state
-    # already reflects the current hardware + installed models).
-    cfg2 = Configuration(build_registry(), cfg.store.path)
-    cfg2.initialize()
-    res2, changed2 = recompute_automatic_if_active(
-        cfg2, installed=installed, hardware=HW_HIGH)
-    assert changed2 is False
-    assert cfg2.get("llm.roles.chat.model") == "qwen3:8b"
-    assert cfg2.get("llm.meta.source") == "automatic"
+    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
+                          "code": "qwen2.5-coder:7b"}, by="user")
+    # no mode/meta/provenance keys written
+    assert cfg.get("models.mode", "absent") == "absent"
+    assert cfg.get("llm.meta.source", "absent") == "absent"
+    raw = cfg.state.as_dict()
+    assert "experience" not in raw
+    assert "lightweight_mode" not in raw.get("runtime", {})
 
 
-# ── No-op recomputation / idempotency ─────────────────────────────────────
-
-
-def test_noop_recompute_emits_no_events(tmp_path):
-    from cozmo.configuration.events import ConfigBus
-    bus = ConfigBus()
-    events = []
-    bus.on_any(lambda ev: events.append(ev.path))
-    cfg = _make_cfg(tmp_path, bus=bus)
-    installed = ["qwen3:8b", "qwen2.5vl:7b", "nomic-embed-text"]
-    apply_automatic(cfg, installed=installed, hardware=HW_HIGH)
-    base = len(events)
-
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=installed, hardware=HW_HIGH)
-    assert changed is False
-    assert len(events) == base  # no config writes -> no events -> no loop
-
-
-def test_recompute_converges_after_one_change(tmp_path):
-    bus_events = []
-    from cozmo.configuration.events import ConfigBus
-    bus = ConfigBus()
-    bus.on_any(lambda ev: bus_events.append(ev.path))
-    cfg = _make_cfg(tmp_path, bus=bus)
-    installed = ["llama3.1:8b", "qwen2.5vl:7b", "nomic-embed-text"]
-    apply_automatic(cfg, installed=installed, hardware=HW_HIGH)
-
-    # one external change -> first recompute writes (emit), second is a no-op.
-    recompute_automatic_if_active(cfg, installed=installed + ["qwen3:8b"],
-                                  hardware=HW_HIGH)
-    assert bus_events
-    first = len(bus_events)
-    recompute_automatic_if_active(cfg, installed=installed + ["qwen3:8b"],
-                                  hardware=HW_HIGH)
-    assert len(bus_events) == first  # converged, loop-free
-
-
-# ── Provenance ────────────────────────────────────────────────────────────
-
-
-def test_automatic_recompute_preserves_provenance(tmp_path):
-    cfg = _make_cfg(tmp_path)
-    # simulate a stale/custom provenance that must be corrected back to
-    # automatic only when Automatic is authoritative
-    apply_automatic(cfg, installed=["qwen3:8b", "nomic-embed-text"],
-                    hardware=HW_HIGH)
-    cfg.set("llm.meta.source", "custom", by="test")  # inconsistent state
-    recompute_automatic_if_active(cfg, installed=["qwen3:8b", "nomic-embed-text"],
-                                  hardware=HW_HIGH)
-    assert cfg.get("models.mode") == "automatic"
-    assert cfg.get("llm.meta.source") == "automatic"
-
-
-# ── Runtime application ───────────────────────────────────────────────────
-
-
-def test_changed_roles_reach_runtime_apply_path(tmp_path):
+def test_apply_selection_reaches_runtime_apply_path(tmp_path):
     applied = []
     reg = build_registry()
     reg.require_owner("runtime", lambda p, v, prev: applied.append((p, v)))
-    cfg = Configuration(reg, tmp_path / "cozmo.toml")
-    cfg.initialize()
-    installed = ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"]
-    recompute_automatic_if_active(cfg, installed=installed, hardware=HW_HIGH)
-    assert ("llm.roles.chat.model", "llama3.1:8b") in applied
-
-    # unchanged recompute must NOT re-trigger the runtime reload path.
-    applied.clear()
-    recompute_automatic_if_active(cfg, installed=installed, hardware=HW_HIGH)
-    assert applied == []
+    cfg = _make_cfg(tmp_path, reg=reg)
+    apply_selection(cfg, {"general": "llama3", "research": "",
+                          "code": ""}, by="user")
+    assert ("llm.workloads.general.model", "llama3") in applied
 
 
 # ── No automatic installation ─────────────────────────────────────────────
 
 
-def test_recompute_seam_never_installs():
+def test_selection_paths_never_install():
     import inspect
     from cozmo.configuration import resolver
     text = inspect.getsource(resolver)
@@ -312,18 +187,3 @@ def test_recompute_seam_never_installs():
     assert "ModelInstaller" not in text
     assert "install_model" not in text
     assert "/api/pull" not in text
-
-
-def test_recompute_returns_results_for_consumers(tmp_path):
-    cfg = _make_cfg(tmp_path)
-    resolution, changed = recompute_automatic_if_active(
-        cfg, installed=["qwen3:8b", "nomic-embed-text"], hardware=HW_HIGH)
-    assert changed is True
-    data = resolution.to_dict()
-    assert data["mode"] == "automatic"
-    assert data["meta"]["source"] == "automatic"
-    assert data["roleMap"]["chat"] == "qwen3:8b"
-    # Embeddings stay internal: resolved to embedding.model, never a custom
-    # capability and never part of the user-facing role map.
-    assert resolution.embedding_model == "nomic-embed-text"
-    assert "embedding" not in data["roleMap"]

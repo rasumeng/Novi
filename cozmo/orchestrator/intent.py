@@ -98,7 +98,7 @@ _INTENT_MAP = {
 
 
 def classify_intent(user_input: str,
-                    router_llm=None,
+                    llm=None,
                     history: Optional[list[tuple[str, str]]] = None,
                     has_images: bool = False) -> IntentType:
     """Classify user input into an IntentType.
@@ -129,7 +129,7 @@ def classify_intent(user_input: str,
         if re.search(pattern, query_lower):
             return IntentType.CODING
 
-    if router_llm is None:
+    if llm is None:
         return IntentType.CONVERSATION
 
     recent = ""
@@ -139,7 +139,7 @@ def classify_intent(user_input: str,
         ) or "(none)"
 
     try:
-        raw = router_llm.invoke(
+        raw = llm.invoke(
             _ROUTE_PROMPT.format(history=recent, text=user_input)
         ).strip().lower()
         for label, intent in _INTENT_MAP.items():
@@ -154,14 +154,14 @@ def classify_intent(user_input: str,
 class IntentDetector:
     """Classifies user input into intent + extracts goal."""
 
-    def __init__(self, router_llm=None):
-        self.router_llm = router_llm
+    def __init__(self, llm=None):
+        self.llm = llm
 
     def detect(self, user_input: str,
                history: Optional[list[tuple[str, str]]] = None,
                has_images: bool = False) -> tuple[IntentType, float]:
         """Returns (intent, confidence)."""
-        intent = classify_intent(user_input, self.router_llm, history, has_images)
+        intent = classify_intent(user_input, self.llm, history, has_images)
         query_lower = user_input.lower()
         fast_path = (has_images
                      or any(kw in query_lower for kw in _RESEARCH_KEYWORDS)

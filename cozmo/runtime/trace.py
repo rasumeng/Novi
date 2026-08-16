@@ -94,7 +94,7 @@ class ExecutionTrace:
 
     model_selected: str = ""
     model_reason: str = ""
-    role: str = ""
+    workload: str = ""
     force_model: str = ""
 
     tools_available: list[str] = field(default_factory=list)
@@ -152,7 +152,7 @@ class ExecutionTrace:
             "plan_level": self.plan_level,
             "model_selected": self.model_selected,
             "model_reason": self.model_reason,
-            "role": self.role,
+            "workload": self.workload,
             "plan_generated": self.plan_generated,
             "plan_latency_ms": round(self.plan_latency_ms, 2),
             "memory_queried": self.memory_queried,

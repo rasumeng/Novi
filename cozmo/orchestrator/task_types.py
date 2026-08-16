@@ -8,7 +8,7 @@ Job is an execution instance of a Task.
 Architecture:
   Conversation → Message → Task → ExecutionHistory → [Job₁, Job₂, ...]
                                                           │
-                                                    Engine.execute()
+                                                   Runtime.run_stream()
 
 Ownership contract (guard: tests/test_task_job_runtime_boundaries.py):
 
@@ -26,7 +26,7 @@ Ownership contract (guard: tests/test_task_job_runtime_boundaries.py):
     - jobs/        must not import orchestrator or runtime
     - runtime      must not import jobs or the TaskStore lifecycle
     - orchestrator must not import execution mechanics (execution_context,
-                    tool_executor, tool_registry, engine) or jobs
+                    tool_executor, tool_registry) or jobs
 
   Adding a field or import that collapses these boundaries fails the
   architecture guard and requires a conscious, documented decision.

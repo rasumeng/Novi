@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 class Category(str, Enum):
     GENERAL = "general"        # overview / status
-    MODELS = "models"          # Automatic / Custom model configuration
+    MODELS = "models"          # model selection + discovery
     AGENT = "agent"            # visibility + autonomy controls
     MEMORY = "memory"          # memory behavior + data controls
     SKILLS = "skills"          # skill management
@@ -142,7 +142,7 @@ class Setting:
 
 @dataclass
 class SettingGroup:
-    """A named group of settings (e.g. ``llm.roles``), registered by one owner."""
+    """A named group of settings (e.g. ``llm.workloads``), registered by one owner."""
 
     key: str
     label: str

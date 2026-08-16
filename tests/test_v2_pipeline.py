@@ -37,10 +37,10 @@ def backend():
     registry = ToolRegistry()
     for name, fn in TOOL_REGISTRY.items():
         registry.register(name, fn)
-    router_llm = MagicMock()
+    simple_llm = MagicMock()
     return {
         "model_service": mm,
-        "router_llm": router_llm,
+        "simple_llm": simple_llm,
         "registry": registry,
         "skills": {},
     }

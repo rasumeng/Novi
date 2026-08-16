@@ -1,15 +1,13 @@
 """
 Job — an execution instance of a Task.
 
-Engine is stateless — JobManager owns the lifecycle.
-A Task may spawn multiple Jobs over its lifetime (retry, continue, fork).
+JobManager owns the lifecycle. A Task may spawn multiple Jobs over its lifetime
+(retry, continue, fork).
 
 Architecture:
   Task.ExecutionHistory → [Job₁, Job₂, Job₃...]
                               │
                         JobManager.{submit, pause, resume, cancel}
-                              │
-                        Engine.run(context)  (stateless)
 """
 
 from __future__ import annotations
@@ -115,7 +113,6 @@ class JobEvent:
 class Job:
     """One execution instance of a Task.
 
-    The Engine receives this, runs the ReAct loop, and streams events.
     JobManager owns the lifecycle: submit, pause, resume, cancel, retry.
     """
 

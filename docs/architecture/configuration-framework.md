@@ -8,6 +8,28 @@ at runtime.
 Status: approved-for-implementation (Milestone 4.5). Durable architecture, do
 not archive.
 
+> **Superseded in part.** This is the original design/plan document. The
+> finalized model architecture dropped `llm.roles`, presets, experience cards,
+> `models.mode` / `models.custom.assign`, `llm.meta`, and the `ModelRouter` in
+> favor of **workload-based selection**: explicit `llm.workloads.{general,
+> research, code}.model` values persisted verbatim, plus advisory
+> recommendations. Sections below that reference roles/presets/routing describe
+> the *proposed* state at the time, not the shipped system. The obsolete
+> endpoints `GET /api/ollama/models`, `GET /api/models/available`, and
+> `POST /api/configuration/apply` were removed.
+>
+> **Phase 5 (Dynamic Model Intelligence) updates the shipped model layer:**
+> curated facts are now **non-authoritative seed evidence**
+> (`cozmo/configuration/model_seeds.py`, `SEED_MODEL_FACTS`); discovery is a
+> runtime inventory producing rich `ModelRecord`s (`/api/tags` + `/api/show`,
+> `cozmo/configuration/runtime_inventory.py`) with provenance-rich capability
+> evidence (`cozmo/configuration/model_records.py`,
+> `cozmo/configuration/evidence.py`); weak name heuristics are isolated in
+> `cozmo/configuration/name_inference.py` and never used by the runtime;
+> metadata is cached in memory (`cozmo/configuration/metadata_cache.py`).
+> There is still no Automatic/Custom model mode and no authoritative model
+> universe. See the "Phase 5 — Dynamic Model Intelligence" section below.
+
 ---
 
 ## 1. Current Settings architecture
@@ -378,3 +400,155 @@ Migration of real user files: one-directional, idempotent (old `models` →
 - Runtime never reads config file. → runtime pulls from manager/state only.
 - Subsystems integrate by registration. → each owns an `apply`.
 - Settings UI is a presentation layer only over schema.
+
+---
+
+## Phase 5 — Dynamic Model Intelligence
+
+The model layer is a *dynamic, evidence-based* intelligence system. It keeps
+the strict runtime contract (workload → selected model → validate capabilities
+→ execute) and adds real model metadata with provenance.
+
+### Locked constraints
+
+1. **No Automatic/Custom model mode.** No `models.mode`, no automatic/custom
+   semantics under any name, no separate automatic/custom selection path. The
+   only persisted selection is `llm.workloads.{general, research, code}.model`.
+2. **No authoritative hardcoded model universe.** `SEED_MODEL_FACTS`
+   (`model_seeds.py`) is curated *seed/evidence metadata*, never authoritative:
+   it does not define the universe, does not gate discovery, and is not
+   required for a model to receive recommendations.
+3. **Capabilities belong to models**, not workloads.
+4. **Recommendations are advisory only** and never mutate `llm.workloads.*`.
+   `POST /api/configuration/models/recommend` `{"apply": true}` is the only
+   apply path; installing/refreshing discovery never silently selects.
+5. **Runtime strict:** `ModelSelector` resolves verbatim; no ranking, no
+   fallback, no substitution at runtime.
+6. **Unknown stays unknown:** VRAM/params/context/quant/capabilities are
+   `None` when unknown, never fabricated.
+
+### Data model (`cozmo/configuration/model_records.py`)
+
+- `ModelRecord` is the single canonical record: identity, runtime/source/
+  format, measured facts, capability evidence with provenance, qualification,
+  state. `DiscoveredModel` is an alias so one record type exists.
+- `CapabilityEvidence` is tri-state (`supported` True/False/None) with
+  `source` (runtime / seed / name-inference) and `confidence`.
+- `ModelStatus`: `installed` / `available` / `missing`.
+
+### Runtime inventory (`cozmo/configuration/runtime_inventory.py`)
+
+- `RuntimeInventory` abstraction. `OllamaRuntimeInventory` uses `/api/tags`
+  (list) + `/api/show` (detail: `parameter_size`, `quantization_level`,
+  `family`, `format`, context length via GGUF keys, `license`, capability
+  tokens). Parsing is defensive: malformed/missing fields → `None`.
+- `OpenAIRuntimeInventory` reports only the models explicitly configured
+  (a hosted runtime cannot be enumerated).
+- Capability tokens from `/api/show` map 1:1 (`tools`→tools, `vision`→vision,
+  `embedding`→embeddings, `reasoning`→reasoning); unrecognized tokens stay in
+  raw metadata.
+
+### Evidence layer (`cozmo/configuration/evidence.py`)
+
+- Capability claims merge first-set-wins: **runtime > seed > name-inference**.
+- Weak name inference is isolated in `cozmo/configuration/name_inference.py`
+  and is **never** used for authoritative runtime validation
+  (`model_selector.model_capabilities` = seed facts + measured runtime
+  evidence only).
+- Unknown models with real evidence appear in discovery and participate in
+  recommendations as experimental candidates.
+
+### Metadata cache (`cozmo/configuration/metadata_cache.py`)
+
+- In-memory TTL cache for `/api/show` detail, keyed per (url, name).
+- **Never an authority for the runtime** (selection is validated live).
+- Invalidated on install/removal (`invalidate_cache()` from
+  `webui_server._after_models_changed`).
+- Served-from-cache records are flagged `stale=True`.
+
+### Contract preserved
+
+- `POST /api/configuration/models/selection` — verbatim persisted writes.
+- `POST /api/configuration/models/recommend` — advisory; `apply:true` the only
+  apply path.
+- `GET /api/models/discovery` — observational; never installs/selects.
+- `models.automatic.setup.dismissed` migrated to
+  `models.recommendations.dismissed`.
+
+## Phase 5.5 — Generic Recommendation & Evidence
+
+Phase 5 built discovery + runtime validation but kept recommendation decisions
+seed-shaped: ranking preferred seed qualification, and an unseeded model was
+only ever an "experimental last resort". Phase 5.5 replaces that with a
+*generic, evidence-based* engine. The curated seed table is now advisory
+enrichment only — it never gates eligibility and its membership is never
+recommendation evidence strength.
+
+### Engine (`cozmo/configuration/recommendation.py`)
+
+Model-name-agnostic primitives operating on `ModelRecord` + `HardwareProfile`.
+This module never imports or iterates `SEED_MODEL_FACTS` and has no model-name
+conditionals; candidate *source* (installed runtime, config-referenced missing,
+seed-only advisory, future remote) is irrelevant to it.
+
+- **Evidence strength** (deterministic): `runtime > trusted-seed >
+  supported-seed > reported > experimental-seed > name-inference > none`.
+  `reported` is a positive claim with no explicit provenance (legacy flags,
+  name-only callers). Seed membership alone is never strength.
+- **Tri-state capability** (`capability_support`): a capability is `True` /
+  `False` only when a claim says so; otherwise `None` (unknown). Absence is
+  never treated as `False`.
+- **Memory bounds** (`memory_bounds`): lower = min(disk size,
+  params × quant bytes-per-param), upper = max; `None` when neither is
+  derivable. Estimates are never fabricated.
+- **Hardware fit** (`hardware_fit_for_record`): strong path uses explicit
+  `min_vram_gb`/`approx_ram_gb` vs detected VRAM/RAM (DOES_NOT_FIT wins; FITS
+  needs both); weak path compares size/param estimates against VRAM with
+  `ESTIMATE_OVERHEAD=1.25` (lower bound over VRAM → DOES_NOT_FIT; VRAM ≥
+  upper×1.25 → FITS); otherwise UNKNOWN. Unknown is distinct from DOES_NOT_FIT.
+- **Score + rank** (`recommendation_score`, `rank_components`): sortable rank =
+  (DOES_NOT_FIT, fit UNKNOWN, −strength, −confidence, −breadth). Name is
+  deliberately not a component — it is a final deterministic tie-break only.
+- **Seed enrichment** (`merge_curated_evidence`): pure orchestration helper
+  that adds seed claims (when no stronger claim exists) and fills
+  display/caveats/qualification/metadata gaps. Augments evidence, never gates.
+
+### Orchestration (`cozmo/configuration/catalog.py`)
+
+`ModelRecommendationEngine.for_record()` is the generic recommendation decision
+for one record; `for_model()` is the legacy name-based wrapper. Seed-only
+advisory records are built by `_seed_advisory_records()` and run through the
+*same* engine. `build_catalog_payload()` composes the discovery payload;
+`build_available_recommendations()` produces the "recommended but missing"
+setup suggestions from any candidate source. All of it is pure and advisory.
+
+### Evidence-based ranking (`cozmo/configuration/resolver.py`)
+
+`recommend()` ranks installed candidates by capability coverage → hardware fit
+→ evidence strength → confidence → breadth, then a name tie-break.
+`_candidate_evidence` normalizes dict / ModelRecord / string inputs into
+enriched records. Curated INCOMPATIBLE is the only hard exclusion; VRAM/evidence
+demotion is replaced by `rank_components`. Reasons/caveats are provenance-based
+("runtime reported capability", "trusted seed evidence", "fits detected
+hardware", "experimental / unverified (last resort)" — the last only for
+experimental/name-inference-grade evidence). `apply_selection()` remains the
+only selection write.
+
+### Evidence-based eligibility (`cozmo/configuration/eligibility.py`)
+
+`evaluate_eligibility(record=...)` derives eligibility from the record's
+provenance-rich evidence and generic hardware fit. An unseeded record with real
+runtime capability evidence is evaluated on that evidence — never dismissed for
+lacking a curated seed fact. The legacy fact-based path is preserved.
+
+### Constraints verified by tests
+
+- `recommend()`/payload builders never write configuration; `apply_selection`
+  is the sole selection write path.
+- Runtime is untouched: `model_selector`, `models/service.py`, and provider
+  execution remain strict (verbatim resolution, no fallback/substitution).
+- Seed membership alone is not evidence strength; an unseeded model with
+  equivalent runtime evidence ranks equal to a seeded one (`catalog={}`
+  disables seed enrichment for such tests).
+- Unknown stays unknown across capability, hardware fit, and memory.
+- No model-name conditionals in the engine (AST-guarded in tests).

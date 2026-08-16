@@ -83,10 +83,10 @@ class ExecutionContext:
 
     # ── Routing (resolved by runtime or caller) ──────────────────────────
     model_name: str = ""
-    role: str = "chat"
+    workload: str = "general"
     temperature: float = 0.4
     max_steps: int = 10
-    model_reason: str = ""  # "role_match" | "config_override" | "execution_plan" | "force_capability"
+    model_reason: str = ""  # "workload_match" | "config_override" | "execution_plan" | "force_capability"
 
     # ── Tools ────────────────────────────────────────────────────────────
     allowed_tools: list[str] = field(default_factory=list)
@@ -202,7 +202,7 @@ class ExecutionContext:
             "intent": self.intent_str,
             "cap_ids": self.cap_ids,
             "model_name": self.model_name,
-            "role": self.role,
+            "workload": self.workload,
             "max_steps": self.max_steps,
             "temperature": self.temperature,
             "allowed_tools": self.allowed_tools,

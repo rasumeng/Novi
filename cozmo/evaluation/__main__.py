@@ -4,7 +4,7 @@ Usage:
     python -m cozmo.evaluation analyze  [--dataset PATH] [--limit N] [--save PATH]
     python -m cozmo.evaluation runtime   [--dataset PATH] [--limit N] [--timeout S] [--save PATH]
     python -m cozmo.evaluation compare BASELINE.json CANDIDATE.json
-    python -m cozmo.evaluation evidence     [--dataset PATH] [--limit N] [--model NAME] [--judge-model NAME] [--role ROLE] [--save PATH]
+    python -m cozmo.evaluation evidence     [--dataset PATH] [--limit N] [--model NAME] [--judge-model NAME] [--workload WORKLOAD] [--save PATH]
     python -m cozmo.evaluation evidence-compare BASELINE.json CANDIDATE.json
 
 analyze  — offline orchestrator decision evaluation (no model required)
@@ -112,10 +112,10 @@ def _cmd_evidence(args) -> int:
     client = (
         svc.client_for_model(args.model, 0.0)
         if args.model
-        else svc.client(args.role, 0.0)
+        else svc.client(args.workload, 0.0)
     )
     judge = svc.client_for_model(args.judge_model, 0.0) if args.judge_model else None
-    model_name = args.model or svc.resolve(args.role)[1]
+    model_name = args.model or svc.resolve(args.workload)[1]
 
     report = run_evidence_ab(dataset, client, judge_client=judge, model_name=model_name)
     _print_evidence(report)
@@ -187,9 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_ev.add_argument("--dataset", default="tests/evidence_corpus.json")
     p_ev.add_argument("--limit", type=int, default=None)
-    p_ev.add_argument("--model", help="model name override (default: --role)")
+    p_ev.add_argument("--model", help="model name override (default: --workload)")
     p_ev.add_argument("--judge-model", help="model used for groundedness judging")
-    p_ev.add_argument("--role", default="chat", help="role to resolve when no --model")
+    p_ev.add_argument("--workload", default="general",
+                      help="workload to resolve when no --model (general/research/code)")
     p_ev.add_argument("--save")
     p_ev.set_defaults(func=_cmd_evidence)
 

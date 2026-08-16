@@ -38,7 +38,7 @@ class CozmoContext:
         self._cfg: dict | None = cfg
         self._ollama_url: str | None = None
         self._model_service: object | None = None
-        self._router_llm: object | None = None
+        self._simple_llm: object | None = None
         self._memory: object | None = None
         self._project_index: object | None = None
         self._scheduler: object | None = None
@@ -106,16 +106,17 @@ class CozmoContext:
         return [m.name for m in self.model_registry.list_all()]
 
     @property
-    def router_llm(self):
+    def simple_llm(self):
         """Lightweight wrapper around ModelService for intent classification & summarization.
 
         Provides the simple `invoke(prompt) -> str` API that `classify_intent`
-        and history compaction expect.
+        and history compaction expect. Resolves the ``general`` workload's
+        configured model — the advisory LLM surface, not a router.
         """
-        from ..runtime.runtime import _RouterLLM
-        if self._router_llm is None:
-            self._router_llm = _RouterLLM(self.model_service, "chat")
-        return self._router_llm
+        from .simple_llm import SimpleLLM
+        if self._simple_llm is None:
+            self._simple_llm = SimpleLLM(self.model_service, "general")
+        return self._simple_llm
 
     @property
     def memory(self):
@@ -124,7 +125,7 @@ class CozmoContext:
         if self._memory is None:
             mem_cfg = self.config.get("memory", {})
             self._memory = MemoryManager(
-                self.router_llm,
+                self.simple_llm,
                 persist_dir=str(Path.home() / ".cozmo" / "memory"),
                 embed_model=self.embedding_service,
                 max_turns=int(mem_cfg.get("max_turns_before_summary", 5)),
@@ -177,7 +178,7 @@ class CozmoContext:
                 knowledge_index=get_knowledge_index(),
                 conversation_store=ConversationStore(persist_dir=persist_dir),
                 event_bus=self._brain_event_bus,
-                extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.router_llm.invoke)),
+                extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.simple_llm.invoke)),
                 knowledge_layer=KnowledgeLayer(knowledge_store),
                 scenario_layer=ScenarioLayer(scenario_store),
                 relationship_store=RelationshipStore(persist_dir=persist_dir),
@@ -259,9 +260,9 @@ class CozmoContext:
             self._orchestrator = None
         if self._orchestrator is None:
             self._orchestrator = Orchestrator(
-                intent_detector=IntentDetector(router_llm=self.router_llm),
+                intent_detector=IntentDetector(llm=self.simple_llm),
                 complexity_estimator=ComplexityEstimator(),
-                evidence_detector=EvidenceDetector(router_llm=self.router_llm),
+                evidence_detector=EvidenceDetector(llm=self.simple_llm),
                 task_store=TaskStore(),
                 planner_engine=PlannerEngine(),
             )
@@ -377,11 +378,10 @@ class CozmoContext:
         orchestrator = overrides.get("orchestrator", self.orchestrator)
         runtime = CozmoRuntime(
             model_service=overrides.get("model_service", self.model_service),
-            model_manager=overrides.get("model_manager", None),
             memory=overrides.get("memory", self.memory),
             project_index=overrides.get("project_index", self.project_index),
             cfg=overrides.get("cfg", self.config),
-            router_llm=overrides.get("router_llm", self.router_llm),
+            simple_llm=overrides.get("simple_llm", self.simple_llm),
             event_bus=overrides.get("event_bus", EventBus()),
             brain=overrides.get("brain", self.brain),
             skills=overrides.get("skills", None),
@@ -409,7 +409,7 @@ class CozmoContext:
     def warmup(self):
         """Eagerly initialize all services. Called at startup."""
         _ = self.model_service
-        _ = self.router_llm
+        _ = self.simple_llm
         _ = self.memory
         _ = self.project_index
         _ = self.embedding_service

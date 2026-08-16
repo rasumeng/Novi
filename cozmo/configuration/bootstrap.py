@@ -29,10 +29,8 @@ CONFIG_PATH = Path.home() / ".cozmo" / "config.toml"
 DEFAULT_CONFIG: dict = {
     "llm": {
         "max_tokens": 65536,
-        "default_model": "",
-        "roles": {role: {"model": ""} for role in ("classifier", "router", "orchestrator", "chat", "coder", "planner", "vision")},
+        "workloads": {workload: {"model": ""} for workload in ("general", "research", "code")},
     },
-    "experience": "medium",
     "embedding": {"backend": "ollama", "model": "", "dimension": 768},
     "ollama": {"url": "http://localhost:11434"},
     "providers": {
@@ -41,13 +39,11 @@ DEFAULT_CONFIG: dict = {
         "openai": {"api_key_env": "OPENAI_API_KEY"},
     },
     "memory": {"max_turns_before_summary": 5, "max_short_term_pairs": 10},
-    "router": {"use_llm": False},
     "workspace": {"path": "~/.cozmo/workspace", "knowledge": "~/.cozmo/knowledge", "git_repo": ""},
     "personality": "",
     "search": {"url": "http://localhost:8080", "backend": "searxng"},
     "mcp": {"servers": {}},
     "runtime": {
-        "lightweight_mode": False,
         "max_history": 10,
         "max_steps": 8,
         "max_tool_output_chars": 8000,
@@ -68,21 +64,12 @@ DEFAULT_CONFIG: dict = {
                 "planning": ["planning", "conversation"],
                 "vision": ["vision", "conversation"],
             },
-            "intent_roles": {
-                "conversation": "chat", "research": "planner", "coding": "coder",
-                "planning": "planner", "vision": "vision",
-            },
-            "capability_roles": {
-                "coding": "coder", "planning": "planner", "research": "planner",
-                "conversation": "chat", "vision": "vision",
-            },
-            "capability_preferences": {},
         },
     },
     "agents": {
         "primary": ["build", "plan"],
-        "build": {"model": None, "permissions": {}},
-        "plan": {"model": None, "permissions": {"write_file": "deny", "edit_file": "deny", "run_command": "deny"}},
+        "build": {"permissions": {}},
+        "plan": {"permissions": {"write_file": "deny", "edit_file": "deny", "run_command": "deny"}},
         "profiles": {},
     },
     "permissions": {"write_file": "ask", "edit_file": "ask", "run_command": {"*": "ask"}},
@@ -139,7 +126,7 @@ def _bind_apply_hooks(cfg: Configuration):
     """Bind subsystem apply callbacks so runtime changes propagate live."""
 
     def runtime_apply(path, value, previous):
-        hooks = _hooks.get("runtime")
+        hooks = _hooks.get("runtime") or []
         for fn in hooks:
             try:
                 fn(path, value, previous)
@@ -147,7 +134,7 @@ def _bind_apply_hooks(cfg: Configuration):
                 log.warning("runtime apply hook failed for %s: %s", path, e)
 
     def memory_apply(path, value, previous):
-        hooks = _hooks.get("memory")
+        hooks = _hooks.get("memory") or []
         for fn in hooks:
             try:
                 fn(path, value, previous)
@@ -155,7 +142,7 @@ def _bind_apply_hooks(cfg: Configuration):
                 log.warning("memory apply hook failed for %s: %s", path, e)
 
     def mcp_apply(path, value, previous):
-        hooks = _hooks.get("mcp")
+        hooks = _hooks.get("mcp") or []
         for fn in hooks:
             try:
                 fn(path, value, previous)
@@ -163,7 +150,7 @@ def _bind_apply_hooks(cfg: Configuration):
                 log.warning("mcp apply hook failed for %s: %s", path, e)
 
     def integrations_apply(path, value, previous):
-        hooks = _hooks.get("integrations")
+        hooks = _hooks.get("integrations") or []
         for fn in hooks:
             try:
                 fn(path, value, previous)

@@ -167,11 +167,6 @@ export class CozmoClient {
   }
 }
 
-export async function fetchModels() {
-  const r = await fetch(`${API_BASE}/api/models`)
-  return r.json() as Promise<{ id: string; name: string; role: string; active: boolean }[]>
-}
-
 export async function fetchTools() {
   const r = await fetch(`${API_BASE}/api/tools`)
   return r.json() as Promise<{ id: string; name: string; description: string; enabled: boolean }[]>

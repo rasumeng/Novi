@@ -56,7 +56,6 @@ _TOOL_CATEGORIES: dict[str, str] = {
     "analyze_image": "workspace",
     "clipboard_read": "workspace",
     "telegram_send": "other",
-    "task": "other",
 }
 
 _TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)

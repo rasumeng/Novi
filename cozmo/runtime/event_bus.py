@@ -5,7 +5,7 @@ Replaces runtime-inline yields with a publish/subscribe system.
 WebSocket / logging / memory / reflection subscribe independently.
 
 Architecture:
-  Engine → EventBus.emit(event) → [subscriber, subscriber, ...]
+  Runtime → EventBus.emit(event) → [subscriber, subscriber, ...]
                                        ↕
                               WebSocket forwarder
                               Logging subscriber

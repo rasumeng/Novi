@@ -12,8 +12,8 @@ Usage::
         registry=registry,
     )
     cfg.initialize()
-    value = cfg.get("llm.roles.chat.model")
-    cfg.set("llm.roles.chat.model", "qwen3:8b", by="webui")
+    value = cfg.get("llm.workloads.general.model")
+    cfg.set("llm.workloads.general.model", "qwen3:8b", by="webui")
 """
 
 from __future__ import annotations

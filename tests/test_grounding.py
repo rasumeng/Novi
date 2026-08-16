@@ -104,7 +104,7 @@ class TestGroundingReasoner:
         mock_llm.invoke.return_value = (
             '{"needs_grounding": true, "confidence": 0.85, "reason": "depends on upcoming release"}'
         )
-        ed = EvidenceDetector(router_llm=mock_llm)
+        ed = EvidenceDetector(llm=mock_llm)
         result = ed.grounding_reasoner("Who is the next character?")
         assert result is not None
         assert result.needs_grounding is True
@@ -116,7 +116,7 @@ class TestGroundingReasoner:
         mock_llm.invoke.return_value = (
             '{"needs_grounding": false, "confidence": 0.95, "reason": "timeless concept"}'
         )
-        ed = EvidenceDetector(router_llm=mock_llm)
+        ed = EvidenceDetector(llm=mock_llm)
         result = ed.grounding_reasoner("What is recursion?")
         assert result is not None
         assert result.needs_grounding is False
@@ -125,12 +125,12 @@ class TestGroundingReasoner:
     def test_llm_returns_none_on_error(self):
         mock_llm = MagicMock()
         mock_llm.invoke.side_effect = RuntimeError("LLM down")
-        ed = EvidenceDetector(router_llm=mock_llm)
+        ed = EvidenceDetector(llm=mock_llm)
         result = ed.grounding_reasoner("Who is the next character?")
         assert result is None
 
     def test_llm_returns_none_when_unavailable(self):
-        ed = EvidenceDetector()  # no router_llm
+        ed = EvidenceDetector()  # no llm
         result = ed.grounding_reasoner("Who is the next character?")
         assert result is None
 
@@ -139,7 +139,7 @@ class TestGroundingReasoner:
         mock_llm.invoke.return_value = (
             '```json\n{"needs_grounding": true, "confidence": 0.9, "reason": "testing"}\n```'
         )
-        ed = EvidenceDetector(router_llm=mock_llm)
+        ed = EvidenceDetector(llm=mock_llm)
         result = ed.grounding_reasoner("test")
         assert result is not None
         assert result.needs_grounding is True
@@ -149,7 +149,7 @@ class TestGroundingReasoner:
         mock_llm.invoke.return_value = (
             '{"needs_grounding": true, "confidence": 1.5, "reason": "overconfident"}'
         )
-        ed = EvidenceDetector(router_llm=mock_llm)
+        ed = EvidenceDetector(llm=mock_llm)
         result = ed.grounding_reasoner("test")
         assert result.confidence == 1.0
 
@@ -205,7 +205,7 @@ class TestResolveGrounding:
         """Medium confidence (0 < conf < 0.7) → LLM path."""
         # Set up mock on evidence_detector
         mock_llm = MagicMock()
-        orch.evidence_detector.router_llm = mock_llm
+        orch.evidence_detector.llm = mock_llm
         mock_llm.invoke.return_value = (
             '{"needs_grounding": true, "confidence": 0.65, "reason": "game build changes with meta"}'
         )
@@ -224,7 +224,7 @@ class TestResolveGrounding:
 
     def test_llm_path_fallback_when_unavailable(self, orch):
         """Medium confidence but LLM unavailable → graceful heuristic fallback."""
-        orch.evidence_detector.router_llm = None
+        orch.evidence_detector.llm = None
         evidence = EvidenceAnalysis(
             requirements=EvidenceRequirements(external=True),
             confidence=0.40,

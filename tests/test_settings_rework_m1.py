@@ -161,9 +161,9 @@ def test_apply_hooks_fire(tmp_path):
 
 
 def test_migrate_runs_with_new_registrations():
-    # Legacy models mirror still migrates to llm.roles even with the new
+    # Legacy models mirror still migrates to llm.workloads even with the new
     # 'models' namespace registered (migration is data-level, not schema).
     from cozmo.configuration.migration import migrate
     out = migrate({"models": {"chat": "llama3", "max_tokens": 4096}})
     assert "models" not in out
-    assert out["llm"]["roles"]["chat"]["model"] == "llama3"
+    assert out["llm"]["workloads"]["general"]["model"] == "llama3"

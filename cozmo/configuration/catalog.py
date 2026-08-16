@@ -1,209 +1,243 @@
-"""Curated model facts + qualification + recommendation engine.
+"""Discovery payload assembly + compatibility views (Phase 5.5).
 
-Known-model metadata (size, RAM, capabilities, caveats) plus a first-class
-``qualification`` grade (trusted / supported / experimental / incompatible)
-that the future Automatic resolution layer consumes.
+This module is the *orchestration/compatibility* layer. The recommendation
+intelligence lives in ``recommendation.py`` (generic, evidence-based, operating
+on ``ModelRecord`` + ``HardwareProfile``). Curated seed data
+(``SEED_MODEL_FACTS``) is advisory evidence only: it may enrich a record or
+supply optional seed-only advisory candidates, but it never defines the model
+universe and is never the recommendation decision.
 
-Qualification is independent of installation status and hardware fit — see
-``qualification.py``. Recommendations are derived (later) from qualification +
-hardware + capabilities; this module only assembles the facts.
+Candidate sources are distinct and pluggable:
 
-Recommendations always carry a reason; never vague labels.
+1. installed runtime records   — authoritative evidence of locally installed
+   models (from discovery).
+2. user-referenced missing     — models referenced by configuration but not
+   installed (surfaced separately, never recommended-for-install silently).
+3. seed-only advisory records  — optional curated suggestions for models that
+   are not currently discovered; built here and run through the same generic
+   engine as everything else.
+4. future remote records       — not implemented in Phase 5.5; the engine
+   accepts any ``ModelRecord``, so a future source drops in without touching
+   ``recommendation.py``.
+
+The engine never knows which source produced a record.
+
+Recommendations are advisory only and never write configuration — the sole
+selection write path is ``resolver.apply_selection``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Optional
 
 from .hardware import (
     HardwareProfile,
     detect_hardware,
 )
+from .model_records import (
+    CapabilityEvidence,
+    ModelIdentity,
+    ModelRecord,
+    ModelStatus,
+)
+from .model_seeds import ModelFact, SEED_MODEL_FACTS
 from .qualification import Qualification
+from .recommendation import (
+    EvidenceStrength,
+    HardwareFit,
+    capability_support,
+    evidence_grade,
+    hardware_fit_for_record,
+    merge_curated_evidence,
+    positive_capability_names,
+)
 
 
-@dataclass
-class ModelFact:
-    name: str
-    display_name: str = ""
-    approx_ram_gb: float = 4.0
-    qualification: Qualification = Qualification.EXPERIMENTAL
-    capabilities: list[str] = field(default_factory=lambda: ["chat"])
-    caveats: list[str] = field(default_factory=list)
-    # Real, measured/model-documented VRAM requirement in GB. ``None`` means
-    # "do not know" — never fabricated, never compared as a guessed number.
-    vram_required_gb: Optional[float] = None
-    # Conservative curated hint (from user testing, not a measured capacity):
-    # this model is not a good automatic choice below this many GB of VRAM.
-    # ``None`` means no such known constraint. Encodes the Gemma-4-on-8GB caveat
-    # so the resolver can respect it without inventing a compatibility matrix.
-    min_vram_gb: Optional[float] = None
-    works_with_memory: bool = False
-    supports_tools: bool = False
-    supports_vision: bool = False
-
-    @property
-    def tested_with_cozmo(self) -> bool:
-        """Back-compat: qualification with direct evidence."""
-        return self.qualification.has_evidence
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "displayName": self.display_name or self.name,
-            "approxRamGb": self.approx_ram_gb,
-            "vramRequiredGb": self.vram_required_gb,
-            "minVramGb": self.min_vram_gb,
-            "qualification": self.qualification.value,
-            "capabilities": self.capabilities,
-            "caveats": self.caveats,
-            "testedWithCozmo": self.tested_with_cozmo,
-            "worksWithMemory": self.works_with_memory,
-            "supportsTools": self.supports_tools,
-            "supportsVision": self.supports_vision,
-        }
+# Capabilities a user can pick / that get recommended for the user-facing
+# roles. Anything outside this set (notably ``embeddings``) is internal and must
+# never surface as a setup item, recommendation, or install target.
+USER_FACING_CAPABILITIES = frozenset(("chat", "reasoning", "coding", "vision"))
 
 
-# Curated facts. Names only — a model is only "recommended" when it is actually
-# installed on the user's machine. Qualification is evidence of a reliable Cozmo
-# experience; it is NOT a claim of fitness for every GPU/hardware config.
-KNOWN_MODEL_FACTS: dict[str, ModelFact] = {
-    m.name: m
-    for m in [
-        # ── Trusted seed models (explicit evidence from real user testing) ──
-        ModelFact("gemma4:e4b", "Gemma 4 E4B", 4.0, Qualification.TRUSTED,
-                  capabilities=["chat", "reasoning", "tools"], supports_tools=True),
-        ModelFact("qwen3:8b", "Qwen 3 8B", 8.0, Qualification.TRUSTED,
-                  capabilities=["chat", "reasoning", "coding", "tools"], supports_tools=True),
-        ModelFact("qwen2.5vl:7b", "Qwen 2.5 VL 7B", 8.0, Qualification.TRUSTED,
-                  capabilities=["chat", "vision", "tools"], supports_tools=True, supports_vision=True),
-        # ── Trusted overall, WITH a hardware caveat ─────────────────────────
-        # Gemma 4 is trusted overall, but has performed poorly/sluggishly on
-        # lower-VRAM systems. Specifically: Gemma 4:12b is too slow on 8 GB
-        # VRAM, while gemma4:e4b performs well on 8 GB VRAM. This is a caveat,
-        # not a fabricated GPU/model compatibility matrix.
-        ModelFact("gemma4", "Gemma 4", 12.0, Qualification.TRUSTED,
-                  capabilities=["chat", "reasoning", "tools"], supports_tools=True,
-                  min_vram_gb=12.0,
-                  caveats=[
-                      "Gemma 4:12b is sluggish on systems with 8 GB VRAM; "
-                      "gemma4:e4b is the recommended variant for lower-VRAM machines.",
-                  ]),
-        # ── Supported (known to work and reasonable, below trusted) ─────────
-        ModelFact("phi3:mini", "Phi-3 Mini", 4.0, Qualification.SUPPORTED, supports_tools=True),
-        ModelFact("llama3.2:3b", "Llama 3.2 3B", 4.0, Qualification.SUPPORTED,
-                  works_with_memory=True, supports_tools=True),
-        ModelFact("llama3.1:8b", "Llama 3.1 8B", 8.0, Qualification.SUPPORTED,
-                  works_with_memory=True, supports_tools=True,
-                  capabilities=["chat", "reasoning", "tools"]),
-        ModelFact("qwen2.5-coder:7b", "Qwen 2.5 Coder 7B", 8.0, Qualification.SUPPORTED,
-                  supports_tools=True, capabilities=["chat", "coding", "tools"]),
-        ModelFact("qwen2.5-coder:32b", "Qwen 2.5 Coder 32B", 24.0, Qualification.SUPPORTED,
-                  supports_tools=True, capabilities=["chat", "coding", "tools"]),
-        ModelFact("llama3.1:70b", "Llama 3.1 70B", 48.0, Qualification.SUPPORTED,
-                  supports_tools=True, capabilities=["chat", "reasoning", "tools"]),
-        ModelFact("llava:7b", "LLaVA 7B", 8.0, Qualification.SUPPORTED,
-                  supports_vision=True, capabilities=["chat", "vision"]),
-        ModelFact("llava:13b", "LLaVA 13B", 14.0, Qualification.SUPPORTED,
-                  supports_vision=True, capabilities=["chat", "vision"]),
-        ModelFact("nomic-embed-text", "Nomic Embed Text", 1.0, Qualification.SUPPORTED,
-                  works_with_memory=True, capabilities=["embeddings"]),
-        ModelFact("mxbai-embed-large", "MixedBread Embed Large", 2.0, Qualification.SUPPORTED,
-                  works_with_memory=True, capabilities=["embeddings"]),
-    ]
-}
+def _source_label(source: Optional[str]) -> str:
+    return {
+        "runtime": "runtime reported",
+        "seed": "seed/curated evidence",
+        "name-inference": "weak name-based evidence",
+        "reported": "reported evidence",
+    }.get(source or "", "reported evidence")
+
+
+def _enrich_record(record: ModelRecord) -> ModelRecord:
+    """Merge optional curated seed evidence into a record (orchestration).
+
+    Seed data may *augment* a record's evidence; it never gates anything. An
+    unseeded record passes through unchanged and is evaluated identically.
+    """
+    fact = SEED_MODEL_FACTS.get(record.name)
+    return merge_curated_evidence(record, fact)
 
 
 class ModelRecommendationEngine:
-    """Produces recommendation records for discovered models."""
+    """Produces recommendation records for discovered models.
 
-    def __init__(self, hardware: HardwareProfile | None = None):
+    Pure advisory: never writes configuration.
+    """
+
+    def __init__(self, hardware: Optional[HardwareProfile] = None):
         self.hardware = hardware or detect_hardware()
 
-    def for_model(self, name: str, status: str = "installed") -> dict:
-        from .eligibility import hardware_fit_for, HardwareFit
-        fact = KNOWN_MODEL_FACTS.get(name)
-        reasons: list[str] = []
+    def for_record(self, record: ModelRecord) -> dict:
+        """Recommendation record for one model, from its generic evidence.
 
-        # Unknown models stay experimental/unqualified — never auto-promoted.
-        if fact is None:
-            reasons.append("Untested with Cozmo")
+        The model is evaluated on its own capability evidence and hardware
+        fit. Curated qualification is advisory evidence; absence of seed
+        metadata never disqualifies a model with real runtime evidence.
+        """
+        name = record.name
+        qual = record.qualification
+        claims = list(record.capabilities)
+        positive = positive_capability_names(record)
+        user_facing = USER_FACING_CAPABILITIES & positive
+        reasons: list[str] = []
+        caveats = list(record.caveats)
+
+        if qual == Qualification.INCOMPATIBLE:
+            reasons.append("Marked incompatible; not recommended")
             return {
                 "name": name,
                 "recommended": False,
                 "tier": "experimental",
-                "qualification": Qualification.EXPERIMENTAL.value,
+                "qualification": qual.value,
                 "reasons": reasons,
-                "displayName": name,
-                "approxRamGb": None,
-                "caveats": [],
+                "displayName": record.display_name or name,
+                "approxRamGb": record.approx_ram_gb,
+                "caveats": caveats,
             }
 
-        fit = hardware_fit_for(fact, self.hardware)
-        if fact.qualification.has_evidence:
-            reasons.append(f"Qualified: {fact.qualification.value}")
-        if fit == HardwareFit.FITS:
-            reasons.append("Best for your hardware")
-        elif fit == HardwareFit.UNKNOWN:
-            reasons.append("Hardware fit unknown")
-        if fact.works_with_memory:
-            reasons.append("Works with Memory")
-        if fact.supports_tools:
-            reasons.append("Supports Tool Calling")
+        if not positive:
+            reasons.append("Untested with Cozmo")
+            reasons.append("No capability evidence")
+            return {
+                "name": name,
+                "recommended": False,
+                "tier": "experimental",
+                "qualification": qual.value,
+                "reasons": reasons,
+                "displayName": record.display_name or name,
+                "approxRamGb": record.approx_ram_gb,
+                "caveats": caveats,
+            }
 
-        # Incompatible is never treated as trusted/supported and never
-        # recommended. Keep the legacy two-value ``tier`` for UI compat.
-        if fact.qualification == Qualification.INCOMPATIBLE:
-            tier = "experimental"
+        if qual.has_evidence:
+            reasons.append(f"Qualified: {qual.value}")
+
+        # Per-capability evidence reasons with provenance.
+        best_grade = EvidenceStrength.NONE
+        for cap in sorted(user_facing):
+            grade, source, _conf = evidence_grade(claims, cap, qual)
+            if grade > best_grade:
+                best_grade = grade
+            reasons.append(f"Supports capability '{cap}' ({_source_label(source)})")
+
+        if "tools" in positive:
+            reasons.append("Supports Tool Calling")
+        if record.metadata.get("works_with_memory"):
+            reasons.append("Works with Memory")
+
+        fit = hardware_fit_for_record(record, self.hardware)
+        reasons.extend(fit.reasons)
+
+        # Recommendation decision is evidence-based, not seed-membership-based:
+        # a positive capability claim of at least ``reported`` strength (i.e.
+        # runtime, trusted/supported seed, or an explicit report) is required.
+        # Name-inference-only and experimental-seed-only evidence stays below
+        # the bar for a confident recommendation.
+        recommended = best_grade > EvidenceStrength.SEED_EXPERIMENTAL
+        tier = "supported" if qual.has_evidence else "experimental"
+
+        if fit.fit == HardwareFit.DOES_NOT_FIT:
             recommended = False
-        else:
-            tier = (
-                "supported"
-                if fact.qualification.has_evidence
-                else "experimental"
-            )
-            recommended = (
-                fact.qualification.has_evidence
-                and fit != HardwareFit.DOES_NOT_FIT
-            ) or bool(fact.works_with_memory or fact.supports_tools)
+            tier = "experimental"
+        if not user_facing:
+            recommended = False
+            tier = "experimental"
+            reasons.append("Internal capability only; not user-facing")
+        if not recommended and best_grade == EvidenceStrength.NAME_INFERENCE:
+            reasons.append("Weak name-based capability evidence only")
 
         return {
             "name": name,
             "recommended": recommended,
             "tier": tier,
-            "qualification": fact.qualification.value,
+            "qualification": qual.value,
             "reasons": reasons,
-            "displayName": fact.display_name or name,
-            "approxRamGb": fact.approx_ram_gb,
-            "caveats": fact.caveats,
+            "displayName": record.display_name or name,
+            "approxRamGb": record.approx_ram_gb,
+            "caveats": caveats,
         }
 
-    def recommend_all(self, installed: list) -> list[dict]:
-        return [self.for_model(m.name, m.status.value) for m in installed]
+    def for_model(
+        self,
+        name: str,
+        status: str = "installed",
+        capabilities: Optional[list[str]] = None,
+        evidence_sources: Optional[set[str]] = None,
+    ) -> dict:
+        """Legacy name-based wrapper used by tests and simple callers.
+
+        Builds a record from the name (enriching with curated seed evidence)
+        and runs it through the generic engine. ``status`` is advisory and does
+        not affect the result.
+        """
+        fact = SEED_MODEL_FACTS.get(name)
+        sources = set(evidence_sources or ())
+        only_inference = bool(sources) and sources <= {"name-inference"}
+        claim_source = "name-inference" if only_inference else "reported"
+        claims = [
+            CapabilityEvidence(c, True, claim_source, None)
+            for c in (capabilities or ())
+        ]
+        record = ModelRecord(
+            name=name,
+            status=ModelStatus.INSTALLED,
+            capabilities=claims,
+            qualification=fact.qualification if fact else Qualification.EXPERIMENTAL,
+            display_name=fact.display_name if fact else name,
+            approx_ram_gb=fact.approx_ram_gb if fact else None,
+            min_vram_gb=fact.min_vram_gb if fact else None,
+            caveats=list(fact.caveats) if fact else [],
+        )
+        record = merge_curated_evidence(record, fact)
+        return self.for_record(record)
 
 
 def build_catalog_payload(installed_models: list) -> dict:
     """Compose the full discovery payload the UI consumes.
 
     Each entry carries installation status, qualification, capabilities,
-    caveats, and an ``eligibility`` block (hardware fit + confidence + Automatic
-    / Custom eligibility) derived from current hardware + installed models +
-    catalog. Eligibility is derived state — never persisted.
+    caveats, rich identity/runtime metadata (family, quantization, parameter
+    count, context length, format, license), capability evidence with
+    provenance, and an ``eligibility`` block (hardware fit + confidence).
+    Eligibility is derived state — never persisted. No Automatic/Custom
+    eligibility fields. Installed records pass through the generic engine.
     """
     from .eligibility import evaluate_eligibility  # local import: avoid cycle
     engine = ModelRecommendationEngine()
     entries = []
     for m in installed_models:
-        rec = engine.for_model(m.name, m.status.value)
+        record = _enrich_record(m)
+        rec = engine.for_record(record)
         elig = evaluate_eligibility(
-            m.name, installed_status=m.status, hardware=engine.hardware,
-            discovered_capabilities=m.capability_flags)
-        entries.append({
-            "name": m.name,
-            "status": m.status.value,
-            "size": m.size,
-            "capabilities": m.capability_flags,
+            installed_status=m.status,
+            hardware=engine.hardware,
+            record=record,
+        )
+        entry = {
+            "name": record.name,
+            "status": record.status.value,
+            "size": record.size_bytes,
+            "capabilities": record.capability_flags,
             "recommended": rec["recommended"],
             "tier": rec["tier"],
             "qualification": rec["qualification"],
@@ -214,61 +248,114 @@ def build_catalog_payload(installed_models: list) -> dict:
             "eligibility": {
                 "hardwareFit": elig.hardware_fit.value,
                 "hardwareConfidence": elig.hardware_confidence.value,
-                "eligibleAutomatic": elig.eligible_automatic,
-                "eligibleCustom": elig.eligible_custom,
             },
+            "capabilityEvidence": [e.to_dict() for e in record.capabilities],
+        }
+        identity = record.identity
+        if identity is not None:
+            entry.update({
+                "family": identity.family,
+                "variant": identity.variant,
+                "quantization": identity.quantization,
+            })
+        entry.update({
+            "parameterCount": record.parameter_count,
+            "contextLength": record.context_length,
+            "format": record.format,
+            "license": record.license,
+            "stale": bool(record.stale),
         })
+        entries.append(entry)
     return {
         "hardware": {"ramGb": engine.hardware.ram_gb},
         "models": entries,
     }
 
 
-# Capabilities a user can pick / that get recommended for the four user-facing
-# roles. Anything outside this set (notably ``embeddings``) is internal and must
-# never surface as a setup item, recommendation, or install target.
-USER_FACING_CAPABILITIES = frozenset(("chat", "reasoning", "coding", "vision"))
+def _seed_advisory_records() -> list[ModelRecord]:
+    """Seed-only advisory candidate records.
+
+    Curated suggestions for models not currently discovered. Each is an
+    ordinary ``ModelRecord`` whose evidence is labeled ``seed``; the generic
+    engine evaluates them exactly like installed or future-remote records.
+    """
+    records: list[ModelRecord] = []
+    for name, fact in SEED_MODEL_FACTS.items():
+        note = "curated seed metadata (non-authoritative)"
+        caps = [
+            CapabilityEvidence(c, True, "seed", 0.9, note)
+            for c in fact.capabilities
+        ]
+        claimed = set(fact.capabilities)
+        if fact.supports_tools and "tools" not in claimed:
+            caps.append(CapabilityEvidence("tools", True, "seed", 0.9, note))
+        if fact.supports_vision and "vision" not in claimed:
+            caps.append(CapabilityEvidence("vision", True, "seed", 0.9, note))
+        records.append(ModelRecord(
+            name=name,
+            status=ModelStatus.AVAILABLE,
+            identity=ModelIdentity(
+                name=name, family=fact.family, variant=fact.variant,
+                size_tier=fact.size_tier, quantization=fact.quantization),
+            source_kind="seed",
+            qualification=fact.qualification,
+            capabilities=caps,
+            capability_flags={c.capability: True for c in caps if c.supported is True},
+            display_name=fact.display_name,
+            approx_ram_gb=fact.approx_ram_gb,
+            min_vram_gb=fact.min_vram_gb,
+            caveats=list(fact.caveats),
+            license=fact.license,
+            metadata={"works_with_memory": True} if fact.works_with_memory else {},
+        ))
+    return records
 
 
 def build_available_recommendations(
     installed_names=frozenset(),
     hardware: Optional[HardwareProfile] = None,
+    candidate_records: Optional[list[ModelRecord]] = None,
 ) -> list[dict]:
-    """Catalog models Cozmo recommends but the machine does not have installed.
+    """Advisory suggestions for models Cozmo recommends but lacks installed.
 
-    M3.4 — this is the "recommended but missing" signal that drives the
-    explicit-consent setup flow. Evidence is catalog qualification + hardware
-    fit only (the same recommendation engine that powers the installed list).
-    It deliberately does NOT read configuration, does NOT run the resolver, and
-    never installs anything — installing always requires an explicit user
-    action through the model-install endpoint.
+    This is the "recommended but missing" signal that drives the
+    explicit-consent setup flow. Evidence is capability evidence + qualification
+    + hardware fit only. It deliberately does NOT read configuration, does NOT
+    run the resolver, and never installs anything — installing always requires
+    an explicit user action through the model-install endpoint.
 
+    Candidates come from ``candidate_records`` when supplied (a future remote/
+    registry source), else seed-only advisory records. Every candidate flows
+    through the same generic engine — the engine never knows the source.
     Embedding-only models are excluded outright: ``embedding.model`` stays an
-    internal setting, so embeddings never appear as a recommendation, setup
-    item, or install target.
+    internal setting.
     """
     engine = ModelRecommendationEngine(hardware=hardware)
-    from .eligibility import HardwareFit, hardware_fit_for  # local import: avoid cycle
     installed = set(installed_names or ())
+    candidates = (
+        candidate_records if candidate_records is not None
+        else _seed_advisory_records()
+    )
     out = []
-    for name, fact in KNOWN_MODEL_FACTS.items():
-        if name in installed:
+    for record in candidates:
+        if record.name in installed:
             continue
-        if not any(c in USER_FACING_CAPABILITIES for c in fact.capabilities):
-            continue  # embedding-only model: internal, never surfaced
-        rec = engine.for_model(name)
+        if not any(c in USER_FACING_CAPABILITIES
+                   for c in positive_capability_names(record)):
+            continue
+        rec = engine.for_record(record)
         if not rec["recommended"]:
             continue
         # A model that is known NOT to fit the detected hardware is never pushed
-        # as a setup install — installing it could not change Automatic resolution.
-        # Same fit signal the eligibility + recommendation layers already use.
-        if hardware_fit_for(fact, engine.hardware) == HardwareFit.DOES_NOT_FIT:
+        # as a setup install — installing it could not change resolution.
+        if hardware_fit_for_record(record, engine.hardware).fit == HardwareFit.DOES_NOT_FIT:
             continue
+        identity = record.identity
         out.append({
-            "name": name,
+            "name": record.name,
             "status": "available",
             "size": None,
-            "capabilities": {c: True for c in fact.capabilities},
+            "capabilities": record.capability_flags,
             "recommended": True,
             "tier": rec["tier"],
             "qualification": rec["qualification"],
@@ -276,5 +363,9 @@ def build_available_recommendations(
             "displayName": rec["displayName"],
             "approxRamGb": rec["approxRamGb"],
             "caveats": rec["caveats"],
+            "family": identity.family if identity else None,
+            "variant": identity.variant if identity else None,
+            "quantization": identity.quantization if identity else None,
+            "license": record.license,
         })
     return out

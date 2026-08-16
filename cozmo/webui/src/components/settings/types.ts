@@ -37,15 +37,9 @@ export interface AgentConfig {
   [key: string]: unknown
 }
 
-export interface LlmRoleSpec {
-  model?: string
-  provider?: string
-}
-
 export interface LlmConfig {
   max_tokens?: number
-  default_model?: string
-  roles?: Record<string, LlmRoleSpec | string>
+  workloads?: Record<string, { model?: string }>
 }
 
 export interface SettingsData {

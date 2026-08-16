@@ -134,7 +134,7 @@ def webui_backend(tmp_path, monkeypatch):
         "memory": None,
         "registry": SimpleNamespace(),
         "project_index": None,
-        "router_llm": None,
+        "simple_llm": None,
         "skills": {},
         "brain": None,
         "orchestrator": orchestrator,

@@ -186,7 +186,7 @@ impl BackendLauncher {
         match TcpStream::connect_timeout(&addr, Duration::from_millis(700)) {
             Ok(mut stream) => {
                 let req = format!(
-                    "GET /api/models HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+                    "GET /api/config HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
                 );
                 if stream.write_all(req.as_bytes()).is_err() {
                     return false;

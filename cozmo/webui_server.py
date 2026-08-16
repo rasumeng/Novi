@@ -369,7 +369,7 @@ def build_runtime(cfg: dict):
         registry=b["registry"],
         project_index=b["project_index"],
         cfg=cfg,
-        router_llm=b["router_llm"],
+        simple_llm=b["simple_llm"],
         skills=b["skills"],
         event_bus=event_bus,
         brain=b.get("brain"),
@@ -465,21 +465,6 @@ class Session:
             self._emit({"type": "tool_result", "tool": d.get("tool", ""),
                         "result": d.get("output", ""), "id": d.get("call_id", ""),
                         "diff": d.get("diff")})
-
-    def apply_agent_config(self):
-        if not self.agent_config:
-            return
-        ac = self.agent_config
-        config = {}
-        model = ac.get("model")
-        if model:
-            config["force_model"] = model
-        if "max_steps" in ac:
-            config["max_steps"] = int(ac["max_steps"])
-        if "temperature" in ac:
-            config["temperature"] = float(ac["temperature"])
-        config["agent_system_extra"] = ac.get("system_prompt", "")
-        self.runtime.set_config(**config)
 
     # runs in worker thread
     def _emit(self, payload: dict):
@@ -864,20 +849,19 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         get_configuration,
         register_apply_hook,
     )
-    from .configuration.discovery import ModelDiscovery, query_ollama_tags
+    from .configuration.discovery import ModelDiscovery, invalidate_cache
     from .configuration.catalog import (
         ModelRecommendationEngine,
         build_available_recommendations,
         build_catalog_payload,
     )
-    from .configuration import presets as presets_mod
     from .configuration.install import ModelInstaller
     from .configuration.resolver import (
-        apply_automatic,
-        apply_custom,
-        recompute_automatic_if_active,
-        USER_CAPABILITIES,
+        apply_selection,
+        recommend,
+        WORKLOADS,
     )
+    from .runtime.model_selector import model_capabilities
 
     configuration = get_configuration()
     # M5.2: single schema-driven redactor for every secret read surface. The
@@ -911,30 +895,29 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         cfg.update(configuration.snapshot())
 
     def _after_models_changed():
-        """M3.3 — model-set lifecycle seam.
+        """Model-set lifecycle seam.
 
-        Runs after model install completion / explicit discovery refresh. In
-        Automatic mode it reconciles ``llm.roles.*`` with the current hardware
-        + installed models through ``recompute_automatic_if_active`` (idempotent,
-        compare-and-apply, no events when nothing changed). In Custom mode it is
-        a strict NOOP — user assignments are authoritative and never rewritten.
+        Runs after model install completion / explicit discovery refresh.
+        Recomputation here is advisory: it refreshes ``llm.workloads.*``
+        recommendation evidence and broadcasts it. It NEVER writes the user's
+        selection — selections are authoritative and never rewritten.
         """
         with recompute_lock:
             try:
                 url = configuration.get("ollama.url", "http://localhost:11434")
+                # A model-set change invalidates cached runtime metadata so the
+                # refresh reads fresh tags/show data, never a stale cache.
+                invalidate_cache()
                 installed = ModelDiscovery(url).installed()
-                resolution, changed = recompute_automatic_if_active(
-                    configuration, installed=installed)
-                if resolution is not None and changed:
-                    _broadcast_sync({"type": "models_resolved",
-                                     "resolution": resolution.to_dict()})
+                recs = recommend(installed=installed)
+                _broadcast_sync({"type": "models_resolved",
+                                 "recommendations": recs.to_dict()})
             except Exception as e:
-                print(f"[cozmo] model recompute failed: {e}")
+                print(f"[cozmo] model recommendation refresh failed: {e}")
         _sync_config_snapshot()
 
-    # M3.3 startup: in Automatic mode ensure the persisted llm.roles.* state
-    # reflects the current hardware + installed models before the UI serves.
-    # Idempotent (only writes on actual change) and never installs anything.
+    # Startup: compute advisory recommendations once before the UI serves.
+    # Never installs anything and never writes selection.
     _after_models_changed()
 
     def _sanitize_config(cfg: dict) -> dict:
@@ -1101,114 +1084,78 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         except ValidationError as e:
             return {"error": e.errors}
 
-    @app.post("/api/configuration/apply")
-    def apply_configuration(body: dict):
-        """Apply + apply-hooks a preset to the runtime routing, then persist."""
-        preset_id = body.get("preset")
-        discovered = ModelDiscovery(
-            configuration.get("ollama.url", "http://localhost:11434")
-        ).installed_names()
-        result = presets_mod.resolve_preset(preset_id, sorted(discovered))
-        if result is None:
-            return {"ok": False, "error": "unknown or custom preset"}
-        for role, model in result["roles"].items():
-            key = f"llm.roles.{role}.model"
-            if configuration.registry.has(key) and model:
-                try:
-                    configuration.set(key, model, by="preset")
-                except Exception as e:
-                    return {"ok": False, "error": f"failed to set {key}: {e}"}
-        configuration.set("experience", preset_id, by="preset")
+    # ── Models selection / recommendation (Phase 1) ────────────────
+
+    @app.get("/api/configuration/models/selection")
+    def get_models_selection():
+        """Read the persisted workload selection (llm.workloads.*)."""
+        workloads = {
+            workload: configuration.get(f"llm.workloads.{workload}.model", "")
+            for workload in WORKLOADS
+        }
+        return {"ok": True, "workloads": workloads}
+
+    @app.post("/api/configuration/models/selection")
+    def set_models_selection(body: dict):
+        """Persist the user's workload selection.
+
+        ``workloads``: {workload: model} mapping, written verbatim to
+        ``llm.workloads.*``. A model that is not installed is preserved and
+        reported as ``not-installed`` — never silently substituted. All writes
+        route through the Configuration Framework (validate -> persist -> apply
+        -> emit).
+        """
+        by = body.get("by", "webui")
+        assign = body.get("workloads") or {}
+        cleaned = {
+            workload: (assign.get(workload) or "").strip() if isinstance(assign.get(workload), str) else ""
+            for workload in WORKLOADS
+        }
+        url = configuration.get("ollama.url", "http://localhost:11434")
+        discovered = ModelDiscovery(url).installed()
+        result = apply_selection(configuration, cleaned, installed=discovered, by=by)
         _sync_config_snapshot()
         return {"ok": True, **result}
 
-    # ── Models mode / Custom state-machine (M3.2) ─────────────────
+    @app.post("/api/configuration/models/recommend")
+    def models_recommend(body: dict):
+        """Advisory model recommendations, optionally applied.
 
-    @app.post("/api/configuration/models/state")
-    def models_state(body: dict):
-        """Drive the Automatic <-> Custom model state machine.
-
-        ``mode``: "automatic" or "custom".
-        ``assign`` (custom only): {capability: model} capability intent to
-        persist under ``models.custom.assign.*`` before re-resolving. Capability
-        keys are limited to the four user-facing ones; embeddings and internal
-        roles are never accepted here.
-
-        All writes route through the Configuration Framework (validate ->
-        persist -> apply -> emit). ``llm.roles.*`` is derived state; custom
-        intent lives only in ``models.custom.assign.*``.
+        Always recomputes and returns recommendation evidence (never writes).
+        When ``apply=true`` the recommendations are written via
+        ``apply_selection`` — the single, verbatim selection path. Never
+        installs or downloads anything.
         """
-        mode = body.get("mode")
-        assign = body.get("assign") or {}
-        by = body.get("by", "webui")
         url = configuration.get("ollama.url", "http://localhost:11434")
         discovered = ModelDiscovery(url).installed()
-
-        if mode == "automatic":
-            resolution = apply_automatic(configuration, installed=discovered)
-            _sync_config_snapshot()
-            return {
-                "ok": True, "mode": "automatic", **resolution.to_dict(),
-                "assign": configuration.get("models.custom.assign", {}) or {},
-            }
-
-        if mode == "custom":
-            for cap, model in (assign or {}).items():
-                if cap not in USER_CAPABILITIES:
-                    continue
-                configuration.set(f"models.custom.assign.{cap}", model or "", by=by)
-            resolution = apply_custom(configuration, installed=discovered)
-            _sync_config_snapshot()
-            return {
-                "ok": True, "mode": "custom", **resolution.to_dict(),
-                "assign": configuration.get("models.custom.assign", {}) or {},
-            }
-
-        return {"ok": False, "error": "mode must be 'automatic' or 'custom'"}
-
-    @app.post("/api/configuration/models/recompute")
-    def models_recompute():
-        """M3.3 — explicit discovery refresh seam.
-
-        Reconciles ``llm.roles.*`` with current hardware + installed models when
-        Automatic is active (covers model removal and hardware refresh, which
-        have no inbound event). When Custom is active this is a strict NOOP —
-        user assignments are authoritative and never rewritten. Never installs
-        or downloads anything.
-        """
-        _after_models_changed()
-        return {
-            "ok": True,
-            "mode": configuration.get("models.mode", "automatic"),
-            "assign": configuration.get("models.custom.assign", {}) or {},
-        }
+        recs = recommend(installed=discovered)
+        data = recs.to_dict()
+        if (body or {}).get("apply"):
+            models = {workload: rec.model for workload, rec in recs.workloads.items()}
+            data["selection"] = apply_selection(
+                configuration, models, installed=discovered, by="webui")
+        _sync_config_snapshot()
+        return {"ok": True, **data}
 
     @app.post("/api/configuration/models/setup/dismiss")
     def models_setup_dismiss(body: dict):
-        """M3.4 — record an explicit decline of a recommended-model install.
+        """Record an explicit decline of a recommended-model install.
 
         Persists the user's "not now" choice under
-        ``models.automatic.setup.dismissed`` through the Configuration Framework
+        ``models.recommendations.dismissed`` through the Configuration Framework
         (sole persistence authority). It never installs anything and never
-        touches ``models.custom.assign.*`` or ``models.mode``; the model stays
-        installable from the Model library with a fresh explicit consent.
+        touches ``llm.workloads.*``; the model stays installable from the Model
+        library with a fresh explicit consent.
         """
         name = (body.get("name") or "").strip()
         if not name:
             return {"ok": False, "error": "model name required"}
-        current = configuration.get("models.automatic.setup.dismissed", []) or []
+        current = configuration.get("models.recommendations.dismissed", []) or []
         if name not in current:
             configuration.set(
-                "models.automatic.setup.dismissed", [*current, name], by="webui")
+                "models.recommendations.dismissed", [*current, name], by="webui")
             _sync_config_snapshot()
         return {"ok": True, "name": name}
-
-    # ── Ollama available models ─────────────────────────────────
-
-    @app.get("/api/ollama/models")
-    def get_ollama_models():
-        url = configuration.get("ollama.url", "http://localhost:11434")
-        return [m["name"] for m in query_ollama_tags(url)]
 
     # ── Model discovery (dynamic, status + recommendations) ─────────
 
@@ -1222,7 +1169,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         payload = build_catalog_payload(installed)
         # M3.4: surfaced catalog models Cozmo recommends that are NOT installed.
         # They carry status "available" so the Model library can offer an
-        # explicit-consent install and the Automatic setup card can surface the
+        # explicit-consent install and the setup card can surface the
         # "recommended model unavailable" state. Embeddings are never included
         # by ``build_available_recommendations``.
         payload["models"] = payload["models"] + [
@@ -1231,10 +1178,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         ]
         # Add availability/missing signal for models referenced in config.
         referenced = set()
-        roles = configuration.get("llm.roles", {})
-        for spec in roles.values():
+        workloads = configuration.get("llm.workloads", {}) or {}
+        for spec in workloads.values():
             if isinstance(spec, dict) and spec.get("model"):
                 referenced.add(spec["model"])
+            elif isinstance(spec, str) and spec:
+                referenced.add(spec)
         emb = configuration.get("embedding.model", "")
         if emb:
             referenced.add(emb)
@@ -1242,16 +1191,18 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         payload["missingModels"] = missing
         payload["installedNames"] = sorted(installed_names)
         payload["dismissedRecommended"] = (
-            configuration.get("models.automatic.setup.dismissed", []) or [])
-        payload["presets"] = presets_mod.get_presets()
-        payload["activeExperience"] = configuration.get("experience", "medium")
-        payload["roles"] = {
-            "chat": configuration.get("llm.roles.chat.model", ""),
-            "coder": configuration.get("llm.roles.coder.model", ""),
-            "vision": configuration.get("llm.roles.vision.model", ""),
-            "planner": configuration.get("llm.roles.planner.model", ""),
-            "embedding": configuration.get("embedding.model", ""),
+            configuration.get("models.recommendations.dismissed", []) or [])
+        payload["workloads"] = {
+            workload: configuration.get(f"llm.workloads.{workload}.model", "")
+            for workload in WORKLOADS
         }
+        payload["recommended"] = recommend(installed=installed).to_dict()
+        # Desktop-vision availability signal: whether the user's selected
+        # general workload model supports vision. Derived from catalog/discovery
+        # capability facts, never hardcoded. Unselected -> False.
+        selected_general = (payload["workloads"].get("general") or "").strip()
+        payload["vision_capable"] = bool(
+            selected_general and model_capabilities(selected_general).supports_vision)
         return payload
 
     @app.post("/api/models/install")
@@ -1276,8 +1227,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     # A failed pull emits an "error" install_progress event and
                     # never reaches recomputation, leaving configuration intact.
                     print(f"[cozmo] model install failed for '{name}': {e}")
-                # M3.3: a completed install is a model-set change. Automatic mode
-                # re-resolves llm.roles.*; Custom mode is left untouched.
+                # A completed install is a model-set change: refresh advisory
+                # recommendations. User selection is never rewritten.
                 _after_models_changed()
             finally:
                 with _installing_lock:
@@ -1290,29 +1241,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     seed_default_skills()
 
     # ── Endpoints ─────────────────────────────────────────────
-
-    @app.get("/api/models")
-    def get_models():
-        models = cfg.get("models", {})
-        return [{"id": role, "name": name, "role": role, "active": role == "chat"}
-                for role, name in models.items()]
-
-    @app.get("/api/models/available")
-    def get_available_models():
-        """Return all models discovered across all configured providers."""
-        try:
-            b = get_backend(cfg)
-            ms = b.get("model_service")
-            if ms:
-                by_provider = ms.list_available()
-                return [
-                    {"name": m.name, "provider": m.provider}
-                    for provider, models in by_provider.items()
-                    for m in models
-                ]
-        except Exception:
-            pass
-        return []
 
     @app.get("/api/tools")
     def get_tools():

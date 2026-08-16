@@ -36,9 +36,9 @@ def registry():
 
 
 def test_unique_owner_enforced(registry):
-    registry.register(mk("llm.roles.chat.model", owner="runtime"))
+    registry.register(mk("llm.workloads.general.model", owner="runtime"))
     with pytest.raises(DuplicateSettingError):
-        registry.register(mk("llm.roles.chat.model", owner="memory"))
+        registry.register(mk("llm.workloads.general.model", owner="memory"))
 
 
 def test_unknown_setting_raises(registry):
@@ -51,9 +51,9 @@ def test_unknown_setting_raises(registry):
 
 def test_no_hardcoded_model_names():
     llm = DEFAULT_CONFIG.get("llm", {})
-    assert llm.get("default_model") == "", "default_model must not be hardcoded"
-    for role, spec in llm.get("roles", {}).items():
-        assert spec.get("model", "") == "", f"role {role} default must be empty"
+    for workload, spec in llm.get("workloads", {}).items():
+        assert spec.get("model", "") == "", \
+            f"workload {workload} default must be empty"
 
 
 # ── Validation ────────────────────────────────────────────────────────
@@ -61,10 +61,10 @@ def test_no_hardcoded_model_names():
 
 def _enum_registry() -> ConfigRegistry:
     reg = ConfigRegistry()
-    reg.register(mk("experience", owner="runtime", category=Category.GENERAL,
-                    type=SettingType.ENUM, default="medium",
-                    options=[type("O", (), {"value": "medium", "label": "Medium"})(),
-                             type("O", (), {"value": "heavy", "label": "Heavy"})()]))
+    reg.register(mk("permissions.write_file", owner="tools",
+                    type=SettingType.ENUM, default="ask",
+                    options=[type("O", (), {"value": "ask", "label": "Ask"})(),
+                             type("O", (), {"value": "allow", "label": "Allow"})()]))
     return reg
 
 
@@ -73,15 +73,15 @@ def test_validation_rejects_unknown_enum(tmp_path):
     cfg = Configuration(reg, tmp_path / "c.toml")
     cfg.initialize()
     with pytest.raises(ValidationError):
-        cfg.set("experience", "not-an-option", by="test")
+        cfg.set("permissions.write_file", "not-an-option", by="test")
 
 
 def test_validation_accepts_known_enum(tmp_path):
     reg = _enum_registry()
     cfg = Configuration(reg, tmp_path / "c.toml")
     cfg.initialize()
-    cfg.set("experience", "heavy", by="test")
-    assert cfg.get("experience") == "heavy"
+    cfg.set("permissions.write_file", "allow", by="test")
+    assert cfg.get("permissions.write_file") == "allow"
 
 
 # ── Persistence + state ──────────────────────────────────────────────
@@ -128,16 +128,28 @@ def test_apply_hook_invoked(tmp_path):
 # ── Migration ─────────────────────────────────────────────────────────
 
 
-def test_migrate_old_models_drops_mirror():
+def test_migrate_old_models_to_workloads():
     cfg = {"models": {"chat": "llama3", "max_tokens": 4096}}
     out = migrate(dict(cfg))
     assert "models" not in out, "legacy models mirror must be dropped"
-    assert out["llm"]["roles"]["chat"]["model"] == "llama3"
+    assert out["llm"]["workloads"]["general"]["model"] == "llama3"
+    assert out["llm"]["workloads"]["research"]["model"] == ""
     assert out["llm"]["max_tokens"] == 4096
 
 
-def test_migrate_keeps_llm_roles():
+def test_migrate_roles_to_workloads():
     src = {"llm": {"roles": {"chat": {"model": "x"}}}, "embedding": {}}
     out = migrate(dict(src))
     assert "models" not in out
-    assert out["llm"]["roles"]["chat"]["model"] == "x"
+    assert "roles" not in out["llm"], "legacy llm.roles must be dropped"
+    assert out["llm"]["workloads"]["general"]["model"] == "x"
+
+
+def test_migrate_planner_and_coder_roles_map_to_research_and_code():
+    src = {"llm": {"roles": {
+        "chat": {"model": "a"}, "planner": {"model": "b"},
+        "coder": {"model": "c"}}}}
+    out = migrate(dict(src))
+    assert out["llm"]["workloads"]["general"]["model"] == "a"
+    assert out["llm"]["workloads"]["research"]["model"] == "b"
+    assert out["llm"]["workloads"]["code"]["model"] == "c"

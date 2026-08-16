@@ -2,7 +2,7 @@
 ResourceManager — VRAM/model/resource tracking with concurrency gating.
 
 Tracks loaded models, VRAM usage, active/queued jobs.
-Provides model ranking for ModelRouter.
+Provides model/resource tracking with concurrency gating.
 Gates model loading to prevent OOM.
 """
 

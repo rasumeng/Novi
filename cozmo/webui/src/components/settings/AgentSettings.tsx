@@ -110,8 +110,8 @@ export function AgentSettings({ config, setConfig, setDirty }: Props) {
           The model Cozmo uses for autonomous work. Reference only — change the assignment on the Models page.
         </p>
         <div className="flex items-center justify-between">
-          <span className="text-sm text-base-200 font-mono">{agentModel || 'Automatic'}</span>
-          {!agentModel && <span className="text-[10px] text-base-500">Resolved by Models</span>}
+          <span className="text-sm text-base-200 font-mono">{agentModel || 'Not set'}</span>
+          {!agentModel && <span className="text-[10px] text-base-500">Pick a model on the Models page</span>}
         </div>
       </div>
     </div>

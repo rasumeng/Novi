@@ -2,11 +2,10 @@
 Orchestrator — lightweight coordinator that turns user input into an ExecutionPlan.
 
 Thin by design: classifies intent, estimates complexity, resolves capabilities,
-selects model, and produces a plan for the Engine to execute. Does NOT execute
-anything itself.
+and produces a plan for the Runtime to execute. Does NOT execute anything itself.
 
 Architecture:
-  user_input → Orchestrator → ExecutionPlan → Engine.run(plan)
+  user_input → Orchestrator → ExecutionPlan → Runtime.run_stream(plan)
 """
 
 from __future__ import annotations
@@ -59,7 +58,6 @@ class Orchestrator:
         complexity_estimator: Optional[ComplexityEstimator] = None,
         evidence_detector: Optional[EvidenceDetector] = None,
         capability_registry: Optional[CapabilityRegistry] = None,
-        model_router=None,
         task_store=None,
         planner_engine=None,
     ):
@@ -67,7 +65,6 @@ class Orchestrator:
         self.complexity = complexity_estimator or ComplexityEstimator()
         self.evidence_detector = evidence_detector or EvidenceDetector()
         self.capabilities = capability_registry or CapabilityRegistry()
-        self.model_router = model_router
         self.task_store = task_store
         self.planner_engine = planner_engine
 
@@ -297,7 +294,10 @@ class Orchestrator:
             confidence=analysis.confidence,
         )
 
-        # 6. Build plan
+        # 6. Build plan. No model is baked here — the Runtime resolves the
+        #    configured workload model at execution time (Phase 2). model_spec
+        #    carries only the capability + tool-support signals used by the
+        #    Runtime for capability validation.
         plan = ExecutionPlan(
             goal=Goal(text=user_input[:500], intent=analysis.intent),
             strategy=strategy,
@@ -317,22 +317,7 @@ class Orchestrator:
             },
         )
 
-        # Resolve model via ModelRouter with complexity awareness
         supports_tools = bool(tool_names) and analysis.intent != IntentType.VISION
-        if self.model_router is not None:
-            from ..runtime.model_router import ModelRequirement
-            req = [ModelRequirement(
-                capability=profile.model_capability,
-                supports_tools=supports_tools,
-                supports_vision=analysis.intent == IntentType.VISION,
-            )]
-            model_name = self.model_router.resolve(
-                requirements=req,
-                preferred=force_model,
-                complexity_score=analysis.complexity,
-            )
-            plan.model_spec["model"] = model_name
-
         plan.model_spec["supports_tools"] = supports_tools
 
         # 7. Task ownership: create or load a Task for this request. This is
@@ -364,12 +349,11 @@ class Orchestrator:
             )
 
         log.debug(
-            "Plan: intent=%s capabilities=%s tools=%d strategy=%s model=%s",
+            "Plan: intent=%s capabilities=%s tools=%d strategy=%s",
             analysis.intent.value,
             cap_ids,
             len(tool_names),
             strategy.value,
-            plan.model_spec.get("model", "(not set)"),
         )
 
         return plan

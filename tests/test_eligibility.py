@@ -14,7 +14,6 @@ from cozmo.configuration.eligibility import (
     CapabilityMatch,
     HardwareFit,
     evaluate_eligibility,
-    evaluate_all,
 )
 from cozmo.configuration.hardware import (
     DetectionConfidence,
@@ -113,40 +112,16 @@ def test_hardware_unknown_fit_is_unknown():
 # ── Qualification eligibility ─────────────────────────────────────────────
 
 
-def test_trusted_automatic_eligible():
-    e = evaluate_eligibility("m", hardware=HW_KNOWN, fact=_fact("m", Qualification.TRUSTED))
-    assert e.eligible_automatic is True
-
-
-def test_supported_automatic_eligible():
-    e = evaluate_eligibility("m", hardware=HW_KNOWN, fact=_fact("m", Qualification.SUPPORTED))
-    assert e.eligible_automatic is True
-
-
-def test_experimental_not_proactively_automatic_eligible():
-    e = evaluate_eligibility("m", hardware=HW_KNOWN, fact=_fact("m", Qualification.EXPERIMENTAL))
-    assert e.eligible_automatic is False
-    assert e.eligible_custom is True  # available for Custom
-
-
-def test_incompatible_never_automatic_eligible_and_warns():
+def test_incompatible_warns_and_never_qualified():
     e = evaluate_eligibility("m", hardware=HW_KNOWN, fact=_fact("m", Qualification.INCOMPATIBLE))
-    assert e.eligible_automatic is False
-    assert e.eligible_custom is True
+    assert e.qualification == Qualification.INCOMPATIBLE
     assert any("incompatible" in c.lower() for c in e.caveats)
 
 
-def test_not_installed_not_automatic_eligible():
-    e = evaluate_eligibility("m", installed_status=ModelStatus.MISSING,
-                             hardware=HW_KNOWN, fact=_fact("m"))
-    assert e.eligible_automatic is False
-
-
-def test_does_not_fit_blocks_automatic_despite_trusted():
+def test_does_not_fit_reported_despite_trusted():
     e = evaluate_eligibility("m", hardware=HW_KNOWN, fact=_fact("m", vram=16.0))
     assert e.qualification == Qualification.TRUSTED
     assert e.hardware_fit == HardwareFit.DOES_NOT_FIT
-    assert e.eligible_automatic is False
 
 
 # ── Capability matching ────────────────────────────────────────────────────
@@ -209,20 +184,21 @@ def test_installation_status_independent_from_qualification():
     assert q_installed == q_missing == Qualification.TRUSTED
 
 
-# ── evaluate_all ──────────────────────────────────────────────────────────
+# ── evaluate_eligibility over installed models ─────────────────────────────
 
 
-def test_evaluate_all_installed_models():
+def test_evaluate_installed_models():
     from types import SimpleNamespace
     models = [
         SimpleNamespace(name="gemma4:e4b", status=ModelStatus.INSTALLED, capability_flags={}),
         SimpleNamespace(name="unknown:zz", status=ModelStatus.INSTALLED, capability_flags={}),
     ]
-    results = evaluate_all(models, hardware=HW_KNOWN)
+    results = [evaluate_eligibility(m.name, installed_status=m.status,
+                                    hardware=HW_KNOWN,
+                                    discovered_capabilities=m.capability_flags)
+               for m in models]
     by_name = {r.name: r for r in results}
-    assert by_name["gemma4:e4b"].eligible_automatic is True
     assert by_name["gemma4:e4b"].qualification == Qualification.TRUSTED
-    assert by_name["unknown:zz"].eligible_automatic is False
     assert by_name["unknown:zz"].qualification == Qualification.EXPERIMENTAL
 
 

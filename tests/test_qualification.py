@@ -10,11 +10,11 @@ import pytest
 
 from cozmo.configuration.qualification import Qualification
 from cozmo.configuration.catalog import (
-    KNOWN_MODEL_FACTS,
     ModelFact,
     ModelRecommendationEngine,
     build_catalog_payload,
 )
+from cozmo.configuration.model_seeds import SEED_MODEL_FACTS
 from cozmo.configuration.discovery import DiscoveredModel, ModelStatus
 
 
@@ -31,11 +31,11 @@ def test_all_four_qualification_grades():
     assert set(Qualification) == expected
 
 
-def test_trusted_supported_auto_selectable_experimental_incompatible_not():
-    assert Qualification.TRUSTED.automatically_selectable is True
-    assert Qualification.SUPPORTED.automatically_selectable is True
-    assert Qualification.EXPERIMENTAL.automatically_selectable is False
-    assert Qualification.INCOMPATIBLE.automatically_selectable is False
+def test_trusted_supported_have_evidence_experimental_incompatible_not():
+    assert Qualification.TRUSTED.has_evidence is True
+    assert Qualification.SUPPORTED.has_evidence is True
+    assert Qualification.EXPERIMENTAL.has_evidence is False
+    assert Qualification.INCOMPATIBLE.has_evidence is False
 
 
 # ── Trusted seed models ───────────────────────────────────────────────────
@@ -46,21 +46,21 @@ TRUSTED_SEEDS = ["gemma4:e4b", "qwen3:8b", "qwen2.5vl:7b", "gemma4"]
 
 def test_trusted_seed_models_present_and_graded_trusted():
     for name in TRUSTED_SEEDS:
-        fact = KNOWN_MODEL_FACTS.get(name)
+        fact = SEED_MODEL_FACTS.get(name)
         assert fact is not None, f"{name} must be seeded"
         assert fact.qualification == Qualification.TRUSTED, f"{name} must be trusted"
 
 
-def test_trusted_seeds_are_auto_selectable():
+def test_trusted_seeds_carry_evidence():
     for name in TRUSTED_SEEDS:
-        assert KNOWN_MODEL_FACTS[name].qualification.automatically_selectable
+        assert SEED_MODEL_FACTS[name].qualification.has_evidence
 
 
 # ── Gemma 4 hardware caveat ───────────────────────────────────────────────
 
 
 def test_gemma4_caveat_present():
-    gemma4 = KNOWN_MODEL_FACTS["gemma4"]
+    gemma4 = SEED_MODEL_FACTS["gemma4"]
     assert gemma4.qualification == Qualification.TRUSTED
     assert len(gemma4.caveats) >= 1
     joined = " ".join(gemma4.caveats).lower()
@@ -82,10 +82,10 @@ def test_unknown_model_defaults_experimental_not_recommended():
 def test_unknown_model_has_no_fabricated_facts():
     # Unknown models remain unqualified: no approx RAM, no reasons beyond untested
     # (a fact would only exist if curated; unknown must never be auto-promoted).
-    fact = KNOWN_MODEL_FACTS.get("some.strange:99b")
+    fact = SEED_MODEL_FACTS.get("some.strange:99b")
     assert fact is None
     # They must not appear as trusted/supported anywhere.
-    for f in KNOWN_MODEL_FACTS.values():
+    for f in SEED_MODEL_FACTS.values():
         assert f.name != "some.strange:99b"
 
 
@@ -95,22 +95,15 @@ def test_unknown_model_has_no_fabricated_facts():
 def test_incompatible_never_trusted_or_supported():
     engine = ModelRecommendationEngine()
     fact = ModelFact("bad-model:9b", qualification=Qualification.INCOMPATIBLE)
-    KNOWN_MODEL_FACTS["bad-model:9b"] = fact
+    SEED_MODEL_FACTS["bad-model:9b"] = fact
     try:
-        assert fact.qualification.automatically_selectable is False
         assert fact.qualification.has_evidence is False
         rec = engine.for_model("bad-model:9b", "installed")
         assert rec["qualification"] == Qualification.INCOMPATIBLE.value
         assert rec["recommended"] is False
         assert rec["tier"] == "experimental"  # never surfaced as supported
     finally:
-        del KNOWN_MODEL_FACTS["bad-model:9b"]
-
-
-def test_incompatible_drilldown_all():
-    for g in Qualification:
-        assert g not in (Qualification.TRUSTED, Qualification.SUPPORTED) or \
-               g.automatically_selectable
+        del SEED_MODEL_FACTS["bad-model:9b"]
 
 
 # ── Qualification independent from installation status ───────────────────

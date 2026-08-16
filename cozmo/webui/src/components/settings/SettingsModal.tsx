@@ -189,8 +189,6 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 {!framework.loading && section === 'general' && (
                   <GeneralSettings
                     discovery={framework.discovery}
-                    mode={(framework.values['models.mode'] as string | undefined) ?? 'automatic'}
-                    source={(framework.values['llm.meta.source'] as string | undefined) ?? 'automatic'}
                     installing={framework.installs}
                     onInstall={framework.install}
                     onNavigate={migrateSection}
@@ -206,15 +204,8 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     onDismiss={framework.dismissRecommended}
                     onRefresh={framework.refreshDiscovery}
                     loading={false}
-                    mode={(framework.values['models.mode'] as string | undefined) ?? 'automatic'}
-                    source={(framework.values['llm.meta.source'] as string | undefined) ?? 'automatic'}
-                    customAssign={{
-                      chat: (framework.values['models.custom.assign.chat'] as string | undefined) ?? '',
-                      reasoning: (framework.values['models.custom.assign.reasoning'] as string | undefined) ?? '',
-                      coding: (framework.values['models.custom.assign.coding'] as string | undefined) ?? '',
-                      vision: (framework.values['models.custom.assign.vision'] as string | undefined) ?? '',
-                    }}
-                    onSetModelsState={framework.setModelsState}
+                    onSaveSelection={framework.saveWorkloadSelection}
+                    onApplyRecommended={framework.applyRecommended}
                   />
                 )}
 
@@ -264,7 +255,6 @@ function DeveloperPage({ schema, framework, config, updateConfig }: {
   const developer = schema?.settings.filter((s) => s.category === 'developer') ?? []
   const embedding = schema?.settings.filter((s) => s.owner === 'memory') ?? []
   const providers = schema?.settings.filter((s) => s.owner === 'providers') ?? []
-  const roles = schema?.settings.filter((s) => s.owner === 'runtime' && s.id.includes('roles')) ?? []
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-3">
@@ -278,21 +268,6 @@ function DeveloperPage({ schema, framework, config, updateConfig }: {
           </p>
         </div>
       </div>
-
-      <section className="space-y-2">
-        <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Internal model routing</h3>
-        <p className="text-xs text-base-500 mb-1">
-          Fine-grained per-role model assignment — diagnostic/expert level. Leave blank to let routing resolve automatically.
-        </p>
-        {roles.map((s) => (
-          <SettingField
-            key={s.id}
-            setting={s}
-            value={framework.values[s.id]}
-            onChange={(id, v) => void framework.set(id, v)}
-          />
-        ))}
-      </section>
 
       <section className="space-y-2 pt-2">
         <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Providers</h3>
@@ -320,7 +295,7 @@ function DeveloperPage({ schema, framework, config, updateConfig }: {
 
       <section className="space-y-2 pt-2">
         <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Other expert settings</h3>
-        {developer.filter((s) => !s.id.includes('roles')).map((s) => (
+        {developer.map((s) => (
           <SettingField
             key={s.id}
             setting={s}

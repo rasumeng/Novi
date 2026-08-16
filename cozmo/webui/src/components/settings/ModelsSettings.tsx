@@ -4,11 +4,10 @@ import {
   CheckCircle2,
   Cpu,
   Download,
+  Eye,
   Loader2,
   RefreshCw,
   Sparkles,
-  Wand2,
-  ShieldQuestion,
 } from 'lucide-react'
 import type { DiscoveryPayload, DiscoveredModelEntry } from './api'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
@@ -20,43 +19,31 @@ interface Props {
   onDismiss?: (name: string) => Promise<boolean>
   onRefresh: () => Promise<void>
   loading: boolean
-  mode?: string
-  source?: string
-  customAssign?: Record<string, string>
-  onSetModelsState?: (mode: 'automatic' | 'custom', assign?: Record<string, string>) => Promise<{ ok: boolean; error?: string }>
+  onSaveSelection: (workloads: Record<string, string>) => Promise<{ ok: boolean; error?: string }>
+  onApplyRecommended: () => Promise<{ ok: boolean; error?: string }>
 }
 
-/** The four user-facing capabilities. Embeddings & internal roles are not shown. */
-const CAPABILITIES: { key: string; capability: string; role: string; desc: string }[] = [
-  { key: 'chat', capability: 'Chat', role: 'chat', desc: 'Everyday conversation and general interaction.' },
-  { key: 'reasoning', capability: 'Reasoning', role: 'planner', desc: 'Planning, research, and deeper cognitive work.' },
-  { key: 'coding', capability: 'Coding', role: 'coder', desc: 'Code generation, editing, and debugging.' },
-  { key: 'vision', capability: 'Vision', role: 'vision', desc: 'Image understanding and visual analysis.' },
+/** The three user-facing workloads. Embeddings & internal roles are not shown. */
+const WORKLOADS: { key: string; label: string; desc: string }[] = [
+  { key: 'general', label: 'General', desc: 'Everyday conversation, planning, and general interaction.' },
+  { key: 'research', label: 'Research', desc: 'Deep research, analysis, and long-form reasoning.' },
+  { key: 'code', label: 'Code', desc: 'Code generation, editing, and debugging.' },
 ]
 
-interface ModelsState {
-  ok: boolean
-  error?: string
-}
-
-const NOOP = async (): Promise<ModelsState> => ({ ok: true })
-
 /**
- * Models — the user-facing configuration surface for the four capabilities
- * Cozmo cares about (Chat / Reasoning / Coding / Vision) plus the model library.
+ * Models — workload-based configuration surface.
  *
- * M3.2: the Automatic <-> Custom state machine. Automatic resolves through the
- * backend ResolutionLayer; Custom persists explicit capability intent under
- * ``models.custom.assign.*`` and resolves it to ``llm.roles.*``. All writes go
- * through the Configuration Framework — no localStorage, no direct TOML.
- *
- * Embeddings and internal runtime roles (classifier/router/orchestrator/planner)
- * are deliberately NOT exposed here — those live in Developer.
+ * Every workload (general / research / code) has an explicit selection the user
+ * controls. Recommendations from the backend are strictly advisory: nothing is
+ * selected or installed until the user acts — either through "Use Recommended"
+ * or by picking models directly. Selections are persisted verbatim and never
+ * rewritten by the backend.
  */
-export function ModelsSettings({ discovery, installing, onInstall, onDismiss, onRefresh, loading, mode, source, customAssign, onSetModelsState }: Props) {
+export function ModelsSettings({ discovery, installing, onInstall, onDismiss, onRefresh, loading, onSaveSelection, onApplyRecommended }: Props) {
   const [query, setQuery] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [applying, setApplying] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
 
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
@@ -67,44 +54,24 @@ export function ModelsSettings({ discovery, installing, onInstall, onDismiss, on
     setRefreshing(false)
   }
 
-  const isCustom = (mode ?? 'automatic') === 'custom'
-  const isAutomatic = !isCustom
-  const assign = customAssign ?? {}
-  const transition = onSetModelsState ?? NOOP
-
-  const modelByName = (name: string): DiscoveredModelEntry | undefined =>
-    name ? discovery.models.find((m) => m.name === name) : undefined
-
-  const isInstalled = (name: string): boolean =>
-    name ? discovery.installedNames.includes(name) : false
-
+  const selection = discovery.workloads ?? {}
   const installedModels = discovery.models.filter((m) => m.status === 'installed')
 
-  const effectiveModel = (cap: { role: string }) => discovery.roles?.[cap.role] ?? ''
-  const intentModel = (cap: { key: string }) => assign[cap.key] ?? ''
-
-  const runTransition = async (nextMode: 'automatic' | 'custom', patch?: Record<string, string>) => {
+  const onSelect = async (wk: string, model: string) => {
+    const next = { ...selection, [wk]: model }
     setSaving(true)
     setStateError(null)
-    const res = await transition(nextMode, patch)
-    if (!res.ok) setStateError(res.error ?? "Couldn't update model configuration.")
+    const res = await onSaveSelection(next)
+    if (!res.ok) setStateError(res.error ?? "Couldn't save model selection.")
     setSaving(false)
   }
 
-  const enterCustom = () => {
-    // Seed Custom from the currently effective Automatic assignments so the
-    // user never sees blank selectors. Embeddings are never seeded.
-    const seed: Record<string, string> = {}
-    for (const c of CAPABILITIES) seed[c.key] = effectiveModel(c)
-    void runTransition('custom', seed)
-  }
-
-  const backToAutomatic = () => {
-    void runTransition('automatic')
-  }
-
-  const onCapabilityChange = (cap: string, model: string) => {
-    void runTransition('custom', { [cap]: model })
+  const useRecommended = async () => {
+    setApplying(true)
+    setStateError(null)
+    const res = await onApplyRecommended()
+    if (!res.ok) setStateError(res.error ?? "Couldn't apply recommended models.")
+    setApplying(false)
   }
 
   const rows = discovery.models
@@ -117,27 +84,30 @@ export function ModelsSettings({ discovery, installing, onInstall, onDismiss, on
   const missingCount = discovery.missingModels.length
   const installedCount = discovery.models.filter((m) => m.status === 'installed').length
 
-  // M3.4: catalog models Cozmo recommends for Automatic that are NOT installed
-  // and the user has not explicitly declined. Embeddings are never surfaced
-  // here (backend excludes them; capability filter below is defense-in-depth).
-  const userCapabilityKeys = CAPABILITIES.map((c) => c.key)
+  // Recommended-but-missing models Cozmo would prefer, unless explicitly
+  // declined. Embeddings are never surfaced here.
   const missingRecommended = discovery.models.filter(
     (m) =>
       m.status === 'available' &&
       !discovery.dismissedRecommended?.includes(m.name) &&
-      Object.keys(m.capabilities ?? {}).some((c) => userCapabilityKeys.includes(c)),
+      Object.keys(m.capabilities ?? {}).some((c) => ['chat', 'reasoning', 'coding', 'vision'].includes(c)),
   )
+
+  const recs = Object.values(discovery.recommended?.workloads ?? {})
+  const anyRecommended = recs.length > 0
 
   return (
     <div className="space-y-6">
-      {/* A. Configuration Mode */}
-      <ConfigMode
-        isCustom={isCustom}
-        isAutomatic={isAutomatic}
-        saving={saving}
-        onEnterCustom={enterCustom}
-        onBackToAutomatic={backToAutomatic}
-      />
+      {/* 1. Advisory recommendations */}
+      {anyRecommended && (
+        <RecommendedModels
+          recs={recs}
+          installedNames={discovery.installedNames}
+          hardwareRam={discovery.hardware.ramGb}
+          applying={applying}
+          onUseRecommended={useRecommended}
+        />
+      )}
 
       {stateError && (
         <div className="flex items-center gap-2 p-3 rounded-xl border border-err/30 bg-err/5">
@@ -146,86 +116,44 @@ export function ModelsSettings({ discovery, installing, onInstall, onDismiss, on
         </div>
       )}
 
-      {/* M3.4 — explicit-consent setup for missing recommended models (Automatic only) */}
-      {isAutomatic && (
-        <RecommendedSetup
-          models={missingRecommended}
-          installing={installing}
-          onInstall={onInstall}
-          onDismiss={onDismiss}
-        />
-      )}
+      {/* Explicit-consent setup for missing recommended models */}
+      <RecommendedSetup
+        models={missingRecommended}
+        installing={installing}
+        onInstall={onInstall}
+        onDismiss={onDismiss}
+      />
 
-      {/* 3. Current Assignments */}
+      {/* 2. Current selection */}
       <section>
         <SectionHeader
-          title="Current assignments"
-          subtitle="The models Cozmo is using right now for each capability."
+          title="Current selection"
+          subtitle="The model Cozmo uses for each workload. Changes save immediately."
         />
         <div className="space-y-2">
-          {CAPABILITIES.map((c) => {
-            const model = effectiveModel(c)
-            const entry = modelByName(model)
-            const intent = intentModel(c)
-            const missing = isCustom && intent !== '' && !isInstalled(intent)
+          {WORKLOADS.map((w) => {
+            const model = selection[w.key] ?? ''
+            const entry = modelByName(discovery, model)
+            const missing = model !== '' && !discovery.installedNames.includes(model)
+            const vision = w.key === 'general' && discovery.vision_capable
             return (
-              <AssignmentRow
-                key={c.role}
-                capability={c.capability}
-                desc={c.desc}
+              <SelectionRow
+                key={w.key}
+                workload={w}
                 model={model}
                 entry={entry}
-                derived={isAutomatic || intent === ''}
-                missing={missing}
-                intentModel={intent}
-              />
-            )
-          })}
-        </div>
-      </section>
-
-      {/* 5. Automatic explanation */}
-      {isAutomatic && <AutomaticExplanation discovery={discovery} modelByName={modelByName} />}
-
-      {/* 4. Custom configuration */}
-      <section>
-        <SectionHeader
-          title="Custom configuration"
-          subtitle="Choose which installed model handles each capability."
-        />
-        <div className="p-3 rounded-xl bg-base-800/40 border border-base-700 mb-2">
-          <p className="text-[11px] text-base-500">
-            {isAutomatic
-              ? 'Cozmo is currently choosing automatically. Switch to Custom to select models yourself.'
-              : 'Pick a model for each capability from what is installed on this machine. Unassigned capabilities inherit Automatic.'}
-          </p>
-        </div>
-        <div className="space-y-2">
-          {CAPABILITIES.map((c) => {
-            const intent = intentModel(c)
-            const missing = intent !== '' && !isInstalled(intent)
-            return (
-              <CustomCapabilityRow
-                key={c.role}
-                capability={c.capability}
-                capKey={c.key}
-                current={intent}
-                effective={effectiveModel(c)}
                 installedModels={installedModels}
-                editable={isCustom}
-                saving={saving}
                 missing={missing}
-                onSelect={onCapabilityChange}
+                vision={vision}
+                saving={saving}
+                onSelect={onSelect}
               />
             )
           })}
         </div>
-        <p className="text-[11px] text-base-500 mt-2">
-          Changes save automatically. Embeddings and internal routing stay managed by Cozmo.
-        </p>
       </section>
 
-      {/* 6. Model Library */}
+      {/* 3. Model Library */}
       <section>
         <SectionHeader
           title="Model library"
@@ -270,88 +198,88 @@ export function ModelsSettings({ discovery, installing, onInstall, onDismiss, on
   )
 }
 
-// ── A. Configuration Mode ────────────────────────────────────────────────
-
-function ConfigMode({ isCustom, isAutomatic, saving, onEnterCustom, onBackToAutomatic }: {
-  isCustom: boolean
-  isAutomatic: boolean
-  saving: boolean
-  onEnterCustom: () => void
-  onBackToAutomatic: () => void
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-2">
-      <ModeCard
-        active={isAutomatic}
-        icon={<Wand2 size={15} />}
-        title="Automatic"
-        desc={isAutomatic ? 'Active — Cozmo chooses the best models for your hardware and installed models.' : 'Let Cozmo choose the best models for you.'}
-        accent
-      >
-        {!isAutomatic && (
-          <button
-            onClick={onBackToAutomatic}
-            disabled={saving}
-            className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-sky-500/15 text-sky-300 border border-sky-500/20 hover:bg-sky-500/25 transition-colors disabled:opacity-50"
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
-            Use Automatic
-          </button>
-        )}
-      </ModeCard>
-      <ModeCard
-        active={isCustom && !isAutomatic}
-        icon={<ShieldQuestion size={15} />}
-        title="Custom"
-        desc={isAutomatic ? 'Choose which models Cozmo uses for specific capabilities.' : 'Active — you choose which models handle each capability.'}
-      >
-        {!isCustom && (
-          <button
-            onClick={onEnterCustom}
-            disabled={saving}
-            className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/20 hover:bg-amber-500/25 transition-colors disabled:opacity-50"
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <ShieldQuestion size={13} />}
-            Switch to Custom
-          </button>
-        )}
-      </ModeCard>
-    </div>
-  )
+function modelByName(discovery: DiscoveryPayload, name: string): DiscoveredModelEntry | undefined {
+  return name ? discovery.models.find((m) => m.name === name) : undefined
 }
 
-function ModeCard({ active, icon, title, desc, accent, children }: {
-  active: boolean
-  icon: React.ReactNode
-  title: string
-  desc: string
-  accent?: boolean
-  children?: React.ReactNode
+// ── 1. Advisory recommendations ──────────────────────────────────────────
+
+function RecommendedModels({ recs, installedNames, hardwareRam, applying, onUseRecommended }: {
+  recs: { workload: string; model: string; reasons: string[]; caveats: string[]; qualification: string; hardwareConfidence: string; visionCapable: boolean }[]
+  installedNames: string[]
+  hardwareRam: number
+  applying: boolean
+  onUseRecommended: () => void
 }) {
+  const labelOf = (wk: string) => WORKLOADS.find((w) => w.key === wk)?.label ?? wk
   return (
-    <div
-      className={`p-3 rounded-xl border transition-colors ${
-        active
-          ? accent
-            ? 'border-sky-500/40 bg-sky-500/5'
-            : 'border-amber-500/40 bg-amber-500/5'
-          : 'border-base-700 bg-base-800/40'
-      }`}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <span className={active ? 'text-sky-400' : 'text-base-400'}>{icon}</span>
-        <p className="text-sm font-medium text-base-100">{title}</p>
-        {active && (
-          <span className={`ml-auto text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-            accent ? 'text-sky-400 bg-sky-500/10 border-sky-500/20' : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
-          }`}>
-            Active
-          </span>
-        )}
+    <section aria-label="Recommended models">
+      <div className="p-4 rounded-xl border border-sky-500/30 bg-sky-500/5 space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles size={14} className="text-sky-400 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-base-100">Recommended models</p>
+              <p className="text-[11px] text-base-500 leading-relaxed mt-0.5">
+                Suggestions computed by Cozmo from your hardware ({hardwareRam > 0 ? `${hardwareRam} GB RAM` : 'unknown'}) and
+                installed models. Advisory only — nothing changes until you choose.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onUseRecommended}
+            disabled={applying}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-60 shrink-0"
+          >
+            {applying ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {applying ? 'Applying…' : 'Use Recommended'}
+          </button>
+        </div>
+        <div className="space-y-2">
+          {recs.map((r) => {
+            const installed = installedNames.includes(r.model)
+            const label = labelOf(r.workload)
+            return (
+              <div key={r.workload} className="p-3 rounded-lg bg-base-900/60 border border-base-700">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-base-100 font-mono truncate">{label}</p>
+                      <span className="text-[10px] text-base-400 bg-base-800 border border-base-700 px-1.5 py-0.5 rounded">
+                        {installed ? 'installed' : 'not installed'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-base-200 font-mono truncate mt-1">{r.model}</p>
+                    {r.reasons.length > 0 && (
+                      <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
+                        <Sparkles size={11} /> {r.reasons.join(' · ')}
+                      </p>
+                    )}
+                    {(r.caveats.length > 0 || r.qualification) && (
+                      <div className="flex flex-wrap items-center gap-1 mt-1">
+                        {r.qualification && (
+                          <span className="text-[10px] text-base-400 capitalize">{r.qualification}</span>
+                        )}
+                        {r.caveats.map((c) => (
+                          <span key={c} className="flex items-center gap-1 text-[10px] text-amber-400">
+                            <AlertTriangle size={9} /> {c}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {r.visionCapable && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 mt-1">
+                        <Eye size={10} /> Vision-capable
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
       </div>
-      <p className="text-[11px] text-base-500 leading-relaxed">{desc}</p>
-      {children}
-    </div>
+    </section>
   )
 }
 
@@ -372,7 +300,7 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
           <div>
             <p className="text-sm font-medium text-base-100">Recommended model unavailable</p>
             <p className="text-[11px] text-base-500 leading-relaxed mt-0.5">
-              Cozmo would prefer these for Automatic mode on your hardware, but they are not installed.
+              Cozmo would prefer these for your hardware, but they are not installed.
               Installing happens only when you choose — skipping keeps your current eligible models.
             </p>
           </div>
@@ -439,161 +367,50 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
   )
 }
 
-// ── 3. Current Assignments ───────────────────────────────────────────────
+// ── 2. Current selection ─────────────────────────────────────────────────
 
-function AssignmentRow({ capability, desc, model, entry, derived, missing, intentModel }: {
-  capability: string
-  desc: string
+function SelectionRow({ workload, model, entry, installedModels, missing, vision, saving, onSelect }: {
+  workload: { key: string; label: string; desc: string }
   model: string
   entry?: DiscoveredModelEntry
-  derived: boolean
-  missing: boolean
-  intentModel: string
-}) {
-  const installed = entry?.status === 'installed'
-  return (
-    <div className="p-3 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="text-sm text-base-100 font-medium">{capability}</p>
-          <span className="text-[10px] text-base-400 bg-base-800 border border-base-700 px-1.5 py-0.5 rounded">
-            {derived ? 'Automatic' : 'Custom'}
-          </span>
-        </div>
-        <p className="text-[11px] text-base-500 mt-0.5">{desc}</p>
-      </div>
-      <div className="text-right shrink-0 min-w-0">
-        {model ? (
-          <>
-            <p className="text-sm text-base-100 font-mono truncate">{entry?.displayName ?? model}</p>
-            <p className={`text-[10px] mt-0.5 ${missing ? 'text-amber-400' : 'text-base-500'}`}>
-              {missing
-                ? `your choice (${intentModel}) is unavailable — using fallback`
-                : installed ? 'installed' : entry ? entry.status : 'not assigned'}
-            </p>
-          </>
-        ) : (
-          <p className="text-xs text-amber-400">No model assigned</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── 5. Automatic explanation ─────────────────────────────────────────────
-
-function AutomaticExplanation({ discovery, modelByName }: {
-  discovery: DiscoveryPayload
-  modelByName: (name: string) => DiscoveredModelEntry | undefined
-}) {
-  const confidence = discovery.models.find((m) => m.eligibility?.hardwareConfidence)?.eligibility?.hardwareConfidence ?? 'unknown'
-  const provisional = confidence === 'low' || confidence === 'unknown'
-  const ram = discovery.hardware.ramGb
-
-  return (
-    <section>
-      <SectionHeader
-        title="How models were chosen"
-        subtitle="An Automatic resolution, computed by Cozmo from your hardware and installed models. Cozmo re-checks this automatically."
-      />
-      <div className="p-4 rounded-xl bg-base-800/40 border border-base-700 space-y-3">
-        <div className="flex items-center gap-2">
-          <Cpu size={14} className="text-accent" />
-          <p className="text-sm font-medium text-base-100">Hardware detected</p>
-        </div>
-        <p className="text-xs text-base-500">
-          {ram > 0 ? `${ram} GB RAM detected` : 'Hardware unknown — Cozmo is being conservative.'}
-          {confidence !== 'unknown' && ` Hardware confidence: ${confidence}.`}
-        </p>
-
-        {provisional && (
-          <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-500/30 bg-amber-500/5">
-            <AlertTriangle size={14} className="text-amber-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-300">
-              This selection is provisional because Cozmo has limited confidence in the hardware it detected.
-            </p>
-          </div>
-        )}
-
-        {discovery.models.filter((m) => m.recommended && m.status === 'installed').length === 0 &&
-          discovery.installedNames.length > 0 && (
-            <p className="text-xs text-base-500">
-              None of the installed models are marked as trusted by Cozmo, so the selection may be less than ideal.
-            </p>
-          )}
-
-        {CAPABILITIES.map((c) => {
-          const model = discovery.roles?.[c.role] ?? ''
-          if (!model) return
-          const entry = modelByName(model)
-          return (
-            <div key={c.role} className="flex items-start justify-between gap-3">
-              <p className="text-xs text-base-400 min-w-[70px]">{c.capability}</p>
-              <div className="text-right text-[11px] text-base-500 flex-1 min-w-0">
-                {entry?.reasons.length ? (
-                  <p className="text-accent truncate">
-                    <Sparkles size={10} className="inline mr-1" />
-                    {entry.reasons.join(' · ')}
-                  </p>
-                ) : (
-                  <p>selected by Cozmo</p>
-                )}
-                {entry?.qualification && (
-                  <p className="text-base-500 capitalize">Qualification: {entry.qualification}</p>
-                )}
-                {entry?.caveats?.length ? (
-                  <p className="text-amber-400">{entry.caveats.join(' · ')}</p>
-                ) : null}
-              </div>
-            </div>
-          )
-        })}
-        <p className="text-[10px] text-base-600">
-          Derived at run time — not saved to configuration. Cozmo remains the source of truth.
-        </p>
-      </div>
-    </section>
-  )
-}
-
-// ── 4. Custom configuration ──────────────────────────────────────────────
-
-function CustomCapabilityRow({ capability, capKey, current, effective, installedModels, editable, saving, missing, onSelect }: {
-  capability: string
-  capKey: string
-  current: string
-  effective: string
   installedModels: DiscoveredModelEntry[]
-  editable: boolean
-  saving: boolean
   missing: boolean
-  onSelect: (capability: string, model: string) => void
+  vision: boolean
+  saving: boolean
+  onSelect: (workload: string, model: string) => void
 }) {
-  const options = installedModels.length > 0 ? installedModels : []
   return (
     <div className="p-3 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
       <div className="min-w-0 flex-1">
-        <p className="text-sm text-base-100 font-medium">{capability}</p>
-        <p className={`text-[11px] mt-0.5 ${missing ? 'text-amber-400' : 'text-base-500'}`}>
-          {current
-            ? missing
-              ? `Your choice "${current}" is not installed — Cozmo is temporarily using a fallback.`
-              : 'Selected by you'
-            : `Inherits Automatic (${effective || 'none installed'})`}
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="text-sm text-base-100 font-medium">{workload.label}</p>
+          {vision && (
+            <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
+              <Eye size={10} /> Vision-capable
+            </span>
+          )}
+        </div>
+        <p className="text-[11px] text-base-500 mt-0.5">{workload.desc}</p>
+        {model && (
+          <p className={`text-[10px] mt-1 font-mono truncate ${missing ? 'text-amber-400' : 'text-base-400'}`}>
+            {missing
+              ? `"${model}" is not installed — Cozmo cannot use it until it is.`
+              : entry?.displayName ?? model}
+          </p>
+        )}
       </div>
       <label className="shrink-0">
-        <span className="sr-only">{capability} model</span>
+        <span className="sr-only">{workload.label} model</span>
         <select
-          disabled={!editable || saving}
-          value={current || ''}
-          onChange={(e) => onSelect(capKey, e.target.value)}
-          title={editable ? `Choose the model for ${capability}` : 'Switch to Custom to choose a model'}
-          data-capability={capability}
+          disabled={saving}
+          value={model}
+          onChange={(e) => onSelect(workload.key, e.target.value)}
+          title={`Choose the model for ${workload.label}`}
+          data-workload={workload.key}
           className="bg-base-900 border border-base-700 rounded-lg px-2 py-1.5 text-xs text-base-200 outline-none focus:border-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <option value="">Inherit Automatic ({effective || 'none installed'})</option>
-          {options.map((m) => (
+          <option value="">None selected</option>
+          {installedModels.map((m) => (
             <option key={m.name} value={m.name}>{m.displayName}</option>
           ))}
         </select>
@@ -630,6 +447,15 @@ function ModelRow({ model, install, onInstall }: {
         {model.reasons.length > 0 && (
           <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
             <Sparkles size={11} /> {model.reasons.join(' · ')}
+          </p>
+        )}
+        {[model.parameterCount, model.quantization, model.family,
+          model.contextLength ? `${model.contextLength.toLocaleString()} ctx` : null]
+            .filter(Boolean).length > 0 && (
+          <p className="text-[10px] text-base-500 font-mono mt-1 truncate">
+            {[model.parameterCount, model.quantization, model.family,
+              model.contextLength ? `${model.contextLength.toLocaleString()} ctx` : null]
+                .filter(Boolean).join(' · ')}
           </p>
         )}
         {(model.qualification || (model.caveats?.length ?? 0) > 0) && (

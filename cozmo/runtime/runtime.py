@@ -25,7 +25,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from ..orchestrator.intent import classify_intent
-from .model_router import ModelRequirement
+from .model_selector import ModelSelector, model_capabilities
 from .trace import DebugTraceEvent, ExecutionTrace, StepTrace, TraceAction
 from .execution_context import ExecutionContext
 from .retrieval import RecoveryAction, RetrievalExecutor
@@ -34,13 +34,24 @@ from ..brain.types import Turn
 from ..memory.knowledge_index import get_knowledge_index
 from ..capabilities import CapabilityRegistry
 from ..capabilities.builtin import register_builtin_capabilities
-from .model_router import ModelRouter
+from .model_selector import ModelSelector, model_capabilities
 from .tracer import RuntimeTracer
 from .trace import TraceAction
 
 _INTENT_TO_CAP_IDS = {"conversation": ["conversation"], "research": ["research", "conversation"], "coding": ["coding", "filesystem", "terminal"], "planning": ["planning", "conversation"], "vision": ["vision", "conversation"]}
-_INTENT_TO_ROLE = {"conversation": "chat", "research": "planner", "coding": "coder", "planning": "planner", "vision": "vision"}
-_CAPABILITY_TO_ROLE = {"coding": "coder", "planning": "planner", "research": "planner", "conversation": "chat", "vision": "vision"}
+# Phase 2: capability/intent → workload. The workload's configured model is
+# the ONLY model used. Capabilities never upgrade, substitute, or rank.
+_CAPABILITY_TO_WORKLOAD = {
+    "coding": "code",
+    "planning": "research",
+    "research": "research",
+    "conversation": "general",
+    "vision": "general",
+    "filesystem": "general",
+    "terminal": "general",
+    "memory": "general",
+    "search": "general",
+}
 
 log = logging.getLogger("cozmo.runtime")
 
@@ -79,7 +90,6 @@ _TOOL_CATEGORIES: dict[str, str] = {
     "analyze_image": "workspace",
     "clipboard_read": "workspace",
     "telegram_send": "other",
-    "task": "other",
 }
 
 _SKILL_RE = re.compile(r"@skill\s+([a-z0-9][a-z0-9-]*)", re.IGNORECASE)
@@ -141,21 +151,6 @@ from .event_bus import EventType
 # Payload: (_LOOP_DONE, final_text, stop_reason, success)
 _LOOP_DONE = "__plan_step_done__"
 
-class _RouterLLM:
-    def __init__(self, model_service, role: str = "chat"):
-        self._client = None
-        self._ms = model_service
-        self._role = role
-
-    def invoke(self, prompt: str, **kwargs) -> str:
-        if self._client is None:
-            try:
-                self._client = self._ms.client_for_role(self._role)
-            except ModelUnavailableError:
-                raise ModelUnavailableError("chat", None, [])
-        result = self._client.invoke(prompt, **kwargs)
-        return result.content if hasattr(result, 'content') else str(result)
-
 _IDENTITY = (
     "You are Cozmo, a capable local AI assistant running entirely on-device via Ollama. "
     "You help with coding, file editing, debugging, running commands, research, writing, "
@@ -181,13 +176,12 @@ class CozmoRuntime:
 
     def __init__(
         self,
-        model_manager: object | None = None,
         model_service=None,
         memory=None,
         registry: ToolRegistry | None = None,
         project_index=None,
         cfg: dict | None = None,
-        router_llm: object | None = None,
+        simple_llm: object | None = None,
         skills: dict | None = None,
         event_bus=None,
         orchestrator=None,
@@ -195,9 +189,8 @@ class CozmoRuntime:
         brain=None,
         mcp_permissions=None,
     ):
-        self.model_manager = model_manager
         self.model_service = model_service
-        self.router_llm = router_llm
+        self.simple_llm = simple_llm
         self.memory = memory
         self.brain = brain
         self._registry = registry or ToolRegistry()
@@ -240,17 +233,11 @@ class CozmoRuntime:
         )
         self._capability_registry = CapabilityRegistry()
         register_builtin_capabilities(self._capability_registry)
-        llm_cfg = self.cfg.get("llm", {})
-        default_model = llm_cfg.get("default_model") or ""
         routing = rt.get("routing", {})
-        cap_prefs = routing.get("capability_preferences")
-        self._model_router = ModelRouter(
-            default_model=default_model,
-            resource_manager=None,
-            capability_preferences=cap_prefs,
-        )
-        if self.model_service:
-            self._model_router.populate_from_service(self.model_service, self.cfg)
+        # Phase 2: ModelSelector resolves the configured workload model
+        # verbatim at execution time — no default_model, no ranking, no
+        # substitution, no resource/VRAM preference.
+        self._model_selector = ModelSelector(self.model_service)
         self.force_capability = rt.get("force_capability", "") or ""
         self.force_model = rt.get("force_model", "") or ""
         if self.force_capability:
@@ -258,8 +245,6 @@ class CozmoRuntime:
         if self.force_model:
             log.info("force_model set to %s (debug override)", self.force_model)
         self._intent_cap_ids = routing.get("intent_capabilities", _INTENT_TO_CAP_IDS)
-        self._intent_roles = routing.get("intent_roles", _INTENT_TO_ROLE)
-        self._capability_roles = routing.get("capability_roles", _CAPABILITY_TO_ROLE)
         tools_cfg = rt.get("tools", {})
         self._tool_fallbacks: dict[str, list[str]] = tools_cfg.get("fallbacks", {})
         self.tool_executor = ToolExecutor(
@@ -388,6 +373,19 @@ class CozmoRuntime:
             if sk and sk not in already and sk not in found:
                 found.append(sk)
         return found
+    def _workload_for(self, ctx, hint: str) -> str:
+        """Map capability/intent to a workload. ``general`` is the catch-all.
+
+        Phase 2: capabilities describe the task, never upgrade or substitute
+        the selected model — they only decide which workload slot is used.
+        """
+        cap = ctx.force_capability or hint
+        if cap in _CAPABILITY_TO_WORKLOAD:
+            return _CAPABILITY_TO_WORKLOAD[cap]
+        for c in ctx.cap_ids:
+            if c in _CAPABILITY_TO_WORKLOAD:
+                return _CAPABILITY_TO_WORKLOAD[c]
+        return "general"
     def _build_multimodal_content(self, text: str, attachments: list[dict]) -> list:
         content: list = [{"type": "text", "text": text}]
         for att in attachments:
@@ -457,7 +455,7 @@ class CozmoRuntime:
                 ctx.allowed_tools = self._capability_registry.get_tool_names(
                     self._intent_cap_ids.get(cap_name, ["conversation"]))
             else:
-                intent = classify_intent(user_input, self.router_llm, self.history, has_images)
+                intent = classify_intent(user_input, self.simple_llm, self.history, has_images)
                 cap_name = ctx.force_capability or intent.value
                 ctx.allowed_tools = self._capability_registry.get_tool_names(
                     self._intent_cap_ids.get(cap_name, ["conversation"]))
@@ -501,61 +499,63 @@ class CozmoRuntime:
             for kind_value in self.retrieval_executor.execute(ctx, user_input):
                 yield kind_value
 
-            if ctx.execution_plan is not None:
-                ctx.model_name = ctx.execution_plan.model_spec.get("model", "") or ctx.force_model or ""
-                ctx.role = self._intent_roles.get(intent_str, "chat")
-                if self.model_service and not ctx.force_model:
-                    try:
-                        _, role_model = self.model_service.resolve(ctx.role)
-                        if role_model:
-                            ctx.model_name = role_model
-                    except Exception:
-                        pass
-                ctx.temperature = ctx.execution_plan.temperature
-                ctx.max_steps = ctx.execution_plan.max_steps
-                ctx.model_supports_tools = ctx.execution_plan.model_spec.get("supports_tools", True)
-            elif ctx.analysis is not None:
-                if not ctx.model_name:
-                    ctx.model_name = ctx.force_model or ""
-                preferred_cap = ctx.cap_ids[0] if ctx.cap_ids else "conversation"
-                ctx.role = self._capability_roles.get(preferred_cap, "chat")
-                if not ctx.model_name:
-                    if self.model_service:
-                        try:
-                            _, role_model = self.model_service.resolve(ctx.role)
-                            if role_model:
-                                ctx.model_name = role_model
-                        except Exception:
-                            pass
-                if not ctx.model_name:
-                    req = [ModelRequirement(capability=preferred_cap)]
-                    ctx.model_name = self._model_router.resolve(req)
-                ctx.temperature = self.temperature
-                ctx.max_steps = ctx.analysis.complexity.max_steps
-            else:
-                cap_name = ctx.force_capability or intent_str
-                ctx.role = self._intent_roles.get(cap_name, "chat")
-                if not ctx.model_name:
-                    ctx.model_name = ctx.force_model or ""
-                if not ctx.model_name:
-                    if self.model_service:
-                        try:
-                            _, role_model = self.model_service.resolve(ctx.role)
-                            if role_model:
-                                ctx.model_name = role_model
-                        except Exception:
-                            pass
-                if not ctx.model_name:
-                    req = [ModelRequirement(capability=cap_name)]
-                    ctx.model_name = self._model_router.resolve(req)
-                ctx.temperature = self.temperature
-                ctx.max_steps = self.max_steps
+            # ── Model resolution (Phase 2): capabilities → workload → model ──
+            # The workload's configured model is used verbatim. No ranking,
+            # substitution, VRAM/loaded preference, or fallback. A missing or
+            # unset workload model raises ModelUnavailableError surfaced as an
+            # explicit error — never an alternate selection.
+            try:
+                if ctx.execution_plan is not None:
+                    ctx.model_name = ctx.execution_plan.model_spec.get("model", "") or ctx.force_model or ""
+                    ctx.workload = self._workload_for(ctx, intent_str)
+                    if not ctx.model_name:
+                        ctx.model_name = self._model_selector.resolve(ctx.workload)
+                    ctx.temperature = ctx.execution_plan.temperature
+                    ctx.max_steps = ctx.execution_plan.max_steps
+                    ctx.model_supports_tools = ctx.execution_plan.model_spec.get("supports_tools", True)
+                elif ctx.analysis is not None:
+                    if not ctx.model_name:
+                        ctx.model_name = ctx.force_model or ""
+                    ctx.workload = self._workload_for(ctx, intent_str)
+                    if not ctx.model_name:
+                        ctx.model_name = self._model_selector.resolve(ctx.workload)
+                    ctx.temperature = self.temperature
+                    ctx.max_steps = ctx.analysis.complexity.max_steps
+                else:
+                    cap_name = ctx.force_capability or intent_str
+                    ctx.workload = self._workload_for(ctx, cap_name)
+                    if not ctx.model_name:
+                        ctx.model_name = ctx.force_model or ""
+                    if not ctx.model_name:
+                        ctx.model_name = self._model_selector.resolve(ctx.workload)
+                    ctx.temperature = self.temperature
+                    ctx.max_steps = self.max_steps
+            except ModelUnavailableError as e:
+                self.tracer.finalize(ctx.trace, "error")
+                yield ("status", f"Model unavailable: {e}")
+                yield ("error", str(e))
+                yield (_LOOP_DONE, str(e), "error", False)
+                return
 
             if ctx.execution_plan is None and intent_str == "vision":
                 ctx.model_supports_tools = False
 
+            # Capability validation on the SELECTED model: images require a
+            # vision-capable model. Reject explicitly — never substitute.
+            if ctx.has_images:
+                caps = model_capabilities(ctx.model_name)
+                if not caps.supports_vision:
+                    msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
+                           f"does not support image input. Select a vision-capable "
+                           f"model for the general workload.")
+                    self.tracer.finalize(ctx.trace, "error")
+                    yield ("status", f"Model unavailable: {msg}")
+                    yield ("error", msg)
+                    yield (_LOOP_DONE, msg, "error", False)
+                    return
+
             ctx.trace.model_selected = ctx.model_name
-            ctx.trace.role = ctx.role
+            ctx.trace.workload = ctx.workload
             if ctx.execution_plan is not None:
                 ctx.trace.model_reason = "execution_plan"
                 ctx.model_reason = "execution_plan"
@@ -566,8 +566,8 @@ class CozmoRuntime:
                 ctx.trace.model_reason = "force_capability"
                 ctx.model_reason = "force_capability"
             else:
-                ctx.trace.model_reason = "role_match"
-                ctx.model_reason = "role_match"
+                ctx.trace.model_reason = "workload_match"
+                ctx.model_reason = "workload_match"
             yield ("model", ctx.model_name)
 
             if self.stop_event and self.stop_event.is_set():
@@ -607,7 +607,7 @@ class CozmoRuntime:
             if not ctx.model_supports_tools:
                 lc_tools = []
 
-            mm = self.model_service if self.model_service else self.model_manager
+            mm = self.model_service
             runnable = (mm.bind_model(ctx.model_name, lc_tools, temperature=ctx.temperature)
                         if lc_tools else mm.client_for_model(ctx.model_name, ctx.temperature))
 
@@ -903,7 +903,7 @@ class CozmoRuntime:
                             search_tools = self._capability_registry.get_tool_names(["search"])
                             ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
                             lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
-                            mm = self.model_service if self.model_service else self.model_manager
+                            mm = self.model_service
                             runnable = mm.bind_model(ctx.model_name, lc_tools, temperature=ctx.temperature)
                             msgs.append(SystemMessage(
                                 content="[Web search tools (web_search, web_fetch) are now available. "
@@ -1061,7 +1061,7 @@ class CozmoRuntime:
         if self._summary:
             text = f"Earlier context:\n{self._summary}\n\n{text}"
         try:
-            summary = self.router_llm.invoke(_COMPACT_PROMPT.format(text=text))
+            summary = self.simple_llm.invoke(_COMPACT_PROMPT.format(text=text))
             if summary and not summary.lower().startswith("error"):
                 self._summary = summary.strip()
         except Exception as e:

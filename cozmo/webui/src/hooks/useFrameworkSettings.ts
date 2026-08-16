@@ -5,8 +5,8 @@ import {
   fetchFrameworkConfig,
   setSetting,
   installModel,
-  setModelsState as setModelsStateApi,
-  recomputeModels,
+  saveWorkloadSelection as saveWorkloadSelectionApi,
+  applyRecommendedModels as applyRecommendedModelsApi,
   dismissRecommendedModel,
   type SchemaResponse,
   type SettingSchema,
@@ -64,9 +64,8 @@ export function useFrameworkSettings() {
         if (msg.type === 'config_updated' && msg.event?.path) {
           setValues((prev) => ({ ...prev, [msg.event.path]: msg.event.value }))
         } else if (msg.type === 'models_resolved') {
-          // M3.3: Automatic recomputation completed on the backend — re-read
-          // the authoritative config + discovery so the Models page reflects
-          // the new resolved assignments.
+          // Advisory recommendations refreshed on the backend — re-read config
+          // + discovery. Selection is never rewritten by this event.
           void load()
         } else if (msg.type === 'install_progress' && msg.name) {
           setInstalls((prev) => ({
@@ -99,14 +98,6 @@ export function useFrameworkSettings() {
   }, [showError])
 
   const refreshDiscovery = useCallback(async () => {
-    // M3.3: an explicit rescan is a discovery-refresh lifecycle event. Ask the
-    // backend to reconcile Automatic llm.roles.* first (NOOP under Custom),
-    // then re-read the live inventory + roles.
-    try {
-      await recomputeModels()
-    } catch {
-      /* recomputation is best-effort; discovery still refreshes */
-    }
     const disc = await fetchDiscovery()
     setDiscovery(disc)
   }, [])
@@ -133,12 +124,26 @@ export function useFrameworkSettings() {
     return true
   }, [showError])
 
-  const setModelsState = useCallback(async (mode: 'automatic' | 'custom', assign?: Record<string, string>) => {
-    const res = await setModelsStateApi(mode, assign)
+  // Persist the user's workload -> model selection verbatim. The backend never
+  // auto-populates selection; recommendations are advisory only.
+  const saveWorkloadSelection = useCallback(async (workloads: Record<string, string>) => {
+    const res = await saveWorkloadSelectionApi(workloads)
     if (res.ok) {
       await load()
     } else {
-      showError(res.error ?? "Couldn't update model configuration.")
+      showError(res.error ?? "Couldn't save model selection.")
+    }
+    return res
+  }, [load, showError])
+
+  // Explicit "Use Recommended": apply advisory recommendations as the
+  // selection. Never installs anything.
+  const applyRecommended = useCallback(async () => {
+    const res = await applyRecommendedModelsApi()
+    if (res.ok) {
+      await load()
+    } else {
+      showError(res.error ?? "Couldn't apply recommended models.")
     }
     return res
   }, [load, showError])
@@ -171,7 +176,8 @@ export function useFrameworkSettings() {
     install,
     refreshDiscovery,
     dismissRecommended,
-    setModelsState,
+    saveWorkloadSelection,
+    applyRecommended,
     reload: load,
   }
 }

@@ -1,19 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 
-const mockValues: Record<string, unknown> = {
-  'models.mode': 'automatic',
-  'llm.meta.source': 'automatic',
-}
+const mockValues: Record<string, unknown> = {}
 
 const mockDiscovery = {
   hardware: { ramGb: 16 },
   models: [],
   missingModels: [],
   installedNames: [],
-  presets: [],
-  activeExperience: 'medium',
-  roles: { chat: 'llama3.1:8b' },
+  workloads: { general: '', research: '', code: '' },
+  recommended: { workloads: {}, provisional: true },
+  vision_capable: false,
 }
 
 const frameworkMock = {
@@ -26,7 +23,8 @@ const frameworkMock = {
   set: vi.fn(),
   install: vi.fn().mockResolvedValue(true),
   refreshDiscovery: vi.fn().mockResolvedValue(undefined),
-  setModelsState: vi.fn().mockResolvedValue({ ok: true }),
+  saveWorkloadSelection: vi.fn().mockResolvedValue({ ok: true }),
+  applyRecommended: vi.fn().mockResolvedValue({ ok: true }),
   reload: vi.fn(),
 }
 
@@ -122,10 +120,11 @@ describe('SettingsModal navigation (M4 IA)', () => {
     expect(labels).toContain('Connectors')
   })
 
-  it('Developer is the home for internal/diagnostic routing, not a capability picker', () => {
+  it('Developer is the home for internal/diagnostic settings, not capability routing', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
     fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Developer')!)
-    expect(screen.getByText('Internal model routing')).toBeTruthy()
+    expect(screen.getByText('Expert configuration')).toBeTruthy()
+    expect(screen.queryByText('Internal model routing')).toBeNull()
     expect(screen.queryByText(/select capabilit/i)).toBeNull()
   })
 })

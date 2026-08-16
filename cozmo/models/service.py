@@ -1,7 +1,7 @@
 """ModelService — resolves configured models and coordinates providers.
 
-Phase B: core resolution + provider coordination.
-Phase C: reads from llm.roles (new config) with models (legacy) fallback.
+Phase 2: reads strictly from ``llm.workloads`` (general/research/code). No
+legacy role names, no role→workload shims — callers pass workload names only.
 """
 
 from __future__ import annotations
@@ -10,24 +10,30 @@ import logging
 from typing import Optional
 
 from .registry import ModelRegistry as _ModelRegistry
+from ..configuration.resolver import WORKLOADS
 from ..providers import LLMProvider, ModelInfo, PROVIDER_REGISTRY, create_provider, parse_model_spec
 
 log = logging.getLogger("cozmo.models.service")
 
 
 class ModelUnavailableError(Exception):
-    """Raised when a configured model is not found in the registry."""
+    """Raised when a configured model is not found or cannot satisfy a workload."""
 
-    def __init__(self, role: str, configured: str, available: list[str]):
-        self.role = role
+    def __init__(self, workload: str, configured: str, available: list[str],
+                 detail: str = ""):
+        self.workload = workload
         self.configured = configured
         self.available = available
-        super().__init__(f"Model '{configured}' for role '{role}' not found. "
-                         f"Available: {', '.join(available) if available else '(none)'}")
+        if detail:
+            msg = detail
+        else:
+            msg = (f"Model '{configured}' for workload '{workload}' not found. "
+                   f"Available: {', '.join(available) if available else '(none)'}")
+        super().__init__(msg)
 
 
 class ModelService:
-    """Coordinates providers and resolves roles to (provider, model_name)."""
+    """Coordinates providers and resolves workloads to (provider, model_name)."""
 
     def __init__(self, config: dict, registry: _ModelRegistry):
         self._config = config
@@ -36,13 +42,13 @@ class ModelService:
 
     # ── public API ──────────────────────────────────────────────────────
 
-    def resolve(self, role: str) -> tuple[str, str]:
-        """Resolve role to (provider_name, model_name).
+    def resolve(self, workload: str) -> tuple[str, str]:
+        """Resolve workload to (provider_name, model_name).
 
-        Reads llm.roles (new format) first, falls back to models (legacy).
-        Raises ModelUnavailableError if configured model is not in registry.
+        Reads ``llm.workloads.<workload>.model``. Raises ModelUnavailableError
+        if the configured model is not in the registry.
         """
-        provider_name, model_name = self._resolve_spec(role)[:2]
+        provider_name, model_name = self._resolve_spec(workload)[:2]
         return provider_name, model_name
 
     def bind_model(self, model_name: str, tools: list,
@@ -55,8 +61,8 @@ class ModelService:
         provider = self._get_provider_for_model(model_name)
         return provider.get_chat_model(temperature)
 
-    def client(self, role: str, temperature: float = 0.0):
-        provider_name, model_name = self.resolve(role)
+    def client(self, workload: str, temperature: float = 0.0):
+        provider_name, model_name = self.resolve(workload)
         provider = self._get_provider_for_model(model_name)
         return provider.get_chat_model(temperature)
 
@@ -83,44 +89,58 @@ class ModelService:
                 log.warning("refresh: provider '%s' failed: %s", provider_name, e)
 
     def validate(self) -> list[ModelUnavailableError]:
-        """Check every configured role. Returns list of errors (non-raising)."""
+        """Check every configured workload. Returns list of errors (non-raising)."""
         errors: list[ModelUnavailableError] = []
-        roles = self._get_roles_config()
+        workloads = self._get_workloads_config()
 
-        for role, spec in roles.items():
+        for workload, spec in workloads.items():
             if not spec:
                 continue
             provider_name, model_name, _ = self._parse_spec(spec)
             if model_name and not self._registry.validate(model_name):
                 available = [m.name for m in self._registry.list_all()]
-                errors.append(ModelUnavailableError(role, model_name, available))
+                errors.append(ModelUnavailableError(workload, model_name, available))
         return errors
 
     # ── internal ────────────────────────────────────────────────────────
 
-    def _get_roles_config(self) -> dict:
-        """Read role→model assignments from new (llm.roles) or legacy (models) config."""
+    def _normalize_workload(self, workload: str) -> str:
+        """Validate a workload name against the persisted selection surface."""
+        if workload not in WORKLOADS:
+            raise ValueError(
+                f"Unknown workload '{workload}'. Valid workloads: {', '.join(WORKLOADS)}"
+            )
+        return workload
+
+    def _get_workloads_config(self) -> dict:
+        """Read workload→model assignments from ``llm.workloads``."""
         llm = self._config.get("llm", {})
-        roles = llm.get("roles", {})
-        if roles:
-            return roles
-        # Legacy fallback: models section
-        models = self._config.get("models", {})
-        return {k: v for k, v in models.items() if k != "max_tokens"}
+        workloads = llm.get("workloads", {}) if isinstance(llm, dict) else {}
+        out = {}
+        for workload, spec in (workloads or {}).items():
+            if isinstance(spec, dict):
+                model = spec.get("model", "") or ""
+            elif isinstance(spec, str):
+                model = spec
+            else:
+                model = ""
+            out[workload] = model
+        return out
 
     def _parse_spec(self, spec) -> tuple[str, str, dict]:
         providers_cfg = self._config.get("providers", {})
         default_provider = providers_cfg.get("default", "ollama")
         return parse_model_spec(spec, providers_cfg, default_provider)
 
-    def _resolve_spec(self, role: str) -> tuple[str, str, dict]:
-        roles = self._get_roles_config()
-        spec = roles.get(role, "")
+    def _resolve_spec(self, workload: str) -> tuple[str, str, dict]:
+        workload = self._normalize_workload(workload)
+        workloads = self._get_workloads_config()
+        spec = workloads.get(workload, "")
         provider_name, model_name, prov_cfg = self._parse_spec(spec)
 
         if model_name and not self._registry.validate(model_name):
             available = [m.name for m in self._registry.list_all()]
-            raise ModelUnavailableError(role, model_name, available)
+            raise ModelUnavailableError(workload, model_name, available)
 
         return provider_name, model_name, prov_cfg
 

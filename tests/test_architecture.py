@@ -28,16 +28,44 @@ HARDCODED_MODEL_PATTERNS = [
     r"\bllama\b", r"\bqwen\b", r"\bmistral\b", r"\bphi[34]", r"\bgemma\b",
 ]
 
-# These files are allowed to reference model name patterns
+# These files are allowed to reference model name patterns.
+# ``model_seeds.py`` is the single curated seed-facts site and
+# ``name_inference.py`` the single weak name-heuristic site — both are
+# explicitly NON-authoritative and isolated. ``runtime_inventory.py`` carries
+# Ollama protocol keys (e.g. ``llama.context_length``) that are GGUF metadata
+# field names, not model names.
 ALLOWED_HARDCODE_FILES = {
     "cozmo/config.py",         # DEFAULT_CONFIG with empty model values only
     "cozmo/ollama_util.py",    # deleted — no longer exists
     "cozmo/ollama.py",         # Ollama process mgmt (start/stop/check)
     "cozmo/cli.py",            # Ollama process mgmt integration
-    "cozmo/configuration/catalog.py",  # curated compatibility facts — referenced
-                                       # only against *installed* models for
-                                       # recommendations, never as a default.
+    "cozmo/configuration/model_seeds.py",   # curated, NON-authoritative seed facts
+    "cozmo/configuration/name_inference.py",  # isolated weak name heuristics
+    "cozmo/configuration/runtime_inventory.py",  # Ollama protocol/GGUF key names
 }
+
+# Model-name substrings used by name inference and evidence layers. They must
+# ONLY appear in the isolated seed/evidence files — never as routing logic.
+NAME_EVIDENCE_TOKENS = [
+    "llava", "minicpm", "qwen2-vl", "-vl", "coder", "codegemma",
+    "deepseek-coder", "moondream",
+]
+
+# Retired model-configuration vocabulary that must never reappear. A model is
+# selected via ``llm.workloads.*``; there is no mode/role/custom-assign model
+# concept, no Automatic/Custom eligibility, and no authoritative hardcoded
+# fact table.
+RETIRED_VOCABULARY = [
+    "models.mode",
+    "llm.roles",
+    "models.custom.assign",
+    "eligibleAutomatic",
+    "eligibleCustom",
+    "eligible_automatic",
+    "eligible_custom",
+    "automatically_selectable",
+    "KNOWN_MODEL_FACTS",
+]
 
 # Provider SDKs that only cozmo/providers/ may import
 PROVIDER_ONLY_IMPORTS = [
@@ -100,7 +128,91 @@ def test_no_hardcoded_model_names():
         )
 
 
-# ── Test 2: Provider boundary ────────────────────────────────────────────
+# ── Test 2: No model-name substring routing ─────────────────────────────
+
+def test_no_model_name_substring_conditionals():
+    """Model-name substrings must never drive production logic.
+
+    Name heuristics may live ONLY in the isolated evidence files
+    (``name_inference.py`` / ``model_seeds.py``), and are explicitly
+    non-authoritative. A production line that checks a model-name token with
+    ``in`` is the retired anti-pattern.
+    """
+    allowed = {
+        "cozmo/configuration/model_seeds.py",
+        "cozmo/configuration/name_inference.py",
+    }
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        if rel in allowed:
+            continue
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for token in NAME_EVIDENCE_TOKENS:
+                if token in line and " in " in line:
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Model-name substring conditionals outside isolated evidence files:\n"
+            + "\n".join(violations[:20])
+            + ("\n... (truncated)" if len(violations) > 20 else "")
+        )
+
+
+# ── Test 3: Retired model-configuration vocabulary never returns ─────────
+
+def test_no_retired_model_vocabulary():
+    """Retired model-mode/Automatic/Custom vocabulary must not reappear.
+
+    Selection is persisted only as ``llm.workloads.*``. ``models.mode``, role
+    assignments, automatic/custom eligibility, and the authoritative fact
+    table name are all retired — in Python and in the frontend.
+    """
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        if pyfile.suffix not in (".py", ".ts", ".tsx"):
+            continue
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for token in RETIRED_VOCABULARY:
+                if token in line:
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Retired model-configuration vocabulary found:\n"
+            + "\n".join(violations[:20])
+            + ("\n... (truncated)" if len(violations) > 20 else "")
+        )
+
+
+# ── Test 4: Name inference isolated from the runtime ─────────────────────
+
+def test_name_inference_never_used_by_runtime():
+    """The runtime must not consume weak name inference.
+
+    ``runtime/model_selector.py`` performs authoritative capability checks and
+    must rely only on seed facts + measured runtime evidence, never a name
+    substring.
+    """
+    runtime_dir = COZMO_SRC / "runtime"
+    for pyfile in runtime_dir.rglob("*.py"):
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "name_inference" in line or "infer_capabilities_from_name" in line:
+                raise AssertionError(
+                    f"runtime uses name inference: {pyfile.name}:{i}: {line.strip()[:80]}"
+                )
+
+
+# ── Test 5: Provider boundary ────────────────────────────────────────────
 
 def test_provider_boundary():
     """Fail if provider-specific SDKs are imported outside allowed dirs."""
@@ -136,13 +248,13 @@ def test_model_resolution_ownership():
     """
     # Patterns that indicate model resolution
     resolution_patterns = [
-        "ModelRouter.resolve",
+        "ModelSelector.resolve",
         "ModelService.resolve",
         "create_provider",
         "parse_model_spec",
     ]
     bypass_files = {
-        "cozmo/runtime/model_router.py",  # ModelRouter — owned by runtime, allowed
+        "cozmo/runtime/model_selector.py",  # ModelSelector — owned by runtime, allowed
     }
     violations = []
     for pyfile in _iter_py_files(COZMO_SRC):
@@ -155,7 +267,7 @@ def test_model_resolution_ownership():
                 for i, line in enumerate(text.splitlines(), 1):
                     if pattern in line:
                         violations.append(f"{rel}:{i}: {line.strip()[:80]}")
-    # This is informational only — not a hard failure since ModelRouter
+    # This is informational only — not a hard failure since ModelSelector
     # still exists in runtime. Convert to warning.
     if violations:
         print(

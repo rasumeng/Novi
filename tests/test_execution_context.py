@@ -226,7 +226,7 @@ def test_to_dict_with_analysis():
             signals=[EvidenceSignal(type="project", strength="strong")]
         ),
     )
-    ctx = ExecutionContext(analysis=analysis, model_name="qwen3:8b", role="coder")
+    ctx = ExecutionContext(analysis=analysis, model_name="qwen3:8b", workload="code")
     d = ctx.to_dict()
     assert d["intent"] == "coding"
     assert d["complexity_score"] == 5
@@ -234,7 +234,7 @@ def test_to_dict_with_analysis():
     assert d["strategy"] == "execute"
     assert d["evidence_signals"] == ["project"]
     assert d["model_name"] == "qwen3:8b"
-    assert d["role"] == "coder"
+    assert d["workload"] == "code"
 
 
 def test_to_dict_with_grounding():
@@ -335,7 +335,7 @@ def test_ctx_trace_receives_model_routing():
     list(runtime.run_stream(context=ctx))
     # model_selected should be set (from configured model)
     assert ctx.trace.model_selected
-    assert ctx.trace.model_reason in ("role_match", "config_override", "force_capability", "execution_plan")
+    assert ctx.trace.model_reason in ("workload_match", "config_override", "force_capability", "execution_plan")
 
 
 def test_ctx_allowed_tools_populated():
@@ -720,158 +720,101 @@ class TestExecutorEntryPoint:
 
 
 class TestModelResolution:
-    """All 3 model resolution paths go through ModelRouter.resolve_from_context."""
+    """Phase 2: workload-based model resolution through ModelSelector.
 
-    def _router(self):
-        from cozmo.runtime.model_router import ModelRouter
-        return ModelRouter(default_model="test-default")
+    The configured workload model is used verbatim — no capability ranking,
+    no VRAM/loaded preference, no complexity upgrade, no default fallback.
+    """
 
-    def _ctx(self, **overrides):
+    def _service(self, workloads=None):
+        import types
+        workloads = workloads or {}
+        return types.SimpleNamespace(
+            _workloads=workloads,
+            resolve=lambda w: ("test-provider", workloads.get(w, "")),
+        )
+
+    def _selector(self, model_service):
+        from cozmo.runtime.model_selector import ModelSelector
+        return ModelSelector(model_service)
+
+    def test_resolve_returns_configured_model_verbatim(self):
+        svc = self._service({"general": "qwen3:8b", "research": "gemma4:12b"})
+        sel = self._selector(svc)
+        assert sel.resolve("general") == "qwen3:8b"
+        assert sel.resolve("research") == "gemma4:12b"
+
+    def test_resolve_unknown_workload_rejected(self):
+        sel = self._selector(self._service({"general": "qwen3:8b"}))
+        with pytest.raises(ValueError):
+            sel.resolve("chat")
+
+    def test_resolve_unset_workload_raises_not_substitutes(self):
+        """Unset workload must error, never fall back to another workload's model."""
+        from cozmo.models import ModelUnavailableError
+        sel = self._selector(self._service({"general": "qwen3:8b"}))
+        with pytest.raises(ModelUnavailableError):
+            sel.resolve("research")
+
+    def test_resolve_missing_configured_model_raises(self):
+        """Configured-but-not-installed model must error, never substitute."""
+        import types
+        from cozmo.models import ModelUnavailableError
+
+        def resolve(w):
+            if w == "general":
+                raise ModelUnavailableError("general", "not-installed-model", ["qwen3:8b"])
+            return ("test-provider", "")
+
+        sel = self._selector(types.SimpleNamespace(resolve=resolve))
+        with pytest.raises(ModelUnavailableError):
+            sel.resolve("general")
+
+    def test_runtime_resolves_workload_model(self):
+        """Runtime: intent/capability → workload → configured model."""
+        from cozmo.runtime.runtime import CozmoRuntime
         from cozmo.runtime.execution_context import ExecutionContext
-        from cozmo.runtime.trace import ExecutionTrace
+
+        svc = self._service({"general": "gen-model", "research": "res-model"})
+        runtime = CozmoRuntime(model_service=svc)
         ctx = ExecutionContext(user_input="hello")
-        ctx.trace = ExecutionTrace(user_input="hello")
-        for k, v in overrides.items():
-            setattr(ctx, k, v)
-        return ctx
+        list(runtime.run_stream(context=ctx))
+        assert ctx.workload == "general"
+        assert ctx.model_name == "gen-model"
+        assert ctx.trace.workload == "general"
 
-    # ── Path 1: execution_plan model selection ───────────────────────────
-
-    def test_execution_plan_sets_model(self):
+    def test_runtime_missing_model_yields_explicit_error(self):
+        """Missing workload model: explicit error, no LLM loop, no token output."""
         import types
-        router = self._router()
-        ctx = self._ctx()
-        ctx.execution_plan = types.SimpleNamespace(
-            model_spec={"model": "plan-model", "supports_tools": True},
-            temperature=0.3, max_steps=8, goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="coding")),
-        )
-        result = router.resolve_from_context(ctx, {"coding": "coder"})
-        assert result.model_name == "plan-model"
-        assert result.reason == "execution_plan"
-        assert result.role == "coder"
+        from cozmo.models import ModelUnavailableError
+        from cozmo.runtime.runtime import CozmoRuntime
+        from cozmo.runtime.execution_context import ExecutionContext
 
-    def test_execution_plan_falls_back_to_service(self):
+        def resolve(w):
+            raise ModelUnavailableError("general", "not-installed-model", ["qwen3:8b"])
+
+        runtime = CozmoRuntime(model_service=types.SimpleNamespace(resolve=resolve))
+        ctx = ExecutionContext(user_input="hello")
+        events = list(runtime.run_stream(context=ctx))
+        kinds = [k for k, *_ in events]
+        assert "error" in kinds
+        assert any("not-installed-model" in str(e[1]) for e in events if e[0] == "error")
+        assert not any(k == "token" for k, *_ in events)
+
+    def test_runtime_rejects_non_vision_model_for_images(self):
+        """Image input against a non-vision selected model: explicit rejection."""
         import types
-        router = self._router()
-        router.model_service = types.SimpleNamespace(
-            resolve=lambda role: ("test-provider", "service-model"),
-        )
-        ctx = self._ctx()
-        ctx.execution_plan = types.SimpleNamespace(
-            model_spec={},
-            temperature=0.3, max_steps=8, goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="research")),
-        )
-        result = router.resolve_from_context(ctx, {"research": "planner"})
-        assert result.model_name == "service-model"
-        assert result.reason == "execution_plan"
+        from cozmo.runtime.runtime import CozmoRuntime
+        from cozmo.runtime.execution_context import ExecutionContext
 
-    def test_execution_plan_force_model(self):
-        import types
-        router = self._router()
-        ctx = self._ctx()
-        ctx.force_model = "forced-model"
-        ctx.execution_plan = types.SimpleNamespace(
-            model_spec={},
-            temperature=0.3, max_steps=8, goal=types.SimpleNamespace(intent=types.SimpleNamespace(value="chat")),
-        )
-        result = router.resolve_from_context(ctx, {"chat": "chat"})
-        assert result.model_name == "forced-model"
-        assert result.reason == "config_override"
-
-    # ── Path 2: analysis/capability model selection ──────────────────────
-
-    def test_analysis_capability_router(self):
-        import types
-        from cozmo.runtime.model_router import ModelRequirement
-        router = self._router()
-        router._models["cap-model"] = types.SimpleNamespace(
-            name="cap-model", capability="coding",
-            vram_required_gb=0, supports_tools=True, supports_vision=False,
-        )
-        ctx = self._ctx()
-        ctx.analysis = types.SimpleNamespace(
-            intent=types.SimpleNamespace(value="coding"),
-            capabilities=["coding"],
-            grounding=types.SimpleNamespace(needs_grounding=False, confidence=0, source="", reason=""),
-            evidence=types.SimpleNamespace(signals=[], confidence=0),
-            retrieval_plan=None,
-            complexity=types.SimpleNamespace(score=1, plan_level=0, max_steps=10),
-            strategy=types.SimpleNamespace(value="direct"),
-        )
-        result = router.resolve_from_context(
-            ctx, capability_roles={"coding": "coder"},
-        )
-        assert result.model_name == "cap-model"
-        assert result.reason == "role_match"
-
-    def test_analysis_force_model(self):
-        import types
-        router = self._router()
-        ctx = self._ctx()
-        ctx.force_model = "forced-ana"
-        ctx.analysis = types.SimpleNamespace(
-            intent=types.SimpleNamespace(value="coding"),
-            capabilities=["coding"],
-            grounding=types.SimpleNamespace(needs_grounding=False, confidence=0, source="", reason=""),
-            evidence=types.SimpleNamespace(signals=[], confidence=0),
-            retrieval_plan=None,
-            complexity=types.SimpleNamespace(score=1, plan_level=0, max_steps=10),
-            strategy=types.SimpleNamespace(value="direct"),
-        )
-        result = router.resolve_from_context(
-            ctx, capability_roles={"coding": "coder"},
-        )
-        assert result.model_name == "forced-ana"
-        assert result.reason == "config_override"
-
-    # ── Path 3: fallback intent model selection ──────────────────────────
-
-    def test_fallback_router(self):
-        import types
-        from cozmo.runtime.model_router import ModelRequirement
-        router = self._router()
-        router._models["fallback-model"] = types.SimpleNamespace(
-            name="fallback-model", capability="conversation",
-            vram_required_gb=0, supports_tools=True, supports_vision=False,
-        )
-        ctx = self._ctx()
-        # no analysis, no exec_plan → fallback path
-        result = router.resolve_from_context(ctx, {"conversation": "chat"})
-        assert result.model_name == "fallback-model"
-        assert result.reason == "role_match"
-        assert result.role == "chat"
-
-    def test_fallback_force_model(self):
-        router = self._router()
-        ctx = self._ctx()
-        ctx.force_model = "forced-fb"
-        result = router.resolve_from_context(ctx, {"conversation": "chat"})
-        assert result.model_name == "forced-fb"
-        assert result.reason == "config_override"
-
-    def test_fallback_force_capability(self):
-        import types
-        from cozmo.runtime.model_router import ModelRequirement
-        router = self._router()
-        router._models["research-model"] = types.SimpleNamespace(
-            name="research-model", capability="research",
-            vram_required_gb=0, supports_tools=True, supports_vision=False,
-        )
-        ctx = self._ctx()
-        ctx.force_capability = "research"
-        result = router.resolve_from_context(
-            ctx, {"research": "planner", "conversation": "chat"},
-        )
-        assert result.model_name == "research-model"
-        assert result.reason == "force_capability"
-        assert result.role == "planner"
-
-    def test_pre_set_model_name_honored(self):
-        router = self._router()
-        ctx = self._ctx()
-        ctx.model_name = "pre-set-model"
-        result = router.resolve_from_context(ctx, {"conversation": "chat"})
-        assert result.model_name == "pre-set-model"
+        svc = self._service({"general": "gen-model"})
+        runtime = CozmoRuntime(model_service=svc)
+        ctx = ExecutionContext(user_input="describe this")
+        ctx.attachments = [{"type": "image", "path": "x.png", "mime": "image/png"}]
+        events = list(runtime.run_stream(context=ctx))
+        kinds = [k for k, *_ in events]
+        assert "error" in kinds
+        assert any("vision" in str(e[1]).lower() for e in events if e[0] == "error")
 
 
 class TestToolExecutor:

@@ -5,10 +5,11 @@ Covers the consent layer around missing recommended models for Automatic mode:
 * missing-model detection (catalog models Cozmo recommends but not installed)
 * no install without explicit consent
 * explicit consent starts installation
-* successful installation triggers the M3.3 recomputation (convergence)
+* successful installation refreshes advisory recommendations; user selection
+  is never rewritten
 * failed installation preserves configuration
 * cancelled ("not now") installation preserves configuration
-* Custom mode stays completely untouched
+* user selection stays completely untouched by installs
 * no duplicate installation requests
 * embeddings never appear as a recommendation / setup item / install target
 
@@ -146,10 +147,11 @@ def test_no_install_without_explicit_consent(monkeypatch):
                         lambda self, name, on_progress=None: calls.append(name))
     client, holder = _make_app(monkeypatch, ["llama3.1:8b"])
 
-    # Startup + discovery + explicit recompute all mention the missing model…
+    # Startup + discovery + explicit recommendation refresh all mention the
+    # missing model…
     payload = client.get("/api/models/discovery").json()
     assert "qwen2.5vl:7b" in _available_names(payload)
-    client.post("/api/configuration/models/recompute", json={})
+    client.post("/api/configuration/models/recommend", json={})
     # …but none of them install anything.
     assert calls == []
 
@@ -192,7 +194,7 @@ def test_no_duplicate_install_requests(monkeypatch):
 # ── successful install → M3.3 convergence ─────────────────────────────────
 
 
-def test_successful_install_triggers_recompute_and_converges(monkeypatch):
+def test_successful_install_refreshes_recommendations(monkeypatch):
     from cozmo.configuration.install import ModelInstaller
 
     def pulling(self, name, on_progress=None):
@@ -202,21 +204,29 @@ def test_successful_install_triggers_recompute_and_converges(monkeypatch):
     monkeypatch.setattr(ModelInstaller, "pull", pulling)
     client, holder = _make_app(
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
-    assert _config().get("llm.roles.chat.model") == "qwen3:8b"
-    assert _config().get("llm.roles.vision.model") != "qwen2.5vl:7b"
+    # selection is authoritative: set a general model, confirm it's untouched.
+    client.post("/api/configuration/models/selection", json={
+        "workloads": {"general": "llama3.1:8b", "research": "",
+                      "code": ""}}).json()
+    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
 
     # Explicit consent installs the recommended vision model.
     client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
 
     deadline = time.time() + 5
     while time.time() < deadline:
-        if _config().get("llm.roles.vision.model") == "qwen2.5vl:7b":
+        payload = client.get("/api/models/discovery").json()
+        if "qwen2.5vl:7b" in payload["installedNames"]:
             break
         time.sleep(0.05)
-    # M3.3 seam ran after install completion: roles converge onto the model.
-    assert _config().get("llm.roles.vision.model") == "qwen2.5vl:7b"
-    assert _config().get("models.mode") == "automatic"
-    assert _config().get("llm.meta.source") == "automatic"
+    # The model-set lifecycle refresh ran: the newly installed vision-capable
+    # model now appears as installed and its derived vision flag is present.
+    assert "qwen2.5vl:7b" in payload["installedNames"]
+    gen = payload["recommended"]["workloads"]["general"]
+    assert "visionCapable" in gen
+    # …but the user's selection was never rewritten.
+    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
+    assert _config().get("models.mode", "absent") == "absent"
 
 
 def test_failed_install_preserves_configuration(monkeypatch):
@@ -237,9 +247,10 @@ def test_failed_install_preserves_configuration(monkeypatch):
 
     after = _config().snapshot()
     assert after == before
-    assert _config().get("models.mode") == "automatic"
-    # The failed model never became a role.
-    assert _config().get("llm.roles.vision.model") != "qwen2.5vl:7b"
+    assert _config().get("llm.workloads.general.model") == ""
+    # The failed model never became a recommendation source.
+    payload = client.get("/api/models/discovery").json()
+    assert payload["recommended"]["workloads"]["general"]["model"] != "qwen2.5vl:7b"
 
 
 def test_cancelled_install_preserves_configuration(monkeypatch):
@@ -251,9 +262,7 @@ def test_cancelled_install_preserves_configuration(monkeypatch):
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
 
     before = {
-        "mode": _config().get("models.mode"),
-        "source": _config().get("llm.meta.source"),
-        "roles": _config().get("llm.roles"),
+        "workloads": _config().get("llm.workloads"),
         "assign": _config().get("models.custom.assign", {}),
     }
     # User declines the recommended install ("not now").
@@ -263,12 +272,10 @@ def test_cancelled_install_preserves_configuration(monkeypatch):
 
     assert calls == []  # cancelling never installs
     # The only persisted change is the dismissal itself; model configuration
-    # (mode / source / roles / custom assignments) is untouched.
-    assert _config().get("models.mode") == before["mode"]
-    assert _config().get("llm.meta.source") == before["source"]
-    assert _config().get("llm.roles") == before["roles"]
+    # (workloads / custom assignments) is untouched.
+    assert _config().get("llm.workloads") == before["workloads"]
     assert _config().get("models.custom.assign", {}) == before["assign"]
-    assert _config().get("llm.roles.vision.model") != "qwen2.5vl:7b"
+    assert _config().get("llm.workloads.general.model") != "qwen2.5vl:7b"
 
     # The choice is persisted so the setup card stops asking.
     payload = client.get("/api/models/discovery").json()
@@ -283,10 +290,10 @@ def test_dismiss_requires_a_model_name(monkeypatch):
     assert resp["ok"] is False
 
 
-# ── Custom isolation ──────────────────────────────────────────────────────
+# ── Selection isolation ──────────────────────────────────────────────────
 
 
-def test_automatic_install_leaves_custom_mode_untouched(monkeypatch):
+def test_install_never_touches_user_selection(monkeypatch):
     from cozmo.configuration.install import ModelInstaller
 
     def pulling(self, name, on_progress=None):
@@ -297,22 +304,17 @@ def test_automatic_install_leaves_custom_mode_untouched(monkeypatch):
     client, holder = _make_app(
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
 
-    enter = client.post("/api/configuration/models/state", json={
-        "mode": "custom",
-        "assign": {"chat": "llama3.1:8b", "coding": "qwen3:8b"},
-    }).json()
-    assert enter["ok"] is True
+    # User explicitly selected models, including one not yet installed.
+    client.post("/api/configuration/models/selection", json={
+        "workloads": {"general": "llama3.1:8b", "research": "not-installed:model",
+                      "code": "qwen3:8b"}}).json()
 
-    # An automatic-recommended model gets installed while Custom is active.
+    # An install of a recommended model completes while the selection is set.
     client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
     time.sleep(0.5)
 
-    assert _config().get("models.mode") == "custom"
-    assert _config().get("llm.meta.source") == "custom"
-    assert _config().get("models.custom.assign.chat") == "llama3.1:8b"
-    assert _config().get("models.custom.assign.coding") == "qwen3:8b"
-    # Custom assignments were never rewritten by the Automatic-side install.
-    assert _config().get("llm.roles.chat.model") == "llama3.1:8b"
-    assert _config().get("llm.roles.coder.model") == "qwen3:8b"
-    # No "recommended setup" persistence touched Custom config.
-    assert _config().get("models.automatic.setup.dismissed", []) == []
+    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
+    assert _config().get("llm.workloads.research.model") == "not-installed:model"
+    assert _config().get("llm.workloads.code.model") == "qwen3:8b"
+    # No "recommended setup" persistence wrote into the selection.
+    assert _config().get("models.recommendations.dismissed", []) == []

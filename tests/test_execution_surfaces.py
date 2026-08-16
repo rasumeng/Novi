@@ -811,7 +811,7 @@ def test_surfaces_do_not_own_model_selection():
                        "performance_profile", "perf_profile", "model_router",
                        "model_catalog"}
     forbidden_imports = ("cozmo.models", "cozmo.configuration.catalog",
-                         "cozmo.configuration.presets", "cozmo.runtime.model_router")
+                         "cozmo.configuration.resolver", "cozmo.runtime.model_selector")
     surfaces = ("cli.py", "services/telegram.py", "services/background.py",
                 "task_queue.py", "scheduler.py", "telegram_bot.py")
     for rel in surfaces:

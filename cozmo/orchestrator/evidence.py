@@ -131,8 +131,8 @@ class EvidenceDetector:
     Easy to add new signal types (database, docs, API) later.
     """
 
-    def __init__(self, router_llm=None):
-        self.router_llm = router_llm
+    def __init__(self, llm=None):
+        self.llm = llm
 
     def detect(self, user_input: str, has_images: bool = False) -> EvidenceAnalysis:
         """Analyze user input and return evidence requirements.
@@ -270,10 +270,10 @@ class EvidenceDetector:
         Returns structured GroundingDecision or None if LLM unavailable/fails.
         Does NOT make the final decision — Orchestrator owns that via _resolve_grounding().
         """
-        if self.router_llm is None:
+        if self.llm is None:
             return None
         try:
-            raw = self.router_llm.invoke(_GROUNDING_PROMPT % user_input).strip()
+            raw = self.llm.invoke(_GROUNDING_PROMPT % user_input).strip()
             cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             data = json.loads(cleaned)
             needs = bool(data.get("needs_grounding", False))

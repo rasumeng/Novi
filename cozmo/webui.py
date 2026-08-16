@@ -42,10 +42,9 @@ class WebUIBackend:
         capability_registry = CapabilityRegistry()
         register_builtin_capabilities(capability_registry)
 
-        # Model router
-        from .runtime.model_router import ModelRouter
-        default_model = ctx.config.get("llm", {}).get("default_model") or ""
-        model_router = ModelRouter(default_model=default_model, resource_manager=None)
+        # Model selection is workload-based and centralized: ModelService +
+        # ModelSelector resolve llm.workloads.* at execution time. No router,
+        # no default_model, no role config here.
 
         # MCP manager
         mcp = MCPManager(registry)
@@ -111,7 +110,7 @@ class WebUIBackend:
         # Orchestrator components
         intent_detector = IntentDetector()
         complexity_estimator = ComplexityEstimator()
-        evidence_detector = EvidenceDetector(router_llm=ctx.router_llm)
+        evidence_detector = EvidenceDetector(llm=ctx.simple_llm)
         from .orchestrator.task_store import TaskStore
         from .planner.planner import PlannerEngine
         task_store = TaskStore()
@@ -120,7 +119,6 @@ class WebUIBackend:
             complexity_estimator=complexity_estimator,
             evidence_detector=evidence_detector,
             capability_registry=capability_registry,
-            model_router=model_router,
             task_store=task_store,
             planner_engine=PlannerEngine(),
         )
@@ -136,15 +134,16 @@ class WebUIBackend:
         )
 
         # Event-driven wiring (no polling): config changes reach the shared
-        # backend live through the framework's apply hooks.
-        def _reload_router(path, value, previous):
+        # backend live through the framework's apply hooks. ModelSelector wraps
+        # ModelService, so refreshing discovery is all that's needed — selection
+        # is re-read from llm.workloads.* at every resolution.
+        def _reload_models(path, value, previous):
             if not path.startswith("llm."):
                 return
             try:
                 ctx.model_service.refresh()
             except Exception as e:
                 print(f"[cozmo] model refresh failed: {e}")
-            model_router.populate_from_service(ctx.model_service, ctx.config)
 
         def _safe_mcp_refresh(manager, path, value, previous):
             try:
@@ -164,13 +163,13 @@ class WebUIBackend:
                 print(f"[cozmo] Telegram config refresh failed: {e}")
 
         from .configuration.bootstrap import register_apply_hook as _ra
-        _ra("runtime", _reload_router)
+        _ra("runtime", _reload_models)
         _ra("mcp", lambda p, v, prev: _safe_mcp_refresh(mcp, p, v, prev))
         _ra("integrations", lambda p, v, prev: _safe_telegram_refresh(telegram, p, v, prev))
 
         return {
             "model_service": ctx.model_service,
-            "router_llm": ctx.router_llm,
+            "simple_llm": ctx.simple_llm,
             "memory": ctx.memory,
             "project_index": ctx.project_index,
             "brain": ctx.brain,
@@ -181,7 +180,6 @@ class WebUIBackend:
             "mcp_permissions": mcp_permissions,
             "skills": skills,
             "capability_registry": capability_registry,
-            "model_router": model_router,
             "orchestrator": orchestrator,
             "job_manager": job_manager,
             "task_store": task_store,

@@ -19,22 +19,6 @@ export async function saveConfig(patch: Record<string, unknown>) {
   })
 }
 
-export async function fetchOllamaModels(): Promise<string[]> {
-  try {
-    const r = await fetch(`${API_BASE}/api/ollama/models`)
-    if (r.ok) return r.json()
-  } catch {}
-  return []
-}
-
-export async function fetchAvailableModels(): Promise<{ name: string; provider: string }[]> {
-  try {
-    const r = await fetch(`${API_BASE}/api/models/available`)
-    if (r.ok) return r.json()
-  } catch {}
-  return []
-}
-
 // ── Configuration Framework API (Settings V2) ───────────────────────────
 
 export interface SettingSchema {
@@ -59,8 +43,14 @@ export interface SchemaResponse {
 export interface ModelEligibility {
   hardwareFit: string
   hardwareConfidence: string
-  eligibleAutomatic: boolean
-  eligibleCustom: boolean
+}
+
+export interface CapabilityEvidence {
+  capability: string
+  supported: boolean | null
+  source: string
+  confidence: number | null
+  note: string
 }
 
 export interface DiscoveredModelEntry {
@@ -76,6 +66,32 @@ export interface DiscoveredModelEntry {
   approxRamGb: number | null
   caveats?: string[]
   eligibility?: ModelEligibility
+  family?: string | null
+  variant?: string | null
+  quantization?: string | null
+  parameterCount?: string | null
+  contextLength?: number | null
+  format?: string | null
+  license?: string | null
+  capabilityEvidence?: CapabilityEvidence[]
+  stale?: boolean
+}
+
+export interface WorkloadRecommendation {
+  workload: string
+  model: string
+  capability: string
+  qualification: string
+  hardwareConfidence: string
+  reasons: string[]
+  caveats: string[]
+  capabilities: string[]
+  visionCapable: boolean
+}
+
+export interface RecommendationsPayload {
+  workloads: Record<string, WorkloadRecommendation>
+  provisional: boolean
 }
 
 export interface DiscoveryPayload {
@@ -84,9 +100,9 @@ export interface DiscoveryPayload {
   missingModels: string[]
   installedNames: string[]
   dismissedRecommended: string[]
-  presets: { id: string; label: string; description: string; lightweight: boolean }[]
-  activeExperience: string
-  roles: Record<string, string>
+  workloads: Record<string, string>
+  recommended: RecommendationsPayload
+  vision_capable: boolean
 }
 
 export async function fetchSchema(): Promise<SchemaResponse> {
@@ -110,9 +126,9 @@ export async function fetchDiscovery(): Promise<DiscoveryPayload> {
     missingModels: [],
     installedNames: [],
     dismissedRecommended: [],
-    presets: [],
-    activeExperience: 'medium',
-    roles: {},
+    workloads: { general: '', research: '', code: '' },
+    recommended: { workloads: {}, provisional: true },
+    vision_capable: false,
   }
 }
 
@@ -137,11 +153,39 @@ export async function setSetting(settingId: string, value: unknown): Promise<boo
 }
 
 /**
- * Backend experience/preset migration compatibility:
- * the backend `/api/configuration/apply` and the preset machinery remain for
- * one-way migration only. The frontend no longer exposes experience presets,
- * so no client is kept here.
+ * Persist the user's workload -> model selection verbatim. The backend never
+ * auto-populates selection; recommendations are advisory only.
  */
+export async function saveWorkloadSelection(workloads: Record<string, string>): Promise<{ ok: boolean; workloads?: Record<string, { status: string }>; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/models/selection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workloads }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
+
+/**
+ * Explicit "Use Recommended": apply the advisory recommendations as the
+ * selection. Advisory-only unless ``apply`` is true — recommendations never
+ * auto-apply and never install anything.
+ */
+export async function applyRecommendedModels(): Promise<{ ok: boolean; workloads?: Record<string, string>; error?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/configuration/models/recommend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apply: true }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
 
 /** Start a model install in the background. Progress arrives over WS. */
 export async function installModel(name: string): Promise<{ ok: boolean; error?: string }> {
@@ -150,47 +194,6 @@ export async function installModel(name: string): Promise<{ ok: boolean; error?:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
-    })
-    return r.json()
-  } catch {
-    return { ok: false, error: 'request failed' }
-  }
-}
-
-/**
- * Drive the M3.2 Automatic <-> Custom model state machine on the backend.
- *
- * ``mode``: "automatic" | "custom".
- * ``assign``: capability -> model intent to persist for Custom mode before the
- * backend resolves everything to ``llm.roles.*`` through the Configuration
- * Framework. Capability keys are limited to chat/reasoning/coding/vision.
- */
-export async function setModelsState(
-  mode: 'automatic' | 'custom',
-  assign?: Record<string, string>,
-): Promise<{ ok: boolean; mode?: string; error?: string }> {
-  try {
-    const r = await fetch(`${API_BASE}/api/configuration/models/state`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, assign }),
-    })
-    return r.json()
-  } catch {
-    return { ok: false, error: 'request failed' }
-  }
-}
-
-/**
- * M3.3 — explicit Automatic recomputation seam (model removal / hardware
- * refresh). NOOP while Custom mode is active; never installs anything.
- */
-export async function recomputeModels(): Promise<{ ok: boolean; mode?: string; error?: string }> {
-  try {
-    const r = await fetch(`${API_BASE}/api/configuration/models/recompute`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
     })
     return r.json()
   } catch {
