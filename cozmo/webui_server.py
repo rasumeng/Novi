@@ -855,7 +855,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         build_available_recommendations,
         build_catalog_payload,
     )
-    from .configuration.install import ModelInstaller
+    from .configuration.install import ModelInstaller, delete_model
     from .configuration.resolver import (
         apply_selection,
         recommend,
@@ -1123,15 +1123,30 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
         Always recomputes and returns recommendation evidence (never writes).
         When ``apply=true`` the recommendations are written via
-        ``apply_selection`` — the single, verbatim selection path. Never
-        installs or downloads anything.
+        ``apply_selection`` — the single, verbatim selection path. An optional
+        ``workloads`` list limits the apply to those workloads only; workloads
+        not listed keep their current selection untouched. Never installs or
+        downloads anything.
         """
         url = configuration.get("ollama.url", "http://localhost:11434")
         discovered = ModelDiscovery(url).installed()
         recs = recommend(installed=discovered)
         data = recs.to_dict()
-        if (body or {}).get("apply"):
+        body = body or {}
+        if body.get("apply"):
             models = {workload: rec.model for workload, rec in recs.workloads.items()}
+            workloads = body.get("workloads")
+            if workloads is not None:
+                if not isinstance(workloads, list) or not all(
+                        isinstance(w, str) and w in WORKLOADS for w in workloads):
+                    return {"ok": False,
+                            "error": "unknown workload(s): %r" % (workloads,)}
+                models = {
+                    workload: (models.get(workload) if workload in workloads
+                               else configuration.get(
+                                   f"llm.workloads.{workload}.model", ""))
+                    for workload in WORKLOADS
+                }
             data["selection"] = apply_selection(
                 configuration, models, installed=discovered, by="webui")
         _sync_config_snapshot()
@@ -1235,6 +1250,26 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     _installing_models.discard(name)
 
         threading.Thread(target=_install_and_recompute, daemon=True).start()
+        return {"ok": True, "name": name}
+
+    @app.post("/api/models/delete")
+    def delete_model_endpoint(body: dict):
+        """Remove an installed model from disk (explicit user action).
+
+        Deletion is a disk operation only: ``llm.workloads.*`` is never
+        modified. A selected-but-deleted model stays selected verbatim and
+        simply becomes a configured-but-missing model. No substitution, no
+        auto-apply of a recommendation.
+        """
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "model name required"}
+        url = configuration.get("ollama.url", "http://localhost:11434")
+        if not delete_model(name, url):
+            return {"ok": False, "name": name, "error": f"failed to delete model '{name}'"}
+        # Model-set change: invalidate cache + refresh advisory recommendations.
+        # User selection is authoritative and never rewritten here.
+        _after_models_changed()
         return {"ok": True, "name": name}
 
     # seed default skills on startup

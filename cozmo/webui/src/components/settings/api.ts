@@ -87,6 +87,30 @@ export interface WorkloadRecommendation {
   caveats: string[]
   capabilities: string[]
   visionCapable: boolean
+  explanation?: RecommendationExplanation | null
+}
+
+export interface ExplanationHardwareFit {
+  fit: string
+  confidence: string
+  strength: string
+  basis: string[]
+}
+
+export interface ExplanationAlternative {
+  model: string
+  fit: string
+  strength: string
+  capability: string
+  qualification: string
+  reasons: string[]
+}
+
+export interface RecommendationExplanation {
+  provenance: { source: string; confidence: number | null } | null
+  hardwareFit: ExplanationHardwareFit | null
+  alternatives: ExplanationAlternative[]
+  provisional: boolean
 }
 
 export interface RecommendationsPayload {
@@ -94,8 +118,18 @@ export interface RecommendationsPayload {
   provisional: boolean
 }
 
+export interface DiscoveryHardware {
+  ramGb: number
+  gpu: {
+    name: string
+    vramTotalGb: number | null
+    vendor: string
+  }
+  confidence: string
+}
+
 export interface DiscoveryPayload {
-  hardware: { ramGb: number }
+  hardware: DiscoveryHardware
   models: DiscoveredModelEntry[]
   missingModels: string[]
   installedNames: string[]
@@ -121,7 +155,7 @@ export async function fetchDiscovery(): Promise<DiscoveryPayload> {
     if (r.ok) return r.json()
   } catch {}
   return {
-    hardware: { ramGb: 0 },
+    hardware: { ramGb: 0, gpu: { name: '', vramTotalGb: null, vendor: '' }, confidence: 'unknown' },
     models: [],
     missingModels: [],
     installedNames: [],
@@ -172,14 +206,15 @@ export async function saveWorkloadSelection(workloads: Record<string, string>): 
 /**
  * Explicit "Use Recommended": apply the advisory recommendations as the
  * selection. Advisory-only unless ``apply`` is true — recommendations never
- * auto-apply and never install anything.
+ * auto-apply and never install anything. An optional ``workloads`` list limits
+ * the apply to those workloads; other workloads keep their current selection.
  */
-export async function applyRecommendedModels(): Promise<{ ok: boolean; workloads?: Record<string, string>; error?: string }> {
+export async function applyRecommendedModels(workloads?: string[]): Promise<{ ok: boolean; workloads?: Record<string, string>; error?: string }> {
   try {
     const r = await fetch(`${API_BASE}/api/configuration/models/recommend`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apply: true }),
+      body: JSON.stringify({ apply: true, workloads }),
     })
     return r.json()
   } catch {
@@ -191,6 +226,23 @@ export async function applyRecommendedModels(): Promise<{ ok: boolean; workloads
 export async function installModel(name: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch(`${API_BASE}/api/models/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    return r.json()
+  } catch {
+    return { ok: false, error: 'request failed' }
+  }
+}
+
+/**
+ * Remove an installed model from disk. This never touches workload selections —
+ * a selected-but-deleted model stays selected and simply becomes missing.
+ */
+export async function deleteModel(name: string): Promise<{ ok: boolean; error?: string; name?: string }> {
+  try {
+    const r = await fetch(`${API_BASE}/api/models/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),

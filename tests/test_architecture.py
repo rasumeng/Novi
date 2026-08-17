@@ -95,6 +95,16 @@ def _iter_py_files(root: Path, exclude_dirs=None):
         yield path
 
 
+def _iter_frontend_files():
+    """Yield all .ts/.tsx source files under cozmo/webui/src."""
+    src = COZMO_SRC / "webui" / "src"
+    if not src.exists():
+        return
+    for path in src.rglob("*"):
+        if path.is_file() and path.suffix in (".ts", ".tsx"):
+            yield path
+
+
 def _is_comment(line: str) -> bool:
     return line.strip().startswith("#") or line.strip().startswith('"""') or line.strip().startswith("'''")
 
@@ -186,6 +196,53 @@ def test_no_retired_model_vocabulary():
     if violations:
         raise AssertionError(
             "Retired model-configuration vocabulary found:\n"
+            + "\n".join(violations[:20])
+            + ("\n... (truncated)" if len(violations) > 20 else "")
+        )
+
+
+def test_no_automatic_vocabulary_in_frontend():
+    """The word "Automatic"/"automatic" must never appear in the webui source.
+
+    Model selection is user-explicit: recommended or user-chosen, persisted as
+    ``llm.workloads.*``. Any "automatic" selection concept is retired. The
+    guard uses a word boundary so cosmetic "automatically" copy is allowed.
+    """
+    violations = []
+    for f in _iter_frontend_files():
+        rel = f.relative_to(PROJECT_ROOT).as_posix()
+        text = f.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            if re.search(r"\b[Aa]utomatic\b", line):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Frontend references an automatic-selection concept:\n"
+            + "\n".join(violations[:20])
+            + ("\n... (truncated)" if len(violations) > 20 else "")
+        )
+
+
+def test_no_retired_vocabulary_in_frontend():
+    """Retired model-mode/Automatic/Custom vocabulary must not appear in the
+    webui source either."""
+    violations = []
+    for f in _iter_frontend_files():
+        rel = f.relative_to(PROJECT_ROOT).as_posix()
+        text = f.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            for token in RETIRED_VOCABULARY:
+                if token in line:
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Retired model-configuration vocabulary found in frontend:\n"
             + "\n".join(violations[:20])
             + ("\n... (truncated)" if len(violations) > 20 else "")
         )

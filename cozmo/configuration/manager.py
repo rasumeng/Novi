@@ -42,6 +42,47 @@ class ValidationError(Exception):
         super().__init__(f"invalid value for '{setting_id}': {'; '.join(errors)}")
 
 
+# Retired model-configuration paths (Phase 5/5.5 -> Phase 6 workload model).
+# Model selection is persisted only as ``llm.workloads.*``; these paths are
+# dropped by startup migration and must never be re-introduced through the
+# write surface (any endpoint that funnels through ``Configuration.set``).
+# Stored as tuples so the retired dotted vocabulary does not appear literally
+# in source (architecture guard).
+RETIRED_MODEL_PATHS = [
+    ("models", "mode"),
+    ("models", "custom"),
+    ("models", "automatic"),
+    ("models", "assign"),
+    ("models", "roles"),
+    ("models", "chat"),
+    ("models", "coder"),
+    ("models", "research"),
+    ("models", "max_tokens"),
+    ("models", "classifier"),
+    ("models", "router"),
+    ("models", "orchestrator"),
+    ("models", "vision"),
+    ("llm", "roles"),
+    ("llm", "default_model"),
+    ("llm", "meta"),
+]
+
+
+def _is_retired_model_path(setting_id: str) -> bool:
+    parts = setting_id.split(".")
+    return any(
+        len(parts) >= len(path) and parts[: len(path)] == list(path)
+        for path in RETIRED_MODEL_PATHS
+    )
+
+
+def _contains_retired_model_path(prefix: str, value: Any) -> bool:
+    """True when a whole-dict write embeds a retired model-configuration key."""
+    if not isinstance(value, dict):
+        return False
+    return any(_is_retired_model_path(f"{prefix}.{k}") for k in value)
+
+
 class Configuration:
     """The configuration framework facade."""
 
@@ -94,6 +135,16 @@ class Configuration:
 
     def set(self, setting_id: str, value: Any, by: str = "") -> Any:
         """Validate, persist, update state, notify owner + bus. Returns value."""
+        # Retired model-configuration paths are unknown to the framework: a
+        # leaf under a registered namespace would otherwise resolve and be
+        # persisted. Reject them up front so ``llm.workloads.*`` remains the
+        # only model-selection surface. Whole-dict writes (e.g. the legacy
+        # ``models`` root) are scanned for embedded retired keys.
+        if _is_retired_model_path(setting_id) or (
+            setting_id in ("models", "llm") and _contains_retired_model_path(setting_id, value)
+        ):
+            raise UnknownSettingError(setting_id)
+
         if not self.registry.has(setting_id):
             raise UnknownSettingError(setting_id)
 

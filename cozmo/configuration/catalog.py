@@ -267,7 +267,15 @@ def build_catalog_payload(installed_models: list) -> dict:
         })
         entries.append(entry)
     return {
-        "hardware": {"ramGb": engine.hardware.ram_gb},
+        "hardware": {
+            "ramGb": engine.hardware.ram_gb,
+            "gpu": {
+                "name": engine.hardware.gpu.name,
+                "vramTotalGb": engine.hardware.gpu.vram_total_gb,
+                "vendor": engine.hardware.gpu.vendor,
+            },
+            "confidence": engine.hardware.confidence.value,
+        },
         "models": entries,
     }
 

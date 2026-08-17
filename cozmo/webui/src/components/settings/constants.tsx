@@ -15,18 +15,6 @@ export const SECTIONS: { id: SectionId; label: string; icon: React.ElementType }
   { id: 'developer', label: 'Developer', icon: Server },
 ]
 
-export const BUILTIN_ROLES = ['classifier', 'router', 'orchestrator', 'chat', 'coder', 'planner', 'vision'] as const
-
-export const PRESET_META: Record<string, { label: string; desc: string }> = {
-  classifier: { label: 'Classifier', desc: 'Intent detection & message classification' },
-  router: { label: 'Router', desc: 'Task routing and capability dispatch' },
-  orchestrator: { label: 'Orchestrator', desc: 'Multi-step plan generation' },
-  chat: { label: 'Chat', desc: 'General conversation & Q&A' },
-  coder: { label: 'Coder', desc: 'Code generation & editing' },
-  planner: { label: 'Planner', desc: 'Deep research & task planning' },
-  vision: { label: 'Vision', desc: 'Image analysis & vision tasks' },
-}
-
 export const PERM_MODES = ['allow', 'ask', 'deny'] as const
 
 export const CAPABILITY_DEFS: Record<string, { label: string; icon: React.ElementType }> = {

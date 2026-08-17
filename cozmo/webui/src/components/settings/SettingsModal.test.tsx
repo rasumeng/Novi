@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 const mockValues: Record<string, unknown> = {}
 
 const mockDiscovery = {
-  hardware: { ramGb: 16 },
+  hardware: { ramGb: 16, gpu: { name: '', vramTotalGb: null, vendor: '' }, confidence: 'unknown' },
   models: [],
   missingModels: [],
   installedNames: [],
@@ -25,6 +25,7 @@ const frameworkMock = {
   refreshDiscovery: vi.fn().mockResolvedValue(undefined),
   saveWorkloadSelection: vi.fn().mockResolvedValue({ ok: true }),
   applyRecommended: vi.fn().mockResolvedValue({ ok: true }),
+  removeModel: vi.fn().mockResolvedValue(true),
   reload: vi.fn(),
 }
 

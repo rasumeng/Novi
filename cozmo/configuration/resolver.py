@@ -164,7 +164,70 @@ def _candidate_rank(
     score = cand.score(capability, hw)
     if score.strength == EvidenceStrength.NONE:
         return None
-    return rank_components(score)
+    return (rank_components(score), score)
+
+
+_STRENGTH_LABELS = {
+    EvidenceStrength.RUNTIME: "runtime",
+    EvidenceStrength.SEED_TRUSTED: "trusted-seed",
+    EvidenceStrength.SEED_SUPPORTED: "supported-seed",
+    EvidenceStrength.REPORTED: "reported",
+    EvidenceStrength.SEED_EXPERIMENTAL: "experimental-seed",
+    EvidenceStrength.NAME_INFERENCE: "name-inference",
+    EvidenceStrength.NONE: "none",
+}
+
+
+def _strength_label(strength: EvidenceStrength) -> str:
+    return _STRENGTH_LABELS.get(strength, "none")
+
+
+def _alt_reasons(score: RecommendationScore) -> list[str]:
+    """Canonical short reasons for a non-winning candidate."""
+    reasons = []
+    if score.strength == EvidenceStrength.RUNTIME:
+        reasons.append("runtime capability evidence")
+    elif score.strength == EvidenceStrength.SEED_TRUSTED:
+        reasons.append("trusted curated evidence")
+    elif score.strength == EvidenceStrength.SEED_SUPPORTED:
+        reasons.append("curated evidence")
+    elif score.strength == EvidenceStrength.REPORTED:
+        reasons.append("reported capability evidence")
+    elif score.strength == EvidenceStrength.SEED_EXPERIMENTAL:
+        reasons.append("experimental / unverified")
+    elif score.strength == EvidenceStrength.NAME_INFERENCE:
+        reasons.append("weak name-based evidence")
+    if score.fit.fit == HardwareFit.FITS:
+        reasons.append("fits detected hardware")
+    elif score.fit.fit == HardwareFit.DOES_NOT_FIT:
+        reasons.append("does not fit detected hardware")
+    elif score.fit.fit == HardwareFit.UNKNOWN:
+        reasons.append("hardware fit unknown")
+    return reasons
+
+
+@dataclass
+class RecommendationExplanation:
+    """Structured, additive explanation for one recommendation.
+
+    Derived evidence describing why ``model`` won for the workload: the
+    winning capability claim's provenance, the hardware-fit basis, the viable
+    alternatives that were considered, and whether the advice is provisional.
+    Like the recommendation itself it is advisory and never persisted.
+    """
+
+    provenance: Optional[dict] = None
+    hardwareFit: Optional[dict] = None
+    alternatives: list[dict] = field(default_factory=list)
+    provisional: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "provenance": self.provenance,
+            "hardwareFit": self.hardwareFit,
+            "alternatives": self.alternatives,
+            "provisional": self.provisional,
+        }
 
 
 @dataclass
@@ -180,6 +243,7 @@ class WorkloadRecommendation:
     caveats: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
     vision_capable: bool = False
+    explanation: Optional[RecommendationExplanation] = None
 
     def to_dict(self) -> dict:
         return {
@@ -192,6 +256,7 @@ class WorkloadRecommendation:
             "caveats": self.caveats,
             "capabilities": self.capabilities,
             "visionCapable": self.vision_capable,
+            "explanation": self.explanation.to_dict() if self.explanation else None,
         }
 
 
@@ -214,6 +279,7 @@ class Recommendations:
 def _pick_workload_model(
     workload: str, capability: str, hw: HardwareProfile,
     evidence: dict[str, _CandidateEvidence], seen: set[str],
+    provisional: bool = False,
 ) -> Optional[tuple[str, WorkloadRecommendation]]:
     """Deterministically pick the best installed model for ``capability``.
 
@@ -224,16 +290,15 @@ def _pick_workload_model(
     """
     ranked = []
     for name, cand in evidence.items():
-        key = _candidate_rank(cand, capability, hw)
-        if key is not None:
-            ranked.append((key, name, cand))
+        res = _candidate_rank(cand, capability, hw)
+        if res is not None:
+            ranked.append((res[0], name, cand, res[1]))
     ranked.sort(key=lambda x: (*x[0], x[1] in seen, x[1]))
 
     if not ranked:
         return None
 
-    _, name, cand = ranked[0]
-    score = cand.score(capability, hw)
+    _, name, cand, score = ranked[0]
     grade = score.strength
     fit = score.fit.fit
     qual = cand.record.qualification
@@ -264,6 +329,17 @@ def _pick_workload_model(
         caveats.append("No trusted/supported candidate installed; using "
                        "experimental model as last resort.")
 
+    alternatives = []
+    for _, alt_name, alt_cand, alt_score in ranked[1:]:
+        alternatives.append({
+            "model": alt_name,
+            "fit": alt_score.fit.fit.value,
+            "strength": _strength_label(alt_score.strength),
+            "capability": capability,
+            "qualification": alt_score.qualification.value,
+            "reasons": _alt_reasons(alt_score),
+        })
+
     selection = WorkloadRecommendation(
         workload=workload,
         model=name,
@@ -274,6 +350,20 @@ def _pick_workload_model(
         caveats=caveats,
         capabilities=sorted(cand.capabilities),
         vision_capable=bool("vision" in cand.capabilities),
+        explanation=RecommendationExplanation(
+            provenance={
+                "source": score.source or "",
+                "confidence": score.confidence,
+            },
+            hardwareFit={
+                "fit": score.fit.fit.value,
+                "confidence": hw.confidence.value,
+                "strength": score.fit.strength,
+                "basis": list(score.fit.sources),
+            },
+            alternatives=alternatives,
+            provisional=provisional,
+        ),
     )
     return name, selection
 
@@ -306,7 +396,7 @@ def recommend(
     seen: set[str] = set()
     for workload, capability in WORKLOAD_CAPABILITY.items():
         result = _pick_workload_model(workload, capability, hardware,
-                                      evidence, seen)
+                                      evidence, seen, provisional=recs.provisional)
         if result is None:
             # No usable candidate: recommend nothing, never fabricate.
             recs.workloads[workload] = WorkloadRecommendation(

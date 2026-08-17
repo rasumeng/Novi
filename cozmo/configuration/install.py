@@ -79,6 +79,31 @@ class ModelInstaller:
                 log.warning("install progress handler failed: %s", e)
 
 
+def delete_model(name: str, ollama_url: str = "http://localhost:11434") -> bool:
+    """Delete a model from the local Ollama daemon (disk operation).
+
+    Returns ``True`` only when Ollama confirms removal (HTTP 2xx). This never
+    touches configuration or workload selections — removing a model from disk
+    and changing which model a workload uses are unrelated actions.
+    """
+    name = (name or "").strip()
+    if not name:
+        return False
+    body = json.dumps({"model": name}).encode()
+    req = urllib.request.Request(
+        f"{ollama_url.rstrip('/')}/api/delete",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return 200 <= resp.status < 300
+    except Exception as e:
+        log.warning("model delete failed for '%s': %s", name, e)
+        return False
+
+
 def install_model_background(
     name: str,
     ollama_url: str = "http://localhost:11434",

@@ -167,3 +167,59 @@ def test_migrate_runs_with_new_registrations():
     out = migrate({"models": {"chat": "llama3", "max_tokens": 4096}})
     assert "models" not in out
     assert out["llm"]["workloads"]["general"]["model"] == "llama3"
+
+
+# ── Phase 6 Task 7: retired model-configuration paths are rejected ──────
+
+
+def test_retired_models_leaf_writes_are_rejected(tmp_path):
+    """The 'models' namespace must not re-persist retired model paths.
+
+    The generic write surface (patch_configuration / set_configuration_value /
+    put_config) funnels through ``Configuration.set``; a retired path that
+    merely resolves via the 'models' namespace would otherwise be persisted.
+    """
+    cfg = build_cfg(tmp_path)
+    # retired leaves resolve via the namespace but are rejected on write
+    assert cfg.registry.has("models.mode")
+    with pytest.raises(UnknownSettingError):
+        cfg.set("models.mode", "auto", by="webui")
+    with pytest.raises(UnknownSettingError):
+        cfg.set("models.custom.assign.chat", "qwen3:8b", by="webui")
+    with pytest.raises(UnknownSettingError):
+        cfg.set("models.roles.chat", "qwen3:8b", by="webui")
+    with pytest.raises(UnknownSettingError):
+        cfg.set("llm.roles", {"chat": "qwen3:8b"}, by="webui")
+    # nothing was persisted
+    assert cfg.get("models.mode", None) is None
+    assert cfg.get("llm.roles", None) is None
+
+
+def test_retired_models_root_write_is_rejected(tmp_path):
+    """Whole-dict writes must not smuggle retired keys through the models root."""
+    cfg = build_cfg(tmp_path)
+    with pytest.raises(UnknownSettingError):
+        cfg.set("models", {"mode": "auto", "agent": "qwen3:8b"}, by="webui")
+    # a clean whole-dict write (only live keys) still succeeds
+    cfg.set("models", {"agent": "qwen3:8b"}, by="webui")
+    assert cfg.get("models.agent") == "qwen3:8b"
+
+
+def test_retired_llm_root_write_is_rejected(tmp_path):
+    cfg = build_cfg(tmp_path)
+    with pytest.raises(UnknownSettingError):
+        cfg.set("llm", {"roles": {"chat": "qwen3:8b"}, "max_tokens": 4096}, by="webui")
+    # llm.workloads.* remains fully supported
+    cfg.set("llm.workloads.general.model", "qwen3:8b", by="webui")
+    assert cfg.get("llm.workloads.general.model") == "qwen3:8b"
+
+
+def test_retired_models_leaves_rejected_via_put_config_surface(tmp_path):
+    """The legacy bulk-write endpoint reports retired paths as not registered."""
+    cfg = build_cfg(tmp_path)
+    for k in ("models.mode", "models.custom.assign.chat", "llm.roles"):
+        # the path resolves through a registered namespace, so the rejection
+        # must come from the retired-path guard, not the registry lookup
+        assert cfg.registry.has(k)
+        with pytest.raises(UnknownSettingError):
+            cfg.set(k, "x", by="webui")

@@ -189,6 +189,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 {!framework.loading && section === 'general' && (
                   <GeneralSettings
                     discovery={framework.discovery}
+                    schema={framework.schema}
                     installing={framework.installs}
                     onInstall={framework.install}
                     onNavigate={migrateSection}
@@ -199,8 +200,10 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 {!framework.loading && section === 'models' && (
                   <ModelsSettings
                     discovery={framework.discovery}
+                    schema={framework.schema}
                     installing={framework.installs}
                     onInstall={framework.install}
+                    onDelete={framework.removeModel}
                     onDismiss={framework.dismissRecommended}
                     onRefresh={framework.refreshDiscovery}
                     loading={false}

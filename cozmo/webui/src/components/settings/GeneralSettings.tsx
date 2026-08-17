@@ -1,21 +1,17 @@
 import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle, Eye } from 'lucide-react'
-import type { DiscoveryPayload } from './api'
+import type { DiscoveryPayload, SchemaResponse } from './api'
 import type { SectionId } from './types'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
+import { workloadsFromDiscovery } from './workloads'
 
 interface Props {
   discovery: DiscoveryPayload | null
+  schema: SchemaResponse | null
   installing: Record<string, { phase: string; pct: number | null }>
   onInstall: (name: string) => Promise<boolean>
   onNavigate: (section: SectionId) => void
   loading: boolean
 }
-
-const WORKLOADS: { key: string; label: string }[] = [
-  { key: 'general', label: 'General' },
-  { key: 'research', label: 'Research' },
-  { key: 'code', label: 'Code' },
-]
 
 /**
  * General — a concise overview/status surface for Cozmo. This is an
@@ -23,12 +19,15 @@ const WORKLOADS: { key: string; label: string }[] = [
  * not a configuration dump. It offers quick links into the appropriate
  * settings pages rather than hosting the controls itself.
  */
-export function GeneralSettings({ discovery, installing, onInstall, onNavigate, loading }: Props) {
+export function GeneralSettings({ discovery, schema, installing, onInstall, onNavigate, loading }: Props) {
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
 
   const hardware = discovery.hardware
   const missing = discovery.missingModels
   const workloads = discovery.workloads ?? {}
+  // Workload names come from the backend schema + discovery payload — never
+  // hardcoded in the frontend.
+  const WORKLOADS = workloadsFromDiscovery(discovery, schema)
 
   return (
     <div className="space-y-5">

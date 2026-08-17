@@ -5,6 +5,7 @@ import {
   fetchFrameworkConfig,
   setSetting,
   installModel,
+  deleteModel,
   saveWorkloadSelection as saveWorkloadSelectionApi,
   applyRecommendedModels as applyRecommendedModelsApi,
   dismissRecommendedModel,
@@ -102,6 +103,20 @@ export function useFrameworkSettings() {
     setDiscovery(disc)
   }, [])
 
+  // Remove a model from disk. Deletion never changes workload selections —
+  // the model simply disappears from the installed set; if it was selected it
+  // becomes a configured-but-missing model. After a successful delete the
+  // library is refreshed so installed/missing status is accurate.
+  const removeModel = useCallback(async (name: string) => {
+    const res = await deleteModel(name)
+    if (!res.ok) {
+      showError(res.error ?? `Couldn't remove ${name}.`)
+      return false
+    }
+    await refreshDiscovery()
+    return true
+  }, [refreshDiscovery, showError])
+
   // M3.4: user declined a recommended-model install ("not now"). Records the
   // choice through the backend so it stays dismissed; the model remains
   // installable from the Model library with a fresh explicit consent.
@@ -137,9 +152,10 @@ export function useFrameworkSettings() {
   }, [load, showError])
 
   // Explicit "Use Recommended": apply advisory recommendations as the
-  // selection. Never installs anything.
-  const applyRecommended = useCallback(async () => {
-    const res = await applyRecommendedModelsApi()
+  // selection. An optional workloads list limits the apply; other workloads
+  // keep their current selection. Never installs anything.
+  const applyRecommended = useCallback(async (workloads?: string[]) => {
+    const res = await applyRecommendedModelsApi(workloads)
     if (res.ok) {
       await load()
     } else {
@@ -174,6 +190,7 @@ export function useFrameworkSettings() {
     installs,
     set,
     install,
+    removeModel,
     refreshDiscovery,
     dismissRecommended,
     saveWorkloadSelection,

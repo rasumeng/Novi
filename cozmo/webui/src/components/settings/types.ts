@@ -14,7 +14,6 @@ export interface McpServerConfig {
 }
 
 export interface RuntimeConfig {
-  lightweight_mode?: boolean
   max_history?: number
   max_steps?: number
   max_tool_output_chars?: number
@@ -56,7 +55,6 @@ export interface SettingsData {
   agent?: AgentConfig
   workspace?: { path?: string; knowledge?: string; git_repo?: string }
   search?: { url?: string; backend?: string }
-  router?: { use_llm?: boolean }
   code?: { index_extensions?: string[] }
   desktop?: { enabled?: boolean }
   telegram?: { enabled?: boolean; bot_token?: string; allowed_chat_ids?: number[] }
