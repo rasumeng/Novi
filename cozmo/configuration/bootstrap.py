@@ -35,7 +35,7 @@ DEFAULT_CONFIG: dict = {
     "ollama": {"url": "http://localhost:11434"},
     "providers": {
         "default": "ollama",
-        "ollama": {"url": "http://localhost:11434"},
+        "ollama": {"url": "http://localhost:11434", "reasoning": True},
         "openai": {"api_key_env": "OPENAI_API_KEY"},
     },
     "memory": {"max_turns_before_summary": 5, "max_short_term_pairs": 10},

@@ -48,6 +48,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const modalRef = useRef<HTMLDivElement>(null)
+  const initialLegacyRef = useRef<SettingsData | null>(null)
 
   useFocusTrap(modalRef, open)
 
@@ -71,7 +72,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
         void framework.set(path, val)
       }
     }
-    const patch = legacyPatch(next)
+    const patch = legacyPatch(next, initialLegacyRef.current)
     if (Object.keys(patch).length > 0) {
       void saveConfig(patch).catch(() => showError("Some advanced settings didn't persist."))
     }
@@ -98,7 +99,10 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   const reloadData = () => {
     if (!open) return
     if (initialSection) setSection(initialSection)
-    void fetchConfig().then(setLegacyConfig).catch(() => {})
+    void fetchConfig().then((cfg) => {
+      setLegacyConfig(cfg)
+      initialLegacyRef.current = JSON.parse(JSON.stringify(cfg))
+    }).catch(() => {})
     void fetchTools().then(setTools).catch(() => {})
     void fetchSkills().then(setSkills).catch(() => {})
   }
@@ -343,12 +347,25 @@ function readLeaf(obj: Record<string, unknown>, path: string): unknown {
   return cur
 }
 
-function legacyPatch(next: SettingsData): Record<string, unknown> {
-  const keys = ['models', 'llm', 'permissions', 'runtime', 'agent', 'mcp', 'personality', 'memory', 'embedding'] as const
+export function legacyPatch(next: SettingsData, initial: SettingsData | null): Record<string, unknown> {
+  // Framework-owned roots are never bulk-written: workload model selection and
+  // the llm namespace persist through the framework (selection endpoint /
+  // schema settings), not through the legacy PUT. Only roots a legacy page may
+  // have actually changed are PUT, and only when they differ from the snapshot
+  // taken when the modal opened — a stale root must never clobber a change made
+  // elsewhere in the same session (this was reverting the workload selection
+  // back to the pre-open value on modal close).
+  const keys = ['permissions', 'runtime', 'agent', 'mcp', 'personality', 'memory', 'embedding'] as const
   const patch: Record<string, unknown> = {}
   for (const k of keys) {
-    const v = (next as unknown as Record<string, unknown>)[k]
-    if (v !== undefined && Object.keys(v as object).length > 0) patch[k] = v
+    const nv = (next as unknown as Record<string, unknown>)[k]
+    if (nv === undefined || nv === null) continue
+    if (typeof nv === 'object' && Object.keys(nv).length === 0) continue
+    if (initial) {
+      const iv = (initial as unknown as Record<string, unknown>)[k]
+      if (JSON.stringify(iv) === JSON.stringify(nv)) continue
+    }
+    patch[k] = nv
   }
   return patch
 }

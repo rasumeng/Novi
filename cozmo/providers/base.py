@@ -28,7 +28,7 @@ class LLMProvider(ABC):
     """Abstract LLM provider. Subclasses wrap a LangChain BaseChatModel.
 
     Args:
-        model_name: The model identifier (e.g. 'gpt-4o', 'qwen3:8b')
+        model_name: The model identifier (e.g. '<model-id>')
         cfg: Provider-specific config dict (url, api keys, etc.)
     """
 
@@ -177,8 +177,8 @@ def parse_model_spec(spec: str | dict, providers_cfg: dict,
     """Parse a model config value into (provider_name, model_name, provider_cfg).
 
     Accepts:
-      - "qwen3:8b"                   -> ("ollama", "qwen3:8b", {url: ...})
-      - {provider="openai", model="gpt-4o"} -> ("openai", "gpt-4o", {api_key_env: ...})
+      - "<model-id>"                   -> ("ollama", "<model-id>", {url: ...})
+      - {provider="openai", model="<model-id>"} -> ("openai", "<model-id>", {api_key_env: ...})
     """
     if isinstance(spec, dict):
         provider = spec.get("provider", default_provider)

@@ -1,19 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Sparkles } from 'lucide-react'
 import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
 import { ConnectionState } from '@/services/cozmo'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { MessageBubble } from './MessageBubble'
-import { InlineTraceTimeline } from './InlineTraceTimeline'
+import { ThinkingTrace } from './ThinkingTrace'
+import { InlinePlanApproval } from './InlinePlanApproval'
 import { PermissionPrompt } from '@/components/common/PermissionPrompt'
 import { ActivityPanel } from './ActivityPanel'
 import { ProjectContextBar } from './ProjectContextBar'
-import { NotificationBell } from './NotificationBell'
-import { GlobalActivityIndicator } from './GlobalActivityIndicator'
 import { PromptInput } from './PromptInput'
 import { LandingPage } from './LandingPage'
-import { CONNECTION_LABEL } from './connectionStatus'
 
 interface PermissionRequest {
   tool: string
@@ -27,24 +24,27 @@ interface Props {
   generating: boolean
   busyReason?: string | null
   inlineSteps: InlineStep[]
+  /** True while the model is streaming a reasoning trace before the answer. */
+  thinking: boolean
+  /** Live accumulated reasoning trace shown while `thinking`. */
+  liveThought: string
   plan: PlanData | null
   permission: PermissionRequest | null
   agentState: AgentStateInfo | null
   progress: ProgressInfo | null
   activeProject: Project | null
   backgroundRuns: BackgroundRunInfo[]
-  onSend: (content: string, attachments?: Attachment[]) => void
+  onSend: (content: string, attachments?: Attachment[], deepResearch?: boolean) => void
   onStop: () => void
+  /** Deep Research mode for the active conversation (explicit user mode). */
+  deepResearch?: boolean
+  onToggleDeepResearch?: () => void
   onApprovePlan: () => void
   onRejectPlan: () => void
   onAnswerPermission: (allowed: boolean, requestId?: string) => void
   onOpenSettings?: (section: SectionId) => void
   /** Title of whichever conversation owns the current generation, or null when idle. */
   workingActivityTitle?: string | null
-  /** Item 2: open a conversation (e.g. from a notification). */
-  onSelectConversation?: (id: string) => void
-  /** True for a short window after a closed→open reconnect. */
-  reconnected?: boolean
   /** Full conversation list for the landing dashboard's "continue" section. */
   conversations?: ConversationType[]
   /** Open another conversation from the landing page. */
@@ -59,6 +59,8 @@ export function Conversation({
   generating,
   busyReason,
   inlineSteps,
+  thinking,
+  liveThought,
   plan,
   permission,
   agentState,
@@ -67,13 +69,13 @@ export function Conversation({
   backgroundRuns,
   onSend,
   onStop,
+  deepResearch,
+  onToggleDeepResearch,
   onApprovePlan,
   onRejectPlan,
   onAnswerPermission,
   onOpenSettings,
   workingActivityTitle,
-  onSelectConversation,
-  reconnected,
   conversations,
   onOpenConversation,
   timeline,
@@ -96,35 +98,11 @@ export function Conversation({
     if (el) el.scrollTop = el.scrollHeight
   }, [conversation.messages])
 
-  const conn = CONNECTION_LABEL[connection]
+  const hasStreamingAnswer = conversation.messages.some(m => m.role === 'assistant' && m.streaming)
 
   return (
     <div className="flex-1 flex min-w-0">
     <main className="flex-1 flex flex-col min-w-0 bg-base-950">
-      <header className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-base-800">
-        <div className="flex items-center gap-2.5 text-sm text-base-300">
-          <div className="w-5 h-5 rounded-md bg-accent/15 flex items-center justify-center">
-            <Sparkles size={12} className="text-accent" />
-          </div>
-          <span className="text-base-100 font-medium">{conversation.title}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <NotificationBell onSelectConversation={onSelectConversation} />
-          {workingActivityTitle && (
-            <GlobalActivityIndicator isActiveConversation={generating} title={workingActivityTitle} />
-          )}
-          {reconnected && (
-            <span className="px-2 py-1 rounded-full bg-ok/10 border border-ok/25 text-[11px] text-ok animate-fadeIn">
-              Reconnected
-            </span>
-          )}
-          <div className="flex items-center gap-1.5 text-[11px] text-base-500 ml-1">
-            <span className={`w-1.5 h-1.5 rounded-full ${conn.dot}`} />
-            {conn.text}
-          </div>
-        </div>
-      </header>
-
       <ProjectContextBar project={activeProject} />
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -144,29 +122,25 @@ export function Conversation({
             conversation.messages.map((m, i, arr) => (
               <div key={m.id}>
                 <MessageBubble message={m} />
-                {m.role === 'user' && (i === arr.length - 1 || i === arr.length - 2) && (generating || inlineSteps.length > 0) && (
+                {m.role === 'user' && (i === arr.length - 1 || i === arr.length - 2) && generating && !hasStreamingAnswer && (
                   <div className="mt-3">
-                    {inlineSteps.length === 0 ? (
+                    {thinking ? (
+                      <ThinkingTrace text={liveThought} />
+                    ) : (
                       <motion.div
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="flex items-center gap-2 px-1"
+                        className="flex items-center gap-1 px-1"
                       >
-                        <div className="flex gap-1">
-                          <span className="w-2 h-2 rounded-full bg-accent/70 animate-glow" />
-                          <span className="w-2 h-2 rounded-full bg-accent/70 animate-glow" style={{ animationDelay: '0.2s' }} />
-                          <span className="w-2 h-2 rounded-full bg-accent/70 animate-glow" style={{ animationDelay: '0.4s' }} />
-                        </div>
-                        <span className="text-[12px] text-base-500">Thinking...</span>
+                        <span className="w-1 h-1 rounded-full bg-accent/70 animate-glow" />
+                        <span className="w-1 h-1 rounded-full bg-accent/70 animate-glow" style={{ animationDelay: '0.2s' }} />
+                        <span className="w-1 h-1 rounded-full bg-accent/70 animate-glow" style={{ animationDelay: '0.4s' }} />
                       </motion.div>
-                    ) : (
-                      <InlineTraceTimeline
-                        steps={inlineSteps}
-                        plan={plan}
-                        onApprovePlan={onApprovePlan}
-                        onRejectPlan={onRejectPlan}
-                        generating={generating}
-                      />
+                    )}
+                    {plan && (
+                      <div className="mt-3">
+                        <InlinePlanApproval plan={plan} onApprove={onApprovePlan} onReject={onRejectPlan} />
+                      </div>
                     )}
                     {permission && (
                       <div className="mt-3">
@@ -189,10 +163,12 @@ export function Conversation({
           <PromptInput
             generating={generating}
             disabled={connection !== 'open' || !!busyReason}
-            onSend={(content, attachments) => { setSuggestionText(''); onSend(content, attachments) }}
+            onSend={(content, attachments) => { setSuggestionText(''); onSend(content, attachments, deepResearch) }}
             onStop={onStop}
             onOpenSettings={onOpenSettings}
             suggestion={suggestionText}
+            deepResearch={!!deepResearch}
+            onToggleDeepResearch={onToggleDeepResearch}
           />
         </div>
       </div>

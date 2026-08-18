@@ -6,6 +6,7 @@ import {
   Download,
   Eye,
   Loader2,
+  MemoryStick,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -36,6 +37,11 @@ interface Props {
  * selected or installed until the user acts — either through "Use Recommended"
  * or by picking models directly. Selections are persisted verbatim and never
  * rewritten by the backend.
+ *
+ * Page order is deliberately: hardware (context) → your selection (the thing
+ * you're here to do) → recommendations (advisory help) → library (everything
+ * else). Hardware is reference info, not a recommendation — it lives in its
+ * own strip at the top rather than inside the Recommended card.
  */
 export function ModelsSettings({ discovery, schema, installing, onInstall, onDelete, onDismiss, onRefresh, loading, onSaveSelection, onApplyRecommended }: Props) {
   const [query, setQuery] = useState('')
@@ -109,22 +115,12 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
 
   const recs = Object.values(discovery.recommended?.workloads ?? {})
   const anyRecommended = recs.length > 0
+  const provisional = discovery.recommended?.provisional ?? false
 
   return (
-    <div className="space-y-6">
-      {/* 1. Advisory recommendations */}
-      {anyRecommended && (
-        <RecommendedModels
-          recs={recs}
-          workloadMeta={WORKLOADS}
-          installedNames={discovery.installedNames}
-          hardware={discovery.hardware}
-          provisional={discovery.recommended?.provisional ?? false}
-          applying={applying}
-          onUseRecommended={useRecommended}
-          onUseRecommendedFor={useRecommendedFor}
-        />
-      )}
+    <div className="space-y-8">
+      {/* 0. Hardware — reference context for every decision below, not a recommendation itself */}
+      <HardwareBar hardware={discovery.hardware} provisional={provisional} onRefresh={refresh} refreshing={refreshing} />
 
       {stateError && (
         <div className="flex items-center gap-2 p-3 rounded-xl border border-err/30 bg-err/5">
@@ -133,19 +129,11 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
         </div>
       )}
 
-      {/* Explicit-consent setup for missing recommended models */}
-      <RecommendedSetup
-        models={missingRecommended}
-        installing={installing}
-        onInstall={onInstall}
-        onDismiss={onDismiss}
-      />
-
-      {/* 2. Current selection */}
+      {/* 1. Current selection — the thing the user came here to do, front and center */}
       <section>
         <SectionHeader
-          title="Current selection"
-          subtitle="The model Cozmo uses for each workload. Changes save immediately. Recommendations are advisory — Cozmo never changes your selection on its own; your choice stays yours until you change it."
+          title="Model selection"
+          subtitle="The model Cozmo uses for each workload. Changes save immediately — recommendations below are advisory and never change your choice on their own."
         />
         <div className="space-y-2">
           {WORKLOADS.map((w) => {
@@ -180,7 +168,27 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
         </div>
       </section>
 
-      {/* 3. Model Library */}
+      {/* 2. Advisory recommendations */}
+      {anyRecommended && (
+        <RecommendedModels
+          recs={recs}
+          workloadMeta={WORKLOADS}
+          installedNames={discovery.installedNames}
+          applying={applying}
+          onUseRecommended={useRecommended}
+          onUseRecommendedFor={useRecommendedFor}
+        />
+      )}
+
+      {/* Explicit-consent setup for missing recommended models */}
+      <RecommendedSetup
+        models={missingRecommended}
+        installing={installing}
+        onInstall={onInstall}
+        onDismiss={onDismiss}
+      />
+
+      {/* 3. Model library */}
       <section>
         <SectionHeader
           title="Model library"
@@ -232,24 +240,75 @@ function modelByName(discovery: DiscoveryPayload, name: string): DiscoveredModel
   return name ? discovery.models.find((m) => m.name === name) : undefined
 }
 
-// ── 1. Advisory recommendations ──────────────────────────────────────────
+// ── 0. Hardware ──────────────────────────────────────────────────────────
 
-function RecommendedModels({ recs, workloadMeta, installedNames, hardware, provisional, applying, onUseRecommended, onUseRecommendedFor }: {
+function HardwareBar({ hardware, provisional, onRefresh, refreshing }: {
+  hardware: DiscoveryHardware
+  provisional: boolean
+  onRefresh: () => void
+  refreshing: boolean
+}) {
+  const gpuName = hardware.gpu?.name ?? ''
+  const vramGb = hardware.gpu?.vramTotalGb ?? null
+  const ramGb = hardware.ramGb ?? 0
+  const confToken = hardware.confidence ?? 'unknown'
+  const confLabel = { high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unknown' }[confToken] ?? confToken
+  const confTone = confToken === 'high' ? 'text-emerald-400' : confToken === 'low' || confToken === 'unknown' ? 'text-amber-400' : 'text-base-300'
+  return (
+    <section aria-label="System hardware">
+      <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-base-800/50 border border-base-700">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5">
+          <HardwareFact icon={<Cpu size={12} />} label="GPU" value={gpuName || 'Unknown'} unknown={!gpuName} />
+          <HardwareFact label="VRAM" value={vramGb == null ? 'Unknown' : `${vramGb} GB`} unknown={vramGb == null} />
+          <HardwareFact icon={<MemoryStick size={12} />} label="System RAM" value={ramGb > 0 ? `${ramGb} GB` : 'Unknown'} unknown={ramGb <= 0} />
+          <span className="flex items-center gap-1.5 text-[11px] text-base-400">
+            <span className="text-base-500">Detection:</span>
+            <span className={confTone}>{confLabel} confidence</span>
+          </span>
+        </div>
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          title="Re-detect hardware and rescan models"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border border-base-700 text-base-400 hover:text-base-200 hover:border-base-600 transition-colors disabled:opacity-50 shrink-0"
+        >
+          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+          Rescan
+        </button>
+      </div>
+      {provisional && (
+        <div data-provisional className="flex items-center gap-1.5 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-lg mt-2">
+          <AlertTriangle size={11} className="shrink-0" />
+          <span>Some hardware details are unknown — recommendations below are provisional until detection improves.</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function HardwareFact({ icon, label, value, unknown }: { icon?: React.ReactNode; label: string; value: string; unknown?: boolean }) {
+  return (
+    <span className="flex items-center gap-1.5 text-[11px] text-base-400">
+      {icon && <span className="text-base-500">{icon}</span>}
+      <span className="text-base-500">{label}:</span>
+      <span data-hardware-fact={label} className={unknown ? 'italic text-base-500' : 'text-base-200 font-medium'}>
+        {value}
+      </span>
+    </span>
+  )
+}
+
+// ── 2. Advisory recommendations ──────────────────────────────────────────
+
+function RecommendedModels({ recs, workloadMeta, installedNames, applying, onUseRecommended, onUseRecommendedFor }: {
   recs: { workload: string; model: string; reasons: string[]; caveats: string[]; qualification: string; hardwareConfidence: string; visionCapable: boolean }[]
   workloadMeta: { key: string; label: string; desc: string }[]
   installedNames: string[]
-  hardware: DiscoveryHardware
-  provisional: boolean
   applying: boolean
   onUseRecommended: () => void
   onUseRecommendedFor: (workload: string) => void
 }) {
   const labelOf = (wk: string) => workloadMeta.find((w) => w.key === wk)?.label ?? wk
-  const hardwareRam = hardware.ramGb ?? 0
-  const gpuName = hardware.gpu?.name ?? ''
-  const vramGb = hardware.gpu?.vramTotalGb ?? null
-  const confToken = hardware.confidence ?? 'unknown'
-  const confLabel = { high: 'High', medium: 'Medium', low: 'Low', unknown: 'Unknown' }[confToken] ?? confToken
   return (
     <section aria-label="Recommended models">
       <div className="p-4 rounded-xl border border-sky-500/30 bg-sky-500/5 space-y-3">
@@ -259,8 +318,7 @@ function RecommendedModels({ recs, workloadMeta, installedNames, hardware, provi
             <div>
               <p className="text-sm font-medium text-base-100">Recommended models</p>
               <p className="text-[11px] text-base-500 leading-relaxed mt-0.5">
-                Suggestions computed by Cozmo from your hardware and installed models.
-                Advisory only — nothing changes until you choose.
+                Suggestions computed from your hardware and installed models. Advisory only — nothing changes until you choose.
               </p>
             </div>
           </div>
@@ -273,23 +331,6 @@ function RecommendedModels({ recs, workloadMeta, installedNames, hardware, provi
             {applying ? 'Applying…' : 'Use Recommended'}
           </button>
         </div>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 pt-2 mt-1 border-t border-sky-500/15">
-          <HardwareFact label="GPU" value={gpuName || 'Unknown'} unknown={!gpuName} />
-          <HardwareFact label="VRAM" value={vramGb == null ? 'Unknown' : `${vramGb} GB`} unknown={vramGb == null} />
-          <HardwareFact label="System RAM" value={hardwareRam > 0 ? `${hardwareRam} GB` : 'Unknown'} unknown={hardwareRam <= 0} />
-          <HardwareFact label="Detection confidence" value={confLabel} unknown={confToken === 'unknown'} />
-        </div>
-        <p className="text-[10px] text-base-500 leading-relaxed">
-          These are Cozmo&apos;s suggestions — you control the actual selected model. &ldquo;Using recommended&rdquo; only
-          compares what you&apos;ve selected with what Cozmo suggests. A recommendation changing never changes your
-          selection; only the &ldquo;Use Recommended&rdquo; action does.
-        </p>
-        {provisional && (
-          <div data-provisional className="flex items-center gap-1.5 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1.5 rounded-lg">
-            <AlertTriangle size={11} className="shrink-0" />
-            <span>Recommendations are based on partial hardware information — some hardware details are unknown.</span>
-          </div>
-        )}
         <div className="space-y-2">
           {recs.map((r) => {
             const installed = installedNames.includes(r.model)
@@ -343,19 +384,12 @@ function RecommendedModels({ recs, workloadMeta, installedNames, hardware, provi
             )
           })}
         </div>
+        <p className="text-[10px] text-base-500 leading-relaxed">
+          These are suggestions — you control the actual selected model. A recommendation changing never changes your
+          selection; only the &ldquo;Use Recommended&rdquo; action does.
+        </p>
       </div>
     </section>
-  )
-}
-
-function HardwareFact({ label, value, unknown }: { label: string; value: string; unknown?: boolean }) {
-  return (
-    <span className="flex items-center gap-1.5 text-[11px] text-base-400">
-      <span className="text-base-500">{label}:</span>
-      <span data-hardware-fact={label} className={unknown ? 'italic text-base-500' : 'text-base-200'}>
-        {value}
-      </span>
-    </span>
   )
 }
 
@@ -443,7 +477,7 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
   )
 }
 
-// ── 2. Current selection ─────────────────────────────────────────────────
+// ── 1. Current selection ─────────────────────────────────────────────────
 
 function SelectionRow({ workload, model, entry, installedModels, missing, vision, recommended, recommendation, explanation, expanded, onToggleWhy, saving, applying, onSelect, onUseRecommended }: {
   workload: { key: string; label: string; desc: string }
@@ -466,7 +500,7 @@ function SelectionRow({ workload, model, entry, installedModels, missing, vision
   const recommendationChanged = !!model && !!recommended && model !== recommended
   return (
     <>
-      <div className="p-3 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
+      <div className="p-3.5 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm text-base-100 font-medium">{workload.label}</p>
@@ -511,6 +545,25 @@ function SelectionRow({ workload, model, entry, installedModels, missing, vision
           )}
         </div>
         <div className="flex flex-col items-end gap-2 shrink-0">
+          <label>
+            <span className="sr-only">{workload.label} model</span>
+            <select
+              disabled={saving}
+              value={model}
+              onChange={(e) => onSelect(workload.key, e.target.value)}
+              title={`Choose the model for ${workload.label}`}
+              data-workload={workload.key}
+              className="bg-base-900 border border-base-700 rounded-lg px-2.5 py-1.5 text-xs text-base-200 outline-none focus:border-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <option value="">None selected</option>
+              {installedModels.map((m) => (
+                <option key={m.name} value={m.name}>{m.displayName}</option>
+              ))}
+              {model && !installedModels.some((m) => m.name === model) && (
+                <option value={model} disabled>{entry?.displayName ?? model}</option>
+              )}
+            </select>
+          </label>
           {recommended && !usingRecommended && (
             <button
               onClick={onUseRecommended}
@@ -526,25 +579,6 @@ function SelectionRow({ workload, model, entry, installedModels, missing, vision
           {!recommended && (
             <p className="text-[10px] text-base-500">No recommendation available</p>
           )}
-          <label>
-            <span className="sr-only">{workload.label} model</span>
-            <select
-              disabled={saving}
-              value={model}
-              onChange={(e) => onSelect(workload.key, e.target.value)}
-              title={`Choose the model for ${workload.label}`}
-              data-workload={workload.key}
-              className="bg-base-900 border border-base-700 rounded-lg px-2 py-1.5 text-xs text-base-200 outline-none focus:border-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <option value="">None selected</option>
-              {installedModels.map((m) => (
-                <option key={m.name} value={m.name}>{m.displayName}</option>
-              ))}
-              {model && !installedModels.some((m) => m.name === model) && (
-                <option value={model} disabled>{entry?.displayName ?? model}</option>
-              )}
-            </select>
-          </label>
         </div>
       </div>
       {expanded && explanation && recommendation && (

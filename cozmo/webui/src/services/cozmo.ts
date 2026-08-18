@@ -91,12 +91,13 @@ export class CozmoClient {
     return false
   }
 
-  sendChat(content: string, conversationId?: string, attachments?: Attachment[], projectId?: string) {
+  sendChat(content: string, conversationId?: string, attachments?: Attachment[], projectId?: string, deepResearch?: boolean) {
     const payload: Record<string, unknown> = { type: 'chat', content, conversation_id: conversationId }
     if (attachments?.length) {
       payload.attachments = attachments.map(a => ({ id: a.id, type: a.type, name: a.name, mime: a.mime, size: a.size }))
     }
     if (projectId) payload.project_id = projectId
+    if (deepResearch) payload.deep_research = true
     return this.send(payload)
   }
   stop() {

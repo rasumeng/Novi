@@ -9,6 +9,7 @@ import { SettingsModal, SectionId } from '@/components/settings/SettingsModal'
 import { useCozmoChat } from '@/hooks/useCozmoChat'
 import { TitleBar } from '@/components/common/TitleBar'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
+import { NAV_ITEMS } from '@/components/sidebar/workspaceModes'
 
 export default function App() {
   const [collapsed, setCollapsed] = useState(false)
@@ -89,6 +90,8 @@ export default function App() {
             generating={chat.generating}
             busyReason={chat.busyReason}
             inlineSteps={chat.inlineSteps}
+            thinking={chat.thinking}
+            liveThought={chat.liveThought}
             plan={chat.plan}
             permission={chat.permission}
             agentState={chat.agentState}
@@ -96,14 +99,14 @@ export default function App() {
             activeProject={chat.activeProject}
             backgroundRuns={chat.backgroundRuns}
             onSend={chat.sendMessage}
+            deepResearch={chat.deepResearch}
+            onToggleDeepResearch={chat.toggleDeepResearch}
             onStop={chat.stop}
             onApprovePlan={() => chat.answerPlan(true)}
             onRejectPlan={() => chat.answerPlan(false)}
             onAnswerPermission={chat.answerPermission}
             onOpenSettings={handleOpenSettings}
             workingActivityTitle={workingActivityTitle}
-            onSelectConversation={handleSelectConversation}
-            reconnected={chat.reconnected}
             conversations={chat.conversations}
             onOpenConversation={chat.setActiveId}
             timeline={chat.timeline}
@@ -114,7 +117,18 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
-      <TitleBar />
+      <TitleBar
+        connection={chat.connection}
+        reconnected={chat.reconnected}
+        workingActivityTitle={workingActivityTitle}
+        isActiveConversation={activeSection === 'conversations' && chat.generating}
+        onSelectConversation={handleSelectConversation}
+        contextTitle={
+          activeSection === 'conversations'
+            ? chat.active.title
+            : NAV_ITEMS[activeSection].label
+        }
+      />
 
       <div className="relative z-10 flex flex-1 min-h-0">
         <Sidebar

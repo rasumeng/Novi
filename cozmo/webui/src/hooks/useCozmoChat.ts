@@ -45,11 +45,20 @@ export function useCozmoChat() {
   const [owner, setOwner] = useState<GenerationOwner | null>(null)
 
   const [inlineSteps, setInlineSteps] = useState<InlineStep[]>([])
+  // In-conversation reasoning state: `thinking` is true while the model is
+  // emitting a reasoning trace before the first answer token; `liveThought`
+  // holds the accumulated trace text so the conversation can render it live.
+  const [thinking, setThinking] = useState(false)
+  const [liveThought, setLiveThought] = useState('')
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
   const [plan, setPlan] = useState<PlanData | null>(null)
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRunInfo[]>([])
   const currentModelRef = useRef('')
   const stopTimeoutRef = useRef<number | null>(null)
+  // Deep Research is an explicit per-conversation mode: enabling it routes
+  // that conversation's messages through the research workload/intent. It is
+  // user-controlled UI state, never a hidden routing heuristic.
+  const [deepResearchByConv, setDeepResearchByConv] = useState<Record<string, boolean>>({})
 
   const [agentState, setAgentState] = useState<AgentStateInfo | null>(null)
   const [progress, setProgress] = useState<ProgressInfo | null>(null)
@@ -131,15 +140,48 @@ export function useCozmoChat() {
   // Appends a token to the conversation that OWNS the current generation,
   // not to `resolvedActiveId`. If there is no owner (e.g. a stray event after
   // stop/reset), the token is dropped rather than misattributed.
+  // Reasoning trace buffer. `reasoning` events stream in before the first
+  // token; the accumulated text is attached to the assistant message on first
+  // token (and drained again on done for token-less edge cases).
+  const thoughtRef = useRef('')
+  const thoughtStartedAtRef = useRef(0)
+
+  const attachThought = useCallback((ownerId: string) => {
+    const text = thoughtRef.current
+    if (!text) return
+    const elapsed = Date.now() - thoughtStartedAtRef.current
+    thoughtRef.current = ''
+    updateConversation(ownerId, (c) => {
+      const msgs = [...c.messages]
+      const last = msgs[msgs.length - 1]
+      if (last && last.role === 'assistant') {
+        msgs[msgs.length - 1] = { ...last, thought: text, thoughtElapsedMs: Math.max(0, elapsed) }
+      }
+      return { ...c, messages: msgs }
+    })
+  }, [updateConversation])
+
   const appendToken = useCallback(
     (text: string) => {
       const ownerId = owner?.conversationId
       if (!ownerId) return
+      // Attach the accumulated reasoning trace to the assistant message being
+      // created/streamed (drain once, on the first token).
+      const thought = thoughtRef.current
+      const thoughtElapsed = thoughtStartedAtRef.current
+        ? Math.max(0, Date.now() - thoughtStartedAtRef.current)
+        : undefined
+      if (thought) {
+        thoughtRef.current = ''
+        setThinking(false)
+        setLiveThought('')
+      }
       updateConversation(ownerId, (c) => {
         const msgs = [...c.messages]
         const last = msgs[msgs.length - 1]
         if (last && last.role === 'assistant' && last.streaming) {
-          msgs[msgs.length - 1] = { ...last, content: last.content + text }
+          const base = thought ? { ...last, thought, thoughtElapsedMs: thoughtElapsed } : last
+          msgs[msgs.length - 1] = { ...base, content: last.content + text }
         } else {
           msgs.push({
             id: nextId(),
@@ -148,6 +190,7 @@ export function useCozmoChat() {
             createdAt: now(),
             streaming: true,
             model: currentModelRef.current || undefined,
+            ...(thought ? { thought, thoughtElapsedMs: thoughtElapsed } : {}),
           })
         }
         return { ...c, messages: msgs, updatedAt: 'Just now' }
@@ -159,13 +202,16 @@ export function useCozmoChat() {
   const finishStreaming = useCallback(() => {
     const ownerId = owner?.conversationId
     currentModelRef.current = ''
+    setThinking(false)
+    setLiveThought('')
     if (!ownerId) return
+    attachThought(ownerId)
     updateConversation(ownerId, (c) => ({
       ...c,
       messages: c.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
     }))
     dirtyIdRef.current = ownerId
-  }, [owner, updateConversation])
+  }, [owner, updateConversation, attachThought])
 
   const toolLabel = (tool: string, args: Record<string, unknown>): string => {
     const p = args['path'] as string | undefined
@@ -235,21 +281,14 @@ export function useCozmoChat() {
   }, [])
 
   const pushReasoning = useCallback((text: string) => {
-    setInlineSteps(prev => {
-      const last = prev[prev.length - 1]
-      if (last && last.status === 'running' && last.icon === 'Brain' && last.label === 'Thinking...') {
-        return prev.map((s, i) =>
-          i === prev.length - 1
-            ? { ...s, detail: (s.detail || '') + text }
-            : s
-        )
-      }
-      const now = Date.now()
-      const closed: InlineStep[] = prev.map(s =>
-        s.status === 'running' ? { ...s, status: 'completed' as const, durationMs: now - s.startedAt } : s
-      )
-      return [...closed, { id: nextId(), type: 'thinking' as const, icon: 'Brain', label: 'Thinking...', detail: text, status: 'running' as const, startedAt: now }]
-    })
+    // Accumulate the live reasoning trace. It streams into the in-conversation
+    // thinking panel while the model is thinking, then is attached to the
+    // assistant message on the first token (see attachThought). Reasoning is
+    // deliberately NOT an inline step — tool/agent steps own the sidebar.
+    if (!thoughtStartedAtRef.current) thoughtStartedAtRef.current = Date.now()
+    thoughtRef.current += text
+    setThinking(true)
+    setLiveThought(prev => prev + text)
   }, [])
 
   const handleEvent = useCallback(
@@ -412,6 +451,8 @@ export function useCozmoChat() {
           clearStopFallback()
           appendToken(`\n\n**Error:** ${ev.text}`)
           currentModelRef.current = ''
+          setThinking(false)
+          setLiveThought('')
           setOwner(null)
           setProgress(null)
           if (finishedId) {
@@ -457,7 +498,7 @@ export function useCozmoChat() {
   }, [connection, pushNotification])
 
   const sendMessage = useCallback(
-    (content: string, attachments?: Attachment[]) => {
+    (content: string, attachments?: Attachment[], deepResearch?: boolean) => {
       const client = clientRef.current
       // Single-flight: refuse a new generation while one is already owned.
       if (!client || owner) return
@@ -478,14 +519,19 @@ export function useCozmoChat() {
           pinned: false,
           messages: [{ id: nextId(), role: 'user', content: textToSend, createdAt: now(), attachments }],
         }
-        if (!client.sendChat(textToSend, newId, attachments, projectId)) return
+        if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
         setConversations((convs) => [newConv, ...convs])
         setActiveId(newId)
         setOwner({ conversationId: newId })
+        setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
         dirtyIdRef.current = newId
+        thoughtRef.current = ''
+        thoughtStartedAtRef.current = 0
+        setThinking(false)
+        setLiveThought('')
         setInlineSteps([])
       } else {
-        if (!client.sendChat(textToSend, resolvedActiveId, attachments, projectId)) return
+        if (!client.sendChat(textToSend, resolvedActiveId, attachments, projectId, deepResearch)) return
         const targetId = resolvedActiveId
         updateConversation(targetId, (c) => ({
           ...c,
@@ -497,7 +543,12 @@ export function useCozmoChat() {
           ],
         }))
         setOwner({ conversationId: targetId })
+        setDeepResearchByConv((prev) => ({ ...prev, [targetId]: !!deepResearch }))
         dirtyIdRef.current = targetId
+        thoughtRef.current = ''
+        thoughtStartedAtRef.current = 0
+        setThinking(false)
+        setLiveThought('')
         setInlineSteps([])
       }
     },
@@ -552,9 +603,19 @@ export function useCozmoChat() {
     clientRef.current?.reset()
     setActiveId(DRAFT_ID)
     setInlineSteps([])
+    setThinking(false)
+    setLiveThought('')
     setAgentState(null)
     setProgress(null)
   }, [owner])
+
+  // Deep Research mode for the active conversation. Purely local UI state
+  // threaded into the next message — the backend resolves the research
+  // workload/intent explicitly from the flag.
+  const deepResearch = !!deepResearchByConv[resolvedActiveId]
+  const toggleDeepResearch = useCallback(() => {
+    setDeepResearchByConv((prev) => ({ ...prev, [resolvedActiveId]: !prev[resolvedActiveId] }))
+  }, [resolvedActiveId])
 
   const pinConversation = useCallback((id: string) => {
     setConversations((convs) =>
@@ -667,6 +728,8 @@ export function useCozmoChat() {
     generatingConversationTitle,
     reconnected,
     inlineSteps: activeIsGenerating ? inlineSteps : [],
+    thinking: activeIsGenerating ? thinking : false,
+    liveThought: activeIsGenerating ? liveThought : '',
     agentState: activeIsGenerating ? agentState : null,
     progress: activeIsGenerating ? progress : null,
     plan: activeIsGenerating ? plan : null,
@@ -675,6 +738,8 @@ backgroundRuns,
     timeline,
     refreshTimeline,
     sendMessage,
+    deepResearch,
+    toggleDeepResearch,
     startBackgroundRun: handleStartBackgroundRun,
     stopBackgroundRun: handleStopBackgroundRun,
     refreshBackgroundRuns: handleRefreshBackgroundRuns,

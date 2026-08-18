@@ -6,7 +6,7 @@ coordinates Task + Plan creation at the pipeline boundary.
 
 import pytest
 
-from cozmo.orchestrator.task_types import IntentType, Task, Goal, TaskStatus
+from cozmo.orchestrator.task_types import IntentType, Task, Goal, TaskStatus, ExecutionStrategy
 from cozmo.planner import (
     DEFAULT_STEP_TEMPLATES,
     Plan,
@@ -200,3 +200,36 @@ def test_reuse_conversation_keeps_same_task_and_plan(orchestrator):
     p2 = orchestrator.plan("and the login flow", conversation_id="conv-9")
     assert p1.task_id == p2.task_id
     assert p1.plan.id == p2.plan.id
+
+
+# ── Explicit user-mode override (Deep Research) ──────────────────────────────
+
+
+def test_analyze_force_intent_bypasses_detection(orchestrator):
+    # Even for input that detection would classify as conversation, the
+    # explicit force_intent override must win and drive research strategy.
+    analysis = orchestrator.analyze("hello", force_intent="research")
+    assert analysis.intent == IntentType.RESEARCH
+    assert analysis.confidence == 1.0
+    assert analysis.strategy is ExecutionStrategy.RESEARCH
+
+
+def test_plan_force_intent_runs_research_strategy(orchestrator):
+    plan = orchestrator.plan(
+        "what changed in the AI hardware market in 2026",
+        conversation_id="conv-dr-1",
+        force_intent="research",
+    )
+    assert plan.goal.intent == IntentType.RESEARCH
+    assert plan.strategy is ExecutionStrategy.RESEARCH
+    # The forced research intent is what the runtime maps to the research
+    # workload model at execution time (research -> research slot).
+    assert plan.goal.intent.value == "research"
+
+
+def test_plan_without_force_keeps_detected_intent(orchestrator):
+    # Control: no override -> intent stays whatever detection resolved, never
+    # the forced research mode.
+    plan = orchestrator.plan("fix the database", conversation_id="conv-ctrl")
+    assert plan.goal.intent is not IntentType.RESEARCH
+    assert plan.strategy is not ExecutionStrategy.RESEARCH

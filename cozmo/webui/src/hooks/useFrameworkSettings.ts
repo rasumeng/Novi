@@ -103,6 +103,23 @@ export function useFrameworkSettings() {
     setDiscovery(disc)
   }, [])
 
+  // Background refresh after a selection save. fetchDiscovery returns an
+  // all-empty fallback on network error — that would erase a selection the
+  // user just saved, so keep the preserved workloads when the payload looks
+  // like the fallback (all empty) while the saved selection is non-empty.
+  const refreshDiscoveryPreserving = useCallback(async (preserve?: Record<string, string>) => {
+    const disc = await fetchDiscovery()
+    setDiscovery((d) => {
+      if (!d) return disc
+      const payloadEmpty = Object.values(disc.workloads ?? {}).every(v => !v)
+      const hasSaved = !!preserve && Object.values(preserve).some(v => v)
+      if (hasSaved && payloadEmpty) {
+        return { ...disc, workloads: { ...(disc.workloads ?? {}), ...preserve } }
+      }
+      return disc
+    })
+  }, [])
+
   // Remove a model from disk. Deletion never changes workload selections —
   // the model simply disappears from the installed set; if it was selected it
   // becomes a configured-but-missing model. After a successful delete the
@@ -139,17 +156,31 @@ export function useFrameworkSettings() {
     return true
   }, [showError])
 
+  // Optimistically reflect a persisted selection in local discovery state so
+  // the Models page updates instantly without a heavy reload round-trip.
+  const applySelectionLocal = useCallback((selection: Record<string, string> | undefined) => {
+    if (!selection) return
+    setDiscovery((d) => {
+      if (!d) return d
+      return { ...d, workloads: { ...d.workloads, ...selection } }
+    })
+  }, [])
+
   // Persist the user's workload -> model selection verbatim. The backend never
   // auto-populates selection; recommendations are advisory only.
+  // Non-blocking: the save response is applied optimistically to local
+  // discovery state and a background discovery refresh keeps availability
+  // fresh — the UI is never held on the save round-trip or a heavy reload.
   const saveWorkloadSelection = useCallback(async (workloads: Record<string, string>) => {
     const res = await saveWorkloadSelectionApi(workloads)
     if (res.ok) {
-      await load()
+      applySelectionLocal(workloads)
+      void refreshDiscoveryPreserving(workloads)
     } else {
       showError(res.error ?? "Couldn't save model selection.")
     }
     return res
-  }, [load, showError])
+  }, [refreshDiscoveryPreserving, showError, applySelectionLocal])
 
   // Explicit "Use Recommended": apply advisory recommendations as the
   // selection. An optional workloads list limits the apply; other workloads
@@ -157,12 +188,13 @@ export function useFrameworkSettings() {
   const applyRecommended = useCallback(async (workloads?: string[]) => {
     const res = await applyRecommendedModelsApi(workloads)
     if (res.ok) {
-      await load()
+      applySelectionLocal(res.workloads)
+      void refreshDiscoveryPreserving(res.workloads)
     } else {
       showError(res.error ?? "Couldn't apply recommended models.")
     }
     return res
-  }, [load, showError])
+  }, [refreshDiscoveryPreserving, showError, applySelectionLocal])
 
   const settingsByCategory = useMemo(() => {
     const map: Record<string, SettingSchema[]> = {

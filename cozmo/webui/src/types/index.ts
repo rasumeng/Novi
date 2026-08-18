@@ -19,6 +19,9 @@ export interface ChatMessage {
   citations?: string[]
   streaming?: boolean
   attachments?: Attachment[]
+  /** Reasoning/thinking trace emitted before the visible answer. */
+  thought?: string
+  thoughtElapsedMs?: number
 }
 
 export interface Conversation {

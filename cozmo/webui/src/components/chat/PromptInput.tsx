@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
-import { Paperclip, ArrowUp, Square, Mic, Plus, Folder, X } from 'lucide-react'
+import { Paperclip, ArrowUp, Square, Mic, Plus, Folder, X, Search } from 'lucide-react'
 import { Attachment } from '@/types'
 import type { SectionId } from '@/components/settings/SettingsModal'
 
@@ -52,6 +52,9 @@ interface Props {
   onStop: () => void
   onOpenSettings?: (section: SectionId) => void
   suggestion?: string
+  /** Explicit per-conversation Deep Research mode. */
+  deepResearch?: boolean
+  onToggleDeepResearch?: () => void
 }
 
 export interface PromptInputHandle {
@@ -68,6 +71,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   onStop,
   onOpenSettings,
   suggestion,
+  deepResearch,
+  onToggleDeepResearch,
 }, ref) {
   const [value, setValue] = useState('')
   const [dragActive, setDragActive] = useState(false)
@@ -410,6 +415,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
       )}
       <div className="flex items-center justify-between px-2.5 pb-1.5">
         <div className="flex items-center gap-1">
+          
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setMenuOpen((v) => !v)}
@@ -469,6 +475,21 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
               <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-400" />
             )}
           </button>
+          {onToggleDeepResearch && (
+            <button
+              onClick={onToggleDeepResearch}
+              aria-pressed={!!deepResearch}
+              title="Deep Research mode — routes this conversation through the research workload (deep web + retrieval), not the general chat model"
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+                deepResearch
+                  ? 'bg-accent/15 text-accent border border-accent/30'
+                  : 'text-base-400 hover:text-base-100 hover:bg-base-800 border border-transparent'
+              }`}
+            >
+              <Search size={13} />
+              Deep Research
+            </button>
+          )}
         </div>
 
         <button

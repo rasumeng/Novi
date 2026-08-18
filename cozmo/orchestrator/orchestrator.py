@@ -184,16 +184,27 @@ class Orchestrator:
         user_input: str,
         history: Optional[list] = None,
         has_images: bool = False,
+        force_intent: Optional[str] = None,
     ) -> TaskAnalysis:
         """Analyze user input — returns consolidated TaskAnalysis.
 
         Single entry point for the analysis pipeline. Bundles intent,
         evidence, complexity, and confidence into one object.
         Future signals (user profile, memory context) added here.
+
+        ``force_intent`` (an ``IntentType`` value, e.g. ``"research"``) bypasses
+        intent detection and runs the whole analysis as that intent. This is
+        the EXPLICIT user-mode override (e.g. Deep Research toggle) — it is
+        never a hidden routing heuristic. All downstream decisions (strategy,
+        grounding, retrieval plan, capabilities) derive from the forced intent.
         """
-        intent, confidence = self.intent_detector.detect(
-            user_input, history, has_images
-        )
+        if force_intent:
+            intent = IntentType(force_intent)
+            confidence = 1.0
+        else:
+            intent, confidence = self.intent_detector.detect(
+                user_input, history, has_images
+            )
         evidence = self.evidence_detector.detect(user_input, has_images)
         complexity = self.complexity.estimate(user_input, intent)
         grounding = self._resolve_grounding(intent, evidence, user_input)
@@ -259,11 +270,15 @@ class Orchestrator:
         has_images: bool = False,
         force_capability: Optional[str] = None,
         force_model: Optional[str] = None,
+        force_intent: Optional[str] = None,
         conversation_id: Optional[str] = None,
     ) -> ExecutionPlan:
         """Turn user input into an ExecutionPlan.
 
-        Overrides (force_capability / force_model) bypass detection.
+        Overrides (force_capability / force_model / force_intent) bypass
+        detection. ``force_intent`` re-runs the analysis as that intent (used
+        by explicit user modes like Deep Research); ``force_capability`` fixes
+        the resolved capability set; ``force_model`` fixes the model name.
         Uses analyze() for the analysis phase, then builds the plan.
 
         When a ``task_store`` is wired, the request creates or loads a Task at
@@ -271,7 +286,8 @@ class Orchestrator:
         Without a task_store, no Task is managed and ``task_id`` stays empty.
         """
         # 1–2. Analyze: intent + evidence + complexity + capabilities → TaskAnalysis
-        analysis = self.analyze(user_input, history, has_images)
+        analysis = self.analyze(
+            user_input, history, has_images, force_intent=force_intent)
 
         # 3. Use capabilities from analysis (single source of truth)
         cap_ids = analysis.capabilities

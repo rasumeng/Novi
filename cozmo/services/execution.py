@@ -63,6 +63,9 @@ class ExecutionCoordinator:
                    attachments: Optional[list] = None,
                    stop_check: Optional[Callable[[], bool]] = None,
                    metadata: Optional[dict] = None,
+                   force_intent: Optional[str] = None,
+                   force_capability: Optional[str] = None,
+                   force_model: Optional[str] = None,
                    ) -> Iterator[tuple]:
         """Drive one run though the full lifecycle. Yields runtime items.
 
@@ -75,6 +78,10 @@ class ExecutionCoordinator:
         "run_id": ...}``) without owning any lifecycle logic. It is ignored
         for continuations — a resumed attempt keeps the original attempt's
         metadata plus ``resumed_from``.
+
+        ``force_intent`` / ``force_capability`` / ``force_model`` thread
+        EXPLICIT user-mode overrides (e.g. Deep Research) into planning. They
+        only apply to fresh runs — continuations resume the stored plan.
         """
         self.mode = "unset"
         self.task_id = ""
@@ -84,7 +91,10 @@ class ExecutionCoordinator:
         self.error = ""
 
         prepared = self._prepare(user_input, conversation_id, attachments,
-                                 metadata=metadata)
+                                 metadata=metadata,
+                                 force_intent=force_intent,
+                                 force_capability=force_capability,
+                                 force_model=force_model)
         if prepared.get("ambiguous"):
             self.mode = "ambiguous"
             self.candidates = prepared["candidates"]
@@ -151,7 +161,10 @@ class ExecutionCoordinator:
 
     def _prepare(self, user_input: str, conversation_id: str,
                  attachments: Optional[list] = None,
-                 metadata: Optional[dict] = None) -> dict:
+                 metadata: Optional[dict] = None,
+                 force_intent: Optional[str] = None,
+                 force_capability: Optional[str] = None,
+                 force_model: Optional[str] = None) -> dict:
         """Resolve continuation or plan fresh; open the Job attempt."""
         continuation = self._resolve_continuation(user_input, conversation_id)
         if continuation is not None:
@@ -181,6 +194,9 @@ class ExecutionCoordinator:
                 attachments and any(a.get("type") == "image" for a in attachments)
             ),
             conversation_id=conversation_id or None,
+            force_intent=force_intent,
+            force_capability=force_capability,
+            force_model=force_model,
         )
         job = self._manager.submit(
             task_id=plan.task_id,

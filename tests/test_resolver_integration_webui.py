@@ -169,14 +169,16 @@ def test_selection_get_and_post(monkeypatch):
     assert got == {"ok": True, "workloads": {
         "general": "", "research": "", "code": ""}}
 
-    # persist verbatim
+    # persist verbatim. The save path is deliberately I/O-free: it never does a
+    # blocking installed-model lookup, so every entry reports "configured"
+    # (persisted). Availability is surfaced by the separate discovery endpoint.
     resp = client.post("/api/configuration/models/selection", json={
         "workloads": {"general": "llama3.1:8b", "research": "not-installed:model",
                       "code": "qwen2.5-coder:7b"},
     }).json()
     assert resp["ok"] is True
-    assert resp["workloads"]["general"]["status"] == "installed"
-    assert resp["workloads"]["research"]["status"] == "not-installed"
+    assert resp["workloads"]["general"]["status"] == "configured"
+    assert resp["workloads"]["research"]["status"] == "configured"
 
     assert _workload_models()["general"] == "llama3.1:8b"
     assert _workload_models()["research"] == "not-installed:model"

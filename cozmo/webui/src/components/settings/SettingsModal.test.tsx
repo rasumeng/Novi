@@ -56,14 +56,15 @@ vi.mock('@/services/cozmo', () => ({
 
 vi.mock('./api', () => ({
   fetchConfig: () => Promise.resolve({ models: {} }),
-  saveConfig: () => Promise.resolve(),
+  saveConfig: vi.fn(),
 }))
 
 vi.mock('@/hooks/useFrameworkSettings', () => ({
   useFrameworkSettings: () => frameworkMock,
 }))
 
-import { SettingsModal } from './SettingsModal'
+import { SettingsModal, legacyPatch } from './SettingsModal'
+import { saveConfig } from './api'
 
 const NAV = ['General', 'Models', 'Agent', 'Memory', 'Skills', 'Connectors', 'Permissions', 'Developer']
 
@@ -127,5 +128,41 @@ describe('SettingsModal navigation (M4 IA)', () => {
     expect(screen.getByText('Expert configuration')).toBeTruthy()
     expect(screen.queryByText('Internal model routing')).toBeNull()
     expect(screen.queryByText(/select capabilit/i)).toBeNull()
+  })
+})
+
+describe('SettingsModal legacy flush (selection-clobber regression)', () => {
+  beforeEach(() => {
+    vi.mocked(saveConfig).mockClear()
+  })
+
+  it('never bulk-writes the llm or models roots (framework-owned)', () => {
+    const initial = {
+      llm: { max_tokens: 65536, workloads: { general: { model: 'qwen3:8b' }, research: { model: 'qwen3:8b' }, code: { model: 'qwen3:8b' } } },
+      models: { agent: 'llama3.2:3b' },
+    }
+    const next = {
+      llm: { max_tokens: 65536, workloads: { general: { model: 'qwen2.5vl:7b' }, research: { model: 'qwen3:8b' }, code: { model: 'qwen3:8b' } } },
+      models: { agent: 'llama3.2:3b' },
+    }
+    expect(legacyPatch(next, initial)).toEqual({})
+  })
+
+  it('skips roots that are unchanged since the modal snapshot', () => {
+    const initial = { models: {}, permissions: { write_file: 'ask' }, runtime: { max_steps: 8 } }
+    expect(legacyPatch(initial, initial)).toEqual({})
+  })
+
+  it('PUTs only roots that actually changed', () => {
+    const initial = { models: {}, permissions: { write_file: 'ask' }, runtime: { max_steps: 8 } }
+    const next = { models: {}, permissions: { write_file: 'allow' }, runtime: { max_steps: 8 } }
+    expect(legacyPatch(next, initial)).toEqual({ permissions: { write_file: 'allow' } })
+  })
+
+  it('closing an unedited modal does not flush stale legacy roots', async () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
+    fireEvent.click(screen.getByLabelText('Close settings'))
+    expect(saveConfig).not.toHaveBeenCalled()
   })
 })

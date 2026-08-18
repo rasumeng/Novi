@@ -129,6 +129,17 @@ def register_defaults(reg: ConfigRegistry):
                 visibility=Visibility.DEVELOPER,
             ),
             Setting(
+                id="providers.ollama.reasoning",
+                label="Stream model reasoning",
+                description=("Stream the model's reasoning/thinking trace to the "
+                             "conversation UI when the selected model exposes one. "
+                             "Models without a reasoning trace are unaffected."),
+                category=Category.MODELS,
+                owner="providers",
+                type=SettingType.BOOL,
+                default=True,
+            ),
+            Setting(
                 id="providers.openai.api_key_env",
                 label="OpenAI API key env var",
                 category=Category.DEVELOPER,

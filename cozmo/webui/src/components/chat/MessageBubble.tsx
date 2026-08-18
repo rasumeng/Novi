@@ -1,8 +1,9 @@
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { FileText } from 'lucide-react'
+import { FileText, Brain, ChevronDown, ChevronRight } from 'lucide-react'
 import { ChatMessage } from '@/types'
 import { CodeBlock } from './CodeBlock'
 import { ModelBadge } from '@/components/common/ModelBadge'
@@ -11,6 +12,38 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function formatThoughtDuration(ms?: number): string {
+  if (!ms) return '...'
+  return `${(ms / 1000).toFixed(2)} seconds`
+}
+
+function ThoughtBlock({ message }: { message: ChatMessage }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="w-full max-w-[85%]">
+      <button
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className={clsx(
+          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors',
+          open ? 'bg-base-850 text-base-200' : 'text-base-500 hover:text-base-300 hover:bg-base-850/60'
+        )}
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <Brain size={12} className={message.streaming ? 'text-accent animate-pulse' : ''} />
+        <span className="font-medium">Thought for {formatThoughtDuration(message.thoughtElapsedMs)}</span>
+      </button>
+      {open && (
+        <div className="mt-1 rounded-xl border border-base-800 bg-base-900/70 px-3.5 py-2.5 max-h-72 overflow-y-auto">
+          <pre className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-base-400 font-sans">
+            {message.thought}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function MessageBubble({ message }: { message: ChatMessage }) {
@@ -29,6 +62,7 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
           <span className="w-1.5 h-1.5 rounded-full bg-accent animate-glow" style={{ animationDelay: '0.6s' }} />
         </div>
       )}
+      {!isUser && message.thought && <ThoughtBlock message={message} />}
       <div
         className={clsx(
           'rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[85%]',

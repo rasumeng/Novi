@@ -140,6 +140,13 @@ class WebUIBackend:
         def _reload_models(path, value, previous):
             if not path.startswith("llm."):
                 return
+            # A workload-model change is pure selection: it alters availability
+            # not at all. Model resolution re-reads llm.workloads.* live and the
+            # provider cache is keyed per model, so a changed selection builds a
+            # fresh provider with no I/O here. Only other llm.* writes (e.g. the
+            # Ollama URL) require a full provider re-list.
+            if path.startswith("llm.workloads."):
+                return
             try:
                 ctx.model_service.refresh()
             except Exception as e:

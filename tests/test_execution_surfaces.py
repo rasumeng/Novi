@@ -57,7 +57,7 @@ class _HarnessOrchestrator(Orchestrator):
         super().__init__(intent_detector=_FakeIntent(), task_store=task_store)
 
     def plan(self, user_input, history=None, has_images=False,
-             force_capability=None, force_model=None, conversation_id=None):
+             force_intent=None, force_capability=None, force_model=None, conversation_id=None):
         task = self.task_store.get_or_create(
             conversation_id=conversation_id or "",
             goal_text=user_input[:500],

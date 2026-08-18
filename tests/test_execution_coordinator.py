@@ -48,11 +48,12 @@ class _HarnessOrchestrator(Orchestrator):
         super().__init__(intent_detector=_FakeIntent(), task_store=task_store)
 
     def plan(self, user_input, history=None, has_images=False,
-             force_capability=None, force_model=None, conversation_id=None):
+             force_intent=None, force_capability=None, force_model=None, conversation_id=None):
+        self.last_force_intent = force_intent
         task = self.task_store.get_or_create(
             conversation_id=conversation_id or "",
             goal_text=user_input[:500],
-            intent=IntentType.CODING,
+            intent=IntentType(force_intent) if force_intent else IntentType.CODING,
         )
         plan_obj = Plan(id="plan-1", task_id=task.id)
         plan_obj.add_step(PlanStep(id="plan-1-s1", plan_id="plan-1",
@@ -152,6 +153,18 @@ def test_fresh_run_attachments_flag_has_images(task_store):
     rt = _HarnessRuntime()
     list(coord.run_stream(rt, "look at this", attachments=[{"type": "image", "name": "a.png"}]))
     assert len(jm.list()) == 1
+
+
+def test_force_intent_threads_into_planning(task_store):
+    jm = JobManager()
+    coord = _coordinator(task_store, jm)
+    rt = _HarnessRuntime()
+    list(coord.run_stream(rt, "deep dive on the 2026 hardware market",
+                          conversation_id="conv-dr", force_intent="research"))
+    assert coord.orchestrator.last_force_intent == "research"
+    task = task_store.list()[0]
+    assert task.goal.intent == IntentType.RESEARCH
+    assert task.execution_history.count() == 1
 
 
 # ── continuation: new attempt + resume_from + history ────────────────────────

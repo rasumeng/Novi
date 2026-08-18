@@ -112,7 +112,7 @@ function renderPage(props?: {
 }
 
 function selectionSection() {
-  return within(screen.getByText('Current selection').closest('section')!)
+  return within(screen.getByText('Model selection').closest('section')!)
 }
 
 function librarySection() {
@@ -123,7 +123,7 @@ describe('ModelsSettings — workload surface', () => {
   it('renders the full IA: recommendations, current selection, and model library', () => {
     renderPage()
     expect(screen.getByText('Recommended models')).toBeTruthy()
-    expect(screen.getByText('Current selection')).toBeTruthy()
+    expect(screen.getByText('Model selection')).toBeTruthy()
     expect(screen.getByText('Model library')).toBeTruthy()
   })
 
@@ -873,34 +873,34 @@ describe('ModelsSettings — recommendation explanation', () => {
 })
 
 describe('ModelsSettings — hardware intelligence surface', () => {
-  const recommendedSection = () => within(screen.getByLabelText('Recommended models'))
+  const hardwareSection = () => within(screen.getByLabelText('System hardware'))
 
   it('renders detected GPU, VRAM, system RAM and detection confidence', () => {
     renderPage()
-    const rec = recommendedSection()
-    expect(rec.getByText('NVIDIA GeForce RTX 4060')).toBeTruthy()
-    expect(rec.getByText('8 GB')).toBeTruthy()
-    expect(rec.getByText('16 GB')).toBeTruthy()
-    expect(rec.getByText('High')).toBeTruthy()
+    const hw = hardwareSection()
+    expect(hw.getByText('NVIDIA GeForce RTX 4060')).toBeTruthy()
+    expect(hw.getByText('8 GB')).toBeTruthy()
+    expect(hw.getByText('16 GB')).toBeTruthy()
+    expect(hw.getByText('High confidence')).toBeTruthy()
   })
 
   it('labels each hardware fact without overstating certainty', () => {
     renderPage()
-    const rec = recommendedSection()
-    expect(rec.getByText(/GPU:/)).toBeTruthy()
-    expect(rec.getByText(/VRAM:/)).toBeTruthy()
-    expect(rec.getByText(/System RAM:/)).toBeTruthy()
-    expect(rec.getByText(/Detection confidence:/)).toBeTruthy()
+    const hw = hardwareSection()
+    expect(hw.getByText(/GPU:/)).toBeTruthy()
+    expect(hw.getByText(/VRAM:/)).toBeTruthy()
+    expect(hw.getByText(/System RAM:/)).toBeTruthy()
+    expect(hw.getByText(/Detection:/)).toBeTruthy()
   })
 
   it('renders the detection confidence exactly as reported by the backend', () => {
     renderPage({ discovery: { ...DISCOVERY, hardware: { ...DISCOVERY.hardware, confidence: 'low' } } })
-    expect(recommendedSection().getByText('Low')).toBeTruthy()
+    expect(hardwareSection().getByText('Low confidence')).toBeTruthy()
   })
 
   it('renders medium detection confidence as reported', () => {
     renderPage({ discovery: { ...DISCOVERY, hardware: { ...DISCOVERY.hardware, confidence: 'medium' } } })
-    expect(recommendedSection().getByText('Medium')).toBeTruthy()
+    expect(hardwareSection().getByText('Medium confidence')).toBeTruthy()
   })
 
   it('unknown hardware renders visibly unknown, never inferred', () => {
@@ -910,9 +910,9 @@ describe('ModelsSettings — hardware intelligence surface', () => {
         hardware: { ramGb: 0, gpu: { name: '', vramTotalGb: null, vendor: '' }, confidence: 'unknown' },
       },
     })
-    const rec = recommendedSection()
-    expect(rec.getAllByText('Unknown').length).toBeGreaterThanOrEqual(4)
-    expect(rec.queryByText(/\d+ GB/)).toBeNull()
+    const hw = hardwareSection()
+    expect(hw.getAllByText(/Unknown/).length).toBeGreaterThanOrEqual(4)
+    expect(hw.queryByText(/\d+ GB/)).toBeNull()
   })
 
   it('partial hardware leaves VRAM visibly unknown, not a guess', () => {
@@ -922,22 +922,22 @@ describe('ModelsSettings — hardware intelligence surface', () => {
         hardware: { ramGb: 16, gpu: { name: 'NVIDIA GeForce RTX 4060', vramTotalGb: null, vendor: 'nvidia' }, confidence: 'medium' },
       },
     })
-    const rec = recommendedSection()
-    expect(rec.getByText('NVIDIA GeForce RTX 4060')).toBeTruthy()
-    expect(rec.getAllByText('Unknown').length).toBeGreaterThanOrEqual(1)
-    expect(rec.queryByText(/\d+ GB/)).toBeTruthy()   // RAM only — never a VRAM guess
+    const hw = hardwareSection()
+    expect(hw.getByText('NVIDIA GeForce RTX 4060')).toBeTruthy()
+    expect(hw.getAllByText('Unknown').length).toBeGreaterThanOrEqual(1)
+    expect(hw.queryByText(/\d+ GB/)).toBeTruthy()   // RAM only — never a VRAM guess
   })
 
   it('provisional recommendations surface the partial-hardware warning', () => {
     renderPage({ discovery: { ...DISCOVERY, recommended: { ...DISCOVERY.recommended, provisional: true } } })
-    const rec = recommendedSection()
-    expect(rec.getByText(/based on partial hardware information/)).toBeTruthy()
-    expect(rec.getByText(/some hardware details are unknown/)).toBeTruthy()
+    const hw = hardwareSection()
+    expect(hw.getByText(/provisional until detection improves/)).toBeTruthy()
+    expect(hw.getByText(/Some hardware details are unknown/i)).toBeTruthy()
   })
 
   it('non-provisional recommendations show no partial-hardware warning', () => {
     renderPage()
-    expect(screen.queryByText(/based on partial hardware information/)).toBeNull()
+    expect(screen.queryByText(/provisional until detection improves/)).toBeNull()
   })
 })
 
@@ -1059,7 +1059,7 @@ describe('ModelsSettings — selection integrity (Phase 6 contract)', () => {
   const qwen3 = 'qwen3:8b'
   const coder = 'qwen2.5-coder:1.5b'
 
-  const realistic = (workloads: Record<string, string>, recWorkloads?: Record<string, string>): DiscoveryPayload => ({
+  const realistic = (workloads: Record<string, string>, recWorkloads?: Record<string, WorkloadRecommendation>): DiscoveryPayload => ({
     ...DISCOVERY,
     models: [
       installed(gemma, 'Gemma 4 4B'),
@@ -1132,7 +1132,7 @@ describe('ModelsSettings — selection integrity (Phase 6 contract)', () => {
     expect(rowFor('Deep Research').select.value).toBe(gemma)
     rerender(
       <ModelsSettings
-        discovery={realistic({ general: gemma, research: gemma, code: coder }, { research: gemma })}
+        discovery={realistic({ general: gemma, research: gemma, code: coder }, { research: { ...RECOMMENDED.workloads.research, model: gemma } })}
         schema={SCHEMA}
         installing={{}}
         onInstall={vi.fn()}

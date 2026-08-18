@@ -12,7 +12,7 @@ class MockCozmoClient {
   static instances: MockCozmoClient[] = []
   onEvent: (ev: ServerEvent) => void = () => {}
   onConnectionChange: (state: string) => void = () => {}
-  sent: Array<{ content: string; conversationId?: string }> = []
+  sent: Array<{ content: string; conversationId?: string; deepResearch?: boolean }> = []
 
   constructor() {
     MockCozmoClient.instances.push(this)
@@ -21,8 +21,8 @@ class MockCozmoClient {
     this.onConnectionChange('open')
   }
   disconnect() {}
-  sendChat(content: string, conversationId?: string) {
-    this.sent.push({ content, conversationId })
+  sendChat(content: string, conversationId?: string, _attachments?: unknown, _projectId?: string, deepResearch?: boolean) {
+    this.sent.push({ content, conversationId, deepResearch })
     return true
   }
   stop() { return true }
@@ -173,8 +173,7 @@ describe('generation ownership', () => {
   })
 })
 
-describe('cross-conversation notifications', () => {
-  it('pushes a notification when a response finishes off-screen, not when it finishes on-screen', async () => {
+describe('cross-conversation notifications', () => {  it('pushes a notification when a response finishes off-screen, not when it finishes on-screen', async () => {
     const { result } = renderChatHook()
     await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
 
@@ -194,5 +193,99 @@ describe('cross-conversation notifications', () => {
     act(() => result.current.chat.sendMessage('hello from B'))
     act(() => client.emit({ type: 'done' }))
     expect(result.current.notifications.notifications).toHaveLength(1) // unchanged
+  })
+})
+
+describe('deep research mode', () => {
+  it('threads an explicit deep_research flag into sendChat when enabled', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+
+    act(() => result.current.chat.setActiveId('A'))
+    expect(result.current.chat.deepResearch).toBe(false)
+
+    act(() => result.current.chat.toggleDeepResearch())
+    expect(result.current.chat.deepResearch).toBe(true)
+
+    act(() => result.current.chat.sendMessage('deep dive', undefined, true))
+    const client = MockCozmoClient.latest()
+    expect(client.sent[0]).toMatchObject({ content: 'deep dive', conversationId: 'A', deepResearch: true })
+
+    // Mode is per-conversation: B stays off, A stays on.
+    act(() => result.current.chat.setActiveId('B'))
+    expect(result.current.chat.deepResearch).toBe(false)
+    act(() => result.current.chat.setActiveId('A'))
+    expect(result.current.chat.deepResearch).toBe(true)
+  })
+
+  it('keeps deep research off when the flag is not requested', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('plain message'))
+    expect(MockCozmoClient.latest().sent[0].deepResearch).toBeUndefined()
+  })
+})
+
+describe('reasoning thought block', () => {
+  it('accumulates reasoning events and attaches the trace to the assistant message on first token', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('hard problem'))
+    const client = MockCozmoClient.latest()
+
+    act(() => client.emit({ type: 'reasoning', text: 'step one ' }))
+    act(() => client.emit({ type: 'reasoning', text: 'step two' }))
+    act(() => client.emit({ type: 'token', text: 'Answer' }))
+
+    const assistant = findConv(result.current.chat.conversations, 'A')?.messages.find((m) => m.role === 'assistant')
+    expect(assistant?.content).toBe('Answer')
+    expect(assistant?.thought).toBe('step one step two')
+    expect(assistant?.thoughtElapsedMs).toBeGreaterThanOrEqual(0)
+
+    // The trace is drained — subsequent tokens don't re-append it.
+    act(() => client.emit({ type: 'token', text: ' extended' }))
+    const after = findConv(result.current.chat.conversations, 'A')?.messages.find((m) => m.role === 'assistant')
+    expect(after?.content).toBe('Answer extended')
+    expect(after?.thought).toBe('step one step two')
+  })
+
+  it('exposes a live thinking trace while reasoning is in flight', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('hard problem'))
+    const client = MockCozmoClient.latest()
+
+    expect(result.current.chat.thinking).toBe(false)
+    expect(result.current.chat.liveThought).toBe('')
+
+    act(() => client.emit({ type: 'reasoning', text: 'step one ' }))
+    expect(result.current.chat.thinking).toBe(true)
+    expect(result.current.chat.liveThought).toBe('step one ')
+
+    act(() => client.emit({ type: 'reasoning', text: 'step two' }))
+    expect(result.current.chat.liveThought).toBe('step one step two')
+
+    // First token ends the thinking phase: the trace collapses into the
+    // message's thought block and the live state drains.
+    act(() => client.emit({ type: 'token', text: 'Answer' }))
+    expect(result.current.chat.thinking).toBe(false)
+    expect(result.current.chat.liveThought).toBe('')
+  })
+
+  it('assistant messages without reasoning carry no thought block', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('simple'))
+    act(() => MockCozmoClient.latest().emit({ type: 'token', text: 'Hi' }))
+
+    const assistant = findConv(result.current.chat.conversations, 'A')?.messages.find((m) => m.role === 'assistant')
+    expect(assistant?.thought).toBeUndefined()
   })
 })

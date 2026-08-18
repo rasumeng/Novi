@@ -8,7 +8,7 @@ Usage:
     # Build manually
     ctx = ExecutionContext(user_input="fix auth.py")
     ctx.analysis = orchestrator.analyze(...)
-    ctx.model_name = "qwen3:8b"
+    ctx.model_name = "<model-id>"
 
     # Or use the builder
     ctx = ExecutionContext.from_input("fix auth.py")

@@ -521,7 +521,9 @@ class Session:
             resolved.append(entry)
         return resolved
 
-    def start_run(self, user_input: str, attachments_meta: list[dict] | None = None, project_context: str | None = None):
+    def start_run(self, user_input: str, attachments_meta: list[dict] | None = None,
+                  project_context: str | None = None,
+                  deep_research: bool = False):
         self.stop_flag.clear()
         resolved_atts = self._resolve_attachments(attachments_meta) if attachments_meta else None
         self.runtime.set_config(project_context=project_context or "")
@@ -534,6 +536,7 @@ class Session:
                     conversation_id=self.current_conv_id,
                     attachments=resolved_atts,
                     stop_check=self.stop_flag.is_set,
+                    force_intent="research" if deep_research else None,
                 ):
                     if item and item[0] == "control":
                         payload = item[1]
@@ -1101,9 +1104,14 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
         ``workloads``: {workload: model} mapping, written verbatim to
         ``llm.workloads.*``. A model that is not installed is preserved and
-        reported as ``not-installed`` — never silently substituted. All writes
-        route through the Configuration Framework (validate -> persist -> apply
-        -> emit).
+        never silently substituted. All writes route through the Configuration
+        Framework (validate -> persist -> apply -> emit).
+
+        Deliberately I/O-free: selection is a PERSIST operation. It does not
+        contact Ollama, does not re-scan hardware, and does not load any model.
+        The model loads lazily at first inference (runtime model resolution).
+        Availability status is computed by the separate discovery surface, not
+        by this save request — ``installed=None`` yields ``status="configured"``.
         """
         by = body.get("by", "webui")
         assign = body.get("workloads") or {}
@@ -1111,9 +1119,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             workload: (assign.get(workload) or "").strip() if isinstance(assign.get(workload), str) else ""
             for workload in WORKLOADS
         }
-        url = configuration.get("ollama.url", "http://localhost:11434")
-        discovered = ModelDiscovery(url).installed()
-        result = apply_selection(configuration, cleaned, installed=discovered, by=by)
+        result = apply_selection(configuration, cleaned, installed=None, by=by)
         _sync_config_snapshot()
         return {"ok": True, **result}
 
@@ -1839,7 +1845,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     session.current_conv_id = conv_id
                     if msg.get("mode"):
                         log.warning("client sent 'mode' field — ignored in unified pipeline")
-                    session.start_run(content, attachments_meta, project_context)
+                    deep_research = bool(msg.get("deep_research"))
+                    session.start_run(content, attachments_meta, project_context,
+                                      deep_research=deep_research)
                 elif mtype == "agent_config":
                     session.agent_config = {k: v for k, v in msg.items() if k not in ("type",)}
                     await ws.send_text(json.dumps({"type": "agent_config", **session.agent_config}))
