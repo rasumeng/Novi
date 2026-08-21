@@ -25,6 +25,9 @@ docs/
         brain-evolution.md      (Brain V1 technical history — start here)
         brain-architecture.md   (Brain design reference)
         phaseF-design.md        (cognitive layer design + Definition of Done)
+        ai-runtime-architecture.md  (model runtime + LangGraph workflows — Phase 7 Stage 3 final)
+        knowledge-architecture-contract.md  (memory/knowledge ownership contracts)
+        configuration-framework.md  (settings/selection/recommendation framework)
     archive/                completed implementation plans + historical blueprints
         phaseF-plan.md
         phase9-blueprint.md
@@ -37,6 +40,8 @@ docs/
         AUDIT-Brain-V1.md           (Brain V1 architecture/cognitive audit)
         HARDENING-Brain-V1.md       (Brain V1 wiring verification)
         release-brain-v1.md         (Brain V1 final release assessment)
+        STAGE0-AI-RUNTIME-AUDIT.md  (Phase 7 pre-LangGraph runtime audit)
+        STAGE3A-AI-RUNTIME-AUDIT.md (Phase 7 Stage 3A LangChain/LangGraph audit)
 ```
 
 ## Conventions

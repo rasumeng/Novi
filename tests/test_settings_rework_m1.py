@@ -81,14 +81,14 @@ def test_memory_int_rejects_float(tmp_path):
         cfg.set("memory.max_turns_before_summary", 4.5, by="test")
 
 
-# ── M1.3: /api/config delegation (framework path put_config uses) ──────
+# ── M1.3: /api/configuration delegation (framework path) ──────────────
 
 
 def test_whole_dict_write_delegates(tmp_path):
     cfg = build_cfg(tmp_path)
     val = {"servers": {"code": {"command": "uvx mcp-server-git",
                                 "enabled": True}}}
-    # put_config: if registry_has(configuration, k) -> configuration.set(k, v)
+    # PATCH /api/configuration: if registry has k -> configuration.set(k, v)
     if cfg.registry.has("mcp"):
         cfg.set("mcp", val, by="webui")
     assert cfg.get("mcp.servers.code.command") == "uvx mcp-server-git"
@@ -105,7 +105,7 @@ def test_namespace_subpath_write_delegates(tmp_path):
 
 def test_unknown_key_is_error_not_silent(tmp_path):
     cfg = build_cfg(tmp_path)
-    # matches the put_config else-branch: unregistered key -> explicit fail
+    # matches the PATCH else-branch: unregistered key -> explicit fail
     assert not cfg.registry.has("totally.bogus.key")
     with pytest.raises(UnknownSettingError):
         cfg.set("totally.bogus.key", 1, by="webui")
@@ -175,8 +175,8 @@ def test_migrate_runs_with_new_registrations():
 def test_retired_models_leaf_writes_are_rejected(tmp_path):
     """The 'models' namespace must not re-persist retired model paths.
 
-    The generic write surface (patch_configuration / set_configuration_value /
-    put_config) funnels through ``Configuration.set``; a retired path that
+    The generic write surface (patch_configuration / set_configuration_value)
+    funnels through ``Configuration.set``; a retired path that
     merely resolves via the 'models' namespace would otherwise be persisted.
     """
     cfg = build_cfg(tmp_path)
@@ -214,8 +214,8 @@ def test_retired_llm_root_write_is_rejected(tmp_path):
     assert cfg.get("llm.workloads.general.model") == "qwen3:8b"
 
 
-def test_retired_models_leaves_rejected_via_put_config_surface(tmp_path):
-    """The legacy bulk-write endpoint reports retired paths as not registered."""
+def test_retired_models_leaves_rejected_via_framework_surface(tmp_path):
+    """The generic framework write surface reports retired paths as not registered."""
     cfg = build_cfg(tmp_path)
     for k in ("models.mode", "models.custom.assign.chat", "llm.roles"):
         # the path resolves through a registered namespace, so the rejection

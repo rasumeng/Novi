@@ -11,7 +11,6 @@ interface SearchResult {
   id: string
   title: string
   pinned: boolean
-  mode: string
   match: string
 }
 

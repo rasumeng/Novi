@@ -12,34 +12,16 @@ Supports:
 """
 
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from ..services import EmbeddingService, RerankerService
-from .. import config as cozmo_config
+from ..configuration.bootstrap import get_configuration
 from .lancedb_store import LanceStore
+from .okf import parse_okf_file
 
 log = logging.getLogger("cozmo.memory.knowledge")
-
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
-
-
-def _parse_okf(filepath: Path) -> tuple[dict, str]:
-    """Parse an OKF markdown file. Returns (metadata, body)."""
-    text = filepath.read_text("utf-8", errors="replace")
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
-        return {"type": "Reference", "title": filepath.stem, "tags": []}, text
-
-    import yaml
-    try:
-        meta = yaml.safe_load(m.group(1)) or {}
-    except Exception:
-        meta = {}
-    body = text[m.end():].strip()
-    return meta, body
 
 
 _global_knowledge_index: "KnowledgeIndex | None" = None
@@ -120,17 +102,20 @@ class KnowledgeIndex:
 
     def __init__(
         self,
-        knowledge_dir: str | Path = "./knowledge",
+        knowledge_dir: str | Path | None = None,
         persist_dir: Optional[str | Path] = None,
         embed_model: str | EmbeddingService | None = None,
         rerank_model: Optional[str | RerankerService] = None,
     ):
-        self.knowledge_dir = Path(knowledge_dir).resolve()
+        if knowledge_dir is None:
+            knowledge_dir = get_configuration().get(
+                "workspace.knowledge", "~/.cozmo/knowledge")
+        self.knowledge_dir = Path(knowledge_dir).expanduser().resolve()
 
         if isinstance(embed_model, EmbeddingService):
             embed_service = embed_model
         else:
-            cfg = cozmo_config.load()
+            cfg = get_configuration().snapshot()
             model_name = embed_model or cfg.get("embedding", {}).get("model", "")
             embed_cfg = dict(cfg)
             embed_cfg.setdefault("embedding", {})["model"] = model_name
@@ -149,7 +134,7 @@ class KnowledgeIndex:
             embed_func=embed,
             embed_dim=embed_dim,
             embed_model=embed_service.model_name,
-            vector_index=cozmo_config.load().get("vector_index", {}).get("enabled", True),
+            vector_index=get_configuration().get("vector_index.enabled", True),
         )
         self._indexed_files: dict[str, float] = {}
         if isinstance(rerank_model, RerankerService):
@@ -192,7 +177,7 @@ class KnowledgeIndex:
             rel = path.relative_to(self.knowledge_dir).as_posix()
         else:
             rel = Path(rel).as_posix()
-        meta, body = _parse_okf(path)
+        meta, body = parse_okf_file(path)
         title = meta.get("title", path.stem)
         tags = meta.get("tags", [])
 
@@ -208,6 +193,11 @@ class KnowledgeIndex:
             metadata = {
                 "path": rel,
                 "title": title,
+                # Durable Brain identity of the mirrored item (M4). Lets
+                # retrieval deduplicate semantic chunks against graph-expanded
+                # neighbors by durable id, never by filename/title. None for
+                # user-authored notes that were never Brain-synced.
+                "item_id": meta.get("id"),
                 "tags": tags,
                 "type": "knowledge",
                 "chunk": i,

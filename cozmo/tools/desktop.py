@@ -11,9 +11,8 @@ SCREENSHOT_DIR = Path.home() / ".cozmo" / "screenshots"
 
 
 def _get_ollama_url() -> str:
-    from .. import config
-    cfg = config.load()
-    return cfg.get("ollama", {}).get("url", "http://localhost:11434")
+    from ..configuration.bootstrap import get_configuration
+    return get_configuration().get("ollama.url", "http://localhost:11434")
 
 
 def _get_general_model() -> str:
@@ -22,11 +21,8 @@ def _get_general_model() -> str:
     Reads ``llm.workloads.general.model`` — the only model ever used for
     image analysis. There is no separate vision model and no fallback.
     """
-    from .. import config
-    cfg = config.load()
-    llm = cfg.get("llm", {}) or {}
-    workloads = llm.get("workloads", {}) or {}
-    spec = workloads.get("general", "")
+    from ..configuration.bootstrap import get_configuration
+    spec = get_configuration().get("llm.workloads.general", "")
     if isinstance(spec, dict):
         return spec.get("model", "") or ""
     if isinstance(spec, str):
@@ -111,6 +107,5 @@ def clipboard_read() -> str:
 
 
 def _is_desktop_enabled() -> bool:
-    from .. import config
-    cfg = config.load()
-    return cfg.get("desktop", {}).get("enabled", False)
+    from ..configuration.bootstrap import get_configuration
+    return get_configuration().get("desktop.enabled", False)

@@ -1,9 +1,9 @@
 import hashlib
 
-from . import config as cozmo_config
 from pathlib import Path
 from .memory.lancedb_store import LanceStore
 from .services import EmbeddingService
+from .configuration.bootstrap import get_configuration
 
 IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".cozmo", "target", "build", "dist"}
 
@@ -20,7 +20,7 @@ class ProjectIndex:
         if isinstance(embed_model, EmbeddingService):
             embed_service = embed_model
         else:
-            cfg = cozmo_config.load()
+            cfg = get_configuration().snapshot()
             model_name = embed_model or cfg.get("embedding", {}).get("model", "")
             embed_cfg = dict(cfg)
             embed_cfg.setdefault("embedding", {})["model"] = model_name

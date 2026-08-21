@@ -3,14 +3,29 @@
 Phase E. Retrieval is not a single flat similarity search: the Brain resolves
 context, loads the scenario, scores knowledge *within* that scenario's
 neighborhood, and only when the sufficiency gate fails expands outward to
-global knowledge, then raw conversations/memory.
+global knowledge, then WikiLink-relationship neighbors (M4), then raw
+conversations/memory.
 
     Brain.recall(query, context)
       1. resolve context      project → scenario        (Brain.resolve)
       2. load scenario        goal, status, summary, participants
       3. traverse edges       scenario → its knowledge  (derived_from)
       4. score neighborhood   vector similarity within that subgraph
-      5. sufficiency gate     conversations retrieved ONLY if steps 2-4 fail
+      5. sufficiency gate     global knowledge, then WikiLink neighbors,
+                              then conversations — each ONLY on gate failure
+
+M4 graph expansion: when both semantic stages fail the sufficiency gate, the
+knowledge hits retrieved so far seed a bounded, deterministic WikiLink
+neighborhood walk (``reasoning.expansion``). Discovered neighbors enter the
+same ``RecallItem`` stream tagged ``origin="wikilink"``; when they yield at
+least one new item the conversation/memory fallback is skipped. When the
+expansion discovers nothing (no edges, dangling links, deleted targets,
+callables unwired) behavior is byte-identical to pre-M4.
+
+Scope semantics: expansion runs only after the gate has already failed twice,
+the same regime as the existing global-knowledge expansion — cross-scenario
+neighbors are therefore reachable exactly when global expansion would be.
+Sufficient scoped retrieval never triggers any graph read.
 
 This module is pure reasoning: it operates on Brain objects (Scenario,
 RecallItem, RecallResult, QueryContext) and injected read callables only.
@@ -25,10 +40,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..types import KnowledgeHit, QueryContext, RecallItem, RecallResult, Scenario
+from .expansion import ExpansionConfig, GraphNeighbor, traverse
 
 log = logging.getLogger("cozmo.brain.reasoning.resolver")
 
-# Layers, in the order the resolver walks them (top-down).
+# Layers, in the order the resolver walks them (top-down). "graph" sits between
+# knowledge expansion and the conversation fallback (M4).
 _LAYER_ORDER = ("scenario", "knowledge", "conversation")
 
 
@@ -49,6 +66,7 @@ class ResolvePlan:
     scoped_knowledge: int = 0
     global_knowledge: int = 0
     conversation_items: int = 0
+    graph_items: int = 0
 
 
 class LayeredRetrievalResolver:
@@ -61,6 +79,13 @@ class LayeredRetrievalResolver:
             neighborhood when ``scenario_id`` is given, whole-graph otherwise.
         query_memory: ``(query, k, distance_threshold) -> list[dict]`` — raw
             conversation-derived retrieval used only when the gate fails.
+        neighborhood: ``(item_id) -> {"references": (...), "backlinks": (...)} | None``
+            — WikiLink edge reader (M4). ``None`` disables graph expansion.
+        fetch_knowledge: ``(item_ids) -> list[KnowledgeHit]`` — resolves
+            durable neighbor ids to items (M4). Missing ids are skipped by the
+            provider. ``None`` disables graph expansion.
+        expansion: bounds for the neighborhood walk (depth / max neighbors /
+            hop decay).
         sufficiency: minimum best similarity score required to stop expanding.
         default_k: top-k fallback when the query context carries no limit.
     """
@@ -71,6 +96,9 @@ class LayeredRetrievalResolver:
         load_scenario: Callable[[str], Optional[Scenario]],
         query_knowledge: Callable[[str, Optional[str], int, Optional[float]], list[KnowledgeHit]],
         query_memory: Callable[[str, int, Optional[float]], list[dict]],
+        neighborhood: Optional[Callable[[str], Optional[dict]]] = None,
+        fetch_knowledge: Optional[Callable[[list[str]], list[KnowledgeHit]]] = None,
+        expansion: ExpansionConfig = ExpansionConfig(),
         sufficiency: float = 0.4,
         default_k: int = 5,
         tiered: bool = False,
@@ -78,6 +106,9 @@ class LayeredRetrievalResolver:
         self._load_scenario = load_scenario
         self._query_knowledge = query_knowledge
         self._query_memory = query_memory
+        self._neighborhood = neighborhood
+        self._fetch_knowledge = fetch_knowledge
+        self._expansion = expansion
         self._sufficiency = sufficiency
         self._default_k = default_k
         self._tiered = tiered
@@ -104,6 +135,7 @@ class LayeredRetrievalResolver:
         )
 
         items: list[RecallItem] = []
+        knowledge_hits: list[KnowledgeHit] = []
         if scenario is not None:
             summary = (scenario.summary or scenario.purpose or "").strip()
             if summary:
@@ -131,6 +163,7 @@ class LayeredRetrievalResolver:
             sufficiency=best,
         )
         items.extend(_knowledge_items(scoped))
+        knowledge_hits.extend(scoped)
         gate = "knowledge" if best >= self._sufficiency else "knowledge_expand"
 
         if best < self._sufficiency:
@@ -145,17 +178,31 @@ class LayeredRetrievalResolver:
                 sufficiency=best_global,
             )
             items.extend(_knowledge_items(expanded))
+            knowledge_hits.extend(expanded)
             gate = "knowledge" if best_global >= self._sufficiency else "conversation"
 
         if gate == "conversation":
-            memory = self._safe_memory(query, k, threshold)
-            plan = _replace_plan(
-                plan,
-                layers=plan.layers + ("conversation",),
-                conversation_items=len(memory),
-                gate="conversation",
-            )
-            items.extend(_memory_items(memory))
+            graph = self._expand_graph(knowledge_hits, scenario_id)
+            if graph:
+                # M4: WikiLink neighbors satisfied the query — conversation
+                # memory stays untouched. Zero discoveries fall through,
+                # preserving pre-M4 behavior exactly.
+                plan = _replace_plan(
+                    plan,
+                    layers=plan.layers + ("graph",),
+                    graph_items=len(graph),
+                    gate="graph",
+                )
+                items.extend(graph)
+            else:
+                memory = self._safe_memory(query, k, threshold)
+                plan = _replace_plan(
+                    plan,
+                    layers=plan.layers + ("conversation",),
+                    conversation_items=len(memory),
+                    gate="conversation",
+                )
+                items.extend(_memory_items(memory))
         else:
             plan = _replace_plan(plan, gate=gate)
 
@@ -172,6 +219,57 @@ class LayeredRetrievalResolver:
         )
 
     # ── helpers ─────────────────────────────────────────────────────────
+
+    def _expand_graph(
+        self, seed_hits: list[KnowledgeHit], scenario_id: Optional[str]
+    ) -> list[RecallItem]:
+        """Bounded WikiLink neighborhood expansion over the semantic seeds.
+
+        Seeds keep retrieval order (scoped before global), deduplicated by
+        durable item id. Neighbor scores inherit the discovering parent's
+        score, decayed per hop — a provenance signal, not a ranking change.
+        Traversal crosses scenarios freely; each neighbor carries
+        ``scenario_affinity`` ("same"/"cross") so the future ranking layer can
+        prefer same-scenario neighbors without hard-blocking global knowledge
+        (M4.1). Returns [] (never raises) when expansion is unwired or finds
+        nothing.
+        """
+        if self._neighborhood is None or self._fetch_knowledge is None:
+            return []
+        seen: set[str] = set()
+        seeds: list[str] = []
+        for hit in seed_hits:
+            hid = str(hit.item.id)
+            if hid and hid not in seen:
+                seen.add(hid)
+                seeds.append(hid)
+        if not seeds:
+            return []
+
+        neighbors = traverse(seeds, self._neighborhood, config=self._expansion)
+        if not neighbors:
+            return []
+
+        try:
+            hits = self._fetch_knowledge([n.item_id for n in neighbors])
+        except Exception:
+            log.warning("graph neighbor fetch failed", exc_info=True)
+            return []
+        by_id = {str(h.item.id): h for h in hits}
+
+        scores: dict[str, float] = {
+            str(hit.item.id): float(hit.score) for hit in seed_hits
+        }
+        out: list[RecallItem] = []
+        for n in neighbors:
+            hit = by_id.get(n.item_id)
+            if hit is None:
+                continue
+            parent_score = scores.get(n.parent_id, 0.0)
+            score = parent_score * self._expansion.hop_decay
+            scores[n.item_id] = score
+            out.append(_graph_item(hit, score, n, scenario_id))
+        return out
 
     def _safe_memory(
         self, query: str, k: int, threshold: Optional[float]
@@ -209,6 +307,42 @@ def _knowledge_items(hits: list[KnowledgeHit]) -> list[RecallItem]:
         )
         for hit in hits
     ]
+
+
+def _graph_item(
+    hit: KnowledgeHit,
+    score: float,
+    neighbor: GraphNeighbor,
+    scenario_id: Optional[str],
+) -> RecallItem:
+    """RecallItem for a graph-expanded neighbor (M4).
+
+    ``origin="wikilink"`` distinguishes it from semantic results; semantic
+    items carry no ``origin`` key. ``scenario_affinity`` is "same" only when
+    an active scenario matches the neighbor's owning scenario — "cross"
+    otherwise, including the no-active-scenario case (M4.1). It is advisory
+    metadata for ranking; traversal itself never blocks on it.
+    """
+    affinity = (
+        "same"
+        if scenario_id and hit.item.scenario_id == scenario_id
+        else "cross"
+    )
+    return RecallItem(
+        text=hit.item.content,
+        score=float(score),
+        source="knowledge",
+        metadata={
+            "kind": "knowledge",
+            "id": hit.item.id,
+            "scenario_id": hit.item.scenario_id,
+            "tags": hit.item.tags,
+            "origin": "wikilink",
+            "hops": neighbor.hops,
+            "via": neighbor.via,
+            "scenario_affinity": affinity,
+        },
+    )
 
 
 def _memory_items(rows: list[dict]) -> list[RecallItem]:

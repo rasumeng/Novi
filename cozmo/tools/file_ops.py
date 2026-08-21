@@ -9,13 +9,24 @@ from . import register_tool
 
 # Restrict reads to project root or subdirs
 ALLOWED_ROOT = Path.cwd()
-KNOWLEDGE = Path("./knowledge").resolve()
 
 
 def set_allowed_root(root: str | Path):
     """Update the allowed root directory for file operations at runtime."""
     global ALLOWED_ROOT
     ALLOWED_ROOT = Path(root).resolve()
+
+
+def knowledge_dir() -> Path:
+    """Resolve the canonical knowledge base directory from configuration.
+
+    Reads ``workspace.knowledge`` (default ``~/.cozmo/knowledge``) and expands
+    it to an absolute path. Never CWD-relative: the knowledge base lives under
+    the configured workspace, not wherever the process happens to start.
+    """
+    from ..configuration.bootstrap import get_configuration
+    value = get_configuration().get("workspace.knowledge", "~/.cozmo/knowledge")
+    return Path(value).expanduser().resolve()
 
 
 def _safe_path(path: str) -> Path | None:
@@ -137,9 +148,10 @@ def read_knowledge(path: str) -> str:
         path: Relative path inside knowledge base (e.g. 'learnings/python-patterns.md').
     """
     try:
-        target = (KNOWLEDGE / path).resolve()
+        kb = knowledge_dir()
+        target = (kb / path).resolve()
         try:
-            target.relative_to(KNOWLEDGE)
+            target.relative_to(kb)
         except ValueError:
             return "[error] Path traversal not allowed"
         if not target.exists():
@@ -196,11 +208,14 @@ def write_knowledge(path: str, content: str, type: str = "Reference", title: str
         tags: List of tags for categorization.
     """
     try:
-        target = (KNOWLEDGE / path).resolve()
+        kb = knowledge_dir()
+        target = (kb / path).resolve()
         try:
-            target.relative_to(KNOWLEDGE)
+            target.relative_to(kb)
         except ValueError:
             return "[error] Path traversal not allowed"
+
+        target.parent.mkdir(parents=True, exist_ok=True)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         title = title or path.replace(".md", "").replace("/", " - ").replace("-", " ").title()

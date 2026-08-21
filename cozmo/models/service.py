@@ -11,7 +11,7 @@ from typing import Optional
 
 from .registry import ModelRegistry as _ModelRegistry
 from ..configuration.resolver import WORKLOADS
-from ..providers import LLMProvider, ModelInfo, PROVIDER_REGISTRY, create_provider, parse_model_spec
+from ..providers import ModelInfo, PROVIDER_REGISTRY, create_provider, parse_model_spec
 
 log = logging.getLogger("cozmo.models.service")
 
@@ -33,12 +33,18 @@ class ModelUnavailableError(Exception):
 
 
 class ModelService:
-    """Coordinates providers and resolves workloads to (provider, model_name)."""
+    """Coordinates providers and resolves workloads to (provider, model_name).
 
-    def __init__(self, config: dict, registry: _ModelRegistry):
+    Model *construction* is delegated to the ``ModelRuntime`` boundary
+    (``cozmo/runtime/models``), which forwards the already-resolved selection
+    to the existing provider layer. This class never constructs a LangChain
+    model directly and never selects a model.
+    """
+
+    def __init__(self, config: dict, registry: _ModelRegistry, runtime=None):
         self._config = config
         self._registry = registry
-        self._provider_cache: dict[str, LLMProvider] = {}
+        self._runtime = runtime
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -53,18 +59,20 @@ class ModelService:
 
     def bind_model(self, model_name: str, tools: list,
                    temperature: float = 0.0):
-        provider = self._get_provider_for_model(model_name)
-        return provider.bind_tools(tools, temperature)
+        resolved = self._resolved_for_model(model_name)
+        return self._get_runtime().bind_tools(resolved, tools, temperature)
 
     def client_for_model(self, model_name: str,
                          temperature: float = 0.0):
-        provider = self._get_provider_for_model(model_name)
-        return provider.get_chat_model(temperature)
+        resolved = self._resolved_for_model(model_name)
+        return self._get_runtime().create_chat_model(resolved, temperature)
 
     def client(self, workload: str, temperature: float = 0.0):
-        provider_name, model_name = self.resolve(workload)
-        provider = self._get_provider_for_model(model_name)
-        return provider.get_chat_model(temperature)
+        provider_name, model_name, prov_cfg = self._resolve_spec(workload)
+        from ..runtime.models import ResolvedModel
+        resolved = ResolvedModel(
+            provider=provider_name, model=model_name, config=prov_cfg)
+        return self._get_runtime().create_chat_model(resolved, temperature)
 
     def list_available(self) -> dict[str, list[ModelInfo]]:
         result: dict[str, list[ModelInfo]] = {}
@@ -75,7 +83,8 @@ class ModelService:
     def refresh(self):
         """Force re-discovery from all configured providers."""
         self._registry.clear()
-        self._provider_cache.clear()
+        if self._runtime is not None:
+            self._runtime.clear()
 
         providers_cfg = self._config.get("providers", {})
         for provider_name in PROVIDER_REGISTRY:
@@ -144,10 +153,8 @@ class ModelService:
 
         return provider_name, model_name, prov_cfg
 
-    def _get_provider_for_model(self, model_name: str) -> LLMProvider:
-        cache_key = f"model:{model_name}"
-        if cache_key in self._provider_cache:
-            return self._provider_cache[cache_key]
+    def _resolved_for_model(self, model_name: str):
+        from ..runtime.models import ResolvedModel
 
         info = self._registry.find(model_name)
         if info:
@@ -158,6 +165,12 @@ class ModelService:
         providers_cfg = self._config.get("providers", {})
         prov_cfg = providers_cfg.get(provider_name, {})
 
-        provider = create_provider(provider_name, model_name, prov_cfg)
-        self._provider_cache[cache_key] = provider
-        return provider
+        return ResolvedModel(
+            provider=provider_name, model=model_name, config=prov_cfg)
+
+    def _get_runtime(self) -> "ModelRuntime":
+        """Return the shared ModelRuntime, building one lazily."""
+        if self._runtime is None:
+            from ..runtime.models import ModelRuntime
+            self._runtime = ModelRuntime()
+        return self._runtime

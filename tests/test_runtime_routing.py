@@ -2,8 +2,9 @@
 
 Rule #2 enforcement at the unit level: the Runtime never writes to storage
 directly; it reports events through the Brain. `_remember` must route
-through `Brain.observe()` when a brain is present, and stay byte-identical
-to the legacy `memory.add_interaction` path when it is not.
+through `Brain.observe()` when a brain is present. The legacy
+`memory.add_interaction` fallback has been removed — with no brain,
+`_remember` only appends to the in-memory history.
 """
 
 from cozmo.brain.types import Turn
@@ -68,15 +69,16 @@ def test_remember_brain_failure_is_swallowed():
     assert rt.history == [("hi", "hello")]
 
 
-def test_remember_legacy_fallback_byte_identical():
+def test_remember_without_brain_only_appends_history():
+    """No brain → no observe, no legacy memory fallback, history only."""
     mem = StubMemory()
     rt = make_runtime(mem, brain=None)
     rt._remember("hi", "hello")
-    assert mem.interactions == [("hi", "hello")]
     assert rt.history == [("hi", "hello")]
+    assert mem.interactions == []
 
 
-def test_remember_legacy_without_memory_is_noop():
+def test_remember_without_brain_or_memory_is_history_only():
     rt = make_runtime(None, brain=None)
     rt._remember("hi", "hello")
     assert rt.history == [("hi", "hello")]

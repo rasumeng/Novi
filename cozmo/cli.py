@@ -11,9 +11,21 @@ from prompt_toolkit.key_binding import KeyBindings
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from . import config
+from .configuration.bootstrap import CONFIG_PATH, get_configuration
 
 HISTORY_FILE = Path.home() / ".cozmo" / ".history"
+
+
+def _ensure_default_config():
+    """Create the default config file if missing (framework-owned write)."""
+    import logging
+
+    cfg = get_configuration()
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        cfg.store.write(cfg.state.as_dict())
+        logging.getLogger("cozmo.cli").info(
+            "created default config at %s", CONFIG_PATH)
 
 
 class FileCompleter(Completer):
@@ -285,8 +297,8 @@ def main():
     ctx = None
 
     if args.command == "init":
-        cfg = config.init()
-        print(f"Config created at {config.CONFIG_PATH}")
+        _ensure_default_config()
+        print(f"Config created at {CONFIG_PATH}")
 
     elif args.command == "telegram":
         from .services import CozmoContext
@@ -340,7 +352,7 @@ def main():
         import asyncio
 
         async def _run_mcp():
-            cfg = config.load()
+            cfg = get_configuration()
             mcp_cfg = cfg.get("mcp", {}).get("servers", {}) or {}
             from .tools import TOOL_REGISTRY
             if args.action == "connect":
@@ -385,7 +397,7 @@ def main():
 
     elif args.command == "config":
         from .config_cli import handle_config
-        handle_config(args, config)
+        handle_config(args)
 
     else:
         # Default: launch webui

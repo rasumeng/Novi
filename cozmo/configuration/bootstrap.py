@@ -1,17 +1,14 @@
-"""Bootstrap — the framework's process-wide instance and legacy config bridge.
+"""Bootstrap — the framework's process-wide instance.
 
 ``bootstrap.build_configuration()`` constructs the Configuration facade with
-the default registry, migrates legacy files, and initializes state.
-``bootstrap.legacy_config()`` returns a plain dict compatible with the old
-``cozmo.config.load()`` callers so the migration can proceed subsystem by
-subsystem without one giant atomics change.
+the default registry, migrates legacy files, and initializes state. All
+consumers read through the returned ``Configuration`` object (or its
+``snapshot()``) — there is no legacy dict bridge.
 """
 
 from __future__ import annotations
 
-import copy
 import logging
-import os
 from pathlib import Path
 
 from .builtin import register_defaults
@@ -77,29 +74,6 @@ DEFAULT_CONFIG: dict = {
     "desktop": {"enabled": False},
     "telegram": {"enabled": False, "bot_token": "", "allowed_chat_ids": []},
 }
-
-
-def _apply_env_overrides(data: dict) -> dict:
-    """Environment overrides still honored (precedence above file)."""
-    env_val = os.getenv("COZMO_OLLAMA_URL")
-    if env_val:
-        data.setdefault("ollama", {})["url"] = env_val
-        data.setdefault("providers", {}).setdefault("ollama", {})["url"] = env_val
-    return data
-
-
-def _resolve_paths(data: dict) -> dict:
-    ws = data.get("workspace")
-    if isinstance(ws, dict):
-        for key in ("path", "knowledge"):
-            value = ws.get(key)
-            if not value:
-                continue
-            p = Path(value).expanduser()
-            if not p.is_absolute():
-                p = CONFIG_PATH.parent / p
-            ws[key] = str(p.resolve())
-    return data
 
 
 def build_registry() -> ConfigRegistry:
@@ -185,16 +159,3 @@ def get_configuration() -> Configuration:
     if _configuration is None:
         _configuration = build_configuration()
     return _configuration
-
-
-def legacy_config() -> dict:
-    """Return a dict-shaped snapshot for legacy consumers (migration shim).
-
-    The snapshot is fully owned by the framework's state; callers may read it
-    but must not treat it as a source of truth. New code reads via the facade.
-    """
-    cfg = get_configuration()
-    data = cfg.snapshot()
-    data = _resolve_paths(data)
-    data = _apply_env_overrides(data)
-    return copy.deepcopy(data)

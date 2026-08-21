@@ -570,7 +570,7 @@ class StubKnowledgeForPromotion:
         self.status_updates = []
         self.written = []
 
-    def write(self, statement, tags=()):
+    def write(self, statement, tags=(), source_kind="explicit"):
         self.written.append((statement, tags))
         return f"kn-{len(self.written)}"
 

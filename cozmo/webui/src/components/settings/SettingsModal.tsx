@@ -350,8 +350,8 @@ function readLeaf(obj: Record<string, unknown>, path: string): unknown {
 export function legacyPatch(next: SettingsData, initial: SettingsData | null): Record<string, unknown> {
   // Framework-owned roots are never bulk-written: workload model selection and
   // the llm namespace persist through the framework (selection endpoint /
-  // schema settings), not through the legacy PUT. Only roots a legacy page may
-  // have actually changed are PUT, and only when they differ from the snapshot
+  // schema settings), not through the legacy PATCH. Only roots a legacy page may
+  // have actually changed are PATCHed, and only when they differ from the snapshot
   // taken when the modal opened — a stale root must never clobber a change made
   // elsewhere in the same session (this was reverting the workload selection
   // back to the pre-open value on modal close).

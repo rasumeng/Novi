@@ -184,3 +184,21 @@ class ReflectionReport:
     conflicts: int = 0
     decays: int = 0
     touched_ids: tuple[str, ...] = ()
+
+
+@dataclass
+class ReconcileReport:
+    """Outcome of a Markdown → Brain reconciliation pass.
+
+    ``missing_files`` counts Brain items that currently have no Markdown file
+    (deleted/renamed notes). Those items are never hard-deleted — they remain
+    historical and are flagged for supersession/decay on the next reflect pass.
+    """
+
+    scanned: int = 0
+    new: int = 0
+    edited: int = 0
+    unchanged: int = 0
+    removed_claims: int = 0
+    missing_files: int = 0
+    skipped: bool = False

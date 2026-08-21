@@ -12,8 +12,8 @@ export async function fetchConfig(): Promise<SettingsData> {
 }
 
 export async function saveConfig(patch: Record<string, unknown>) {
-  await fetch(`${API_BASE}/api/config`, {
-    method: 'PUT',
+  await fetch(`${API_BASE}/api/configuration`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   })

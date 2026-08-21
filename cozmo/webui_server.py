@@ -52,7 +52,6 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from . import config
 from .tools import TOOL_REGISTRY
 from .brain.types import Turn
 from .runtime.runtime import CozmoRuntime
@@ -147,7 +146,7 @@ def _broadcast_sync(payload: dict):
 
 # ── Background run helpers ────────────────────────────────────────────────
 
-def _start_background_run(goal: str, cfg: dict) -> str:
+def _start_background_run(goal: str, cfg: dict | None = None) -> str:
     """Start a coordinator-backed background run in a thread. Returns run_id.
 
     Milestone 5 Phase 5E-2D: Task/Plan/Job/ExecutionHistory are owned by the
@@ -168,7 +167,7 @@ def _start_background_run(goal: str, cfg: dict) -> str:
 
     def _worker():
         try:
-            b = get_backend(cfg)
+            b = get_backend()
             ctx = b.get("context")
             _emit("background_run_update", status="running", goal=goal)
 
@@ -285,25 +284,28 @@ _scheduler_lock = threading.Lock()
 _scheduler_inst = None
 
 
-def _ensure_scheduler(cfg: dict):
+def _ensure_scheduler(cfg: dict | None = None):
     global _scheduler_inst
     with _scheduler_lock:
         if _scheduler_inst is not None:
             return _scheduler_inst
-        b = get_backend(cfg)
+        b = get_backend()
         ctx = b.get("context")
         # Single application scheduler: reuse the composition-root singleton
         # instead of building a second polling instance (5E-2E). The default
         # trigger already routes through the coordinator; here we swap in the
         # WebUI variant that also broadcasts to connected sockets.
         sched = ctx.scheduler
-        sched.on_trigger = lambda s: _start_background_run(s.goal, cfg)
+        sched.on_trigger = lambda s: _start_background_run(s.goal)
         _scheduler_inst = sched
         return _scheduler_inst
 
 
-def get_backend(cfg: dict) -> dict:
+def get_backend(cfg: dict | None = None) -> dict:
     """Build the shareable backend once; reuse it for every session."""
+    from .configuration.bootstrap import get_configuration
+    if cfg is None:
+        cfg = get_configuration().snapshot()
     global _shared_backend
     with _backend_lock:
         if _shared_backend is not None:
@@ -349,9 +351,12 @@ def _safe_child(base: Path, name: str, suffix: str = "") -> Path:
         raise ValueError("invalid name")
     return p
 
-def build_runtime(cfg: dict):
+def build_runtime(cfg: dict | None = None):
     """Construct a per-session runtime cheaply from the shared backend."""
-    b = get_backend(cfg)
+    from .configuration.bootstrap import get_configuration
+    if cfg is None:
+        cfg = get_configuration().snapshot()
+    b = get_backend()
     event_bus = EventBus()
     # Milestone 5 Phase 6B: attach the SAME JobLifecycle observer used by every
     # other execution surface (CLI, Telegram, background, scheduler) so WebUI
@@ -363,6 +368,16 @@ def build_runtime(cfg: dict):
     from .services.job_lifecycle import JobLifecycle
     if job_lifecycle is not None and isinstance(job_lifecycle, JobLifecycle):
         job_lifecycle.subscribe(event_bus)
+    # Phase 7 Stage 3E: wire the LangGraph research/coding workflows here too.
+    # context.create_runtime wires them for every other execution surface;
+    # this per-session construction previously silently ran the legacy inline
+    # loops. Graphs are stateless (model/search/run_loop injected per-run), so
+    # they are built once and cached on the shared backend.
+    if "research_graph" not in b:
+        from .graphs import CodingGraph, ResearchGraph
+
+        b["research_graph"] = ResearchGraph()
+        b["coding_graph"] = CodingGraph()
     runtime = CozmoRuntime(
         model_service=b["model_service"],
         memory=b["memory"],
@@ -375,6 +390,8 @@ def build_runtime(cfg: dict):
         brain=b.get("brain"),
         orchestrator=b.get("orchestrator"),
         mcp_permissions=b.get("mcp_permissions"),
+        research_graph=b["research_graph"],
+        coding_graph=b["coding_graph"],
     )
     # Drive Task lifecycle from runtime plan events; runtime never touches the
     # store itself.
@@ -402,7 +419,7 @@ def seed_default_skills():
 class Session:
     """One WebSocket connection = one runtime + one run at a time."""
 
-    def __init__(self, cfg: dict, loop: asyncio.AbstractEventLoop):
+    def __init__(self, cfg: dict | None = None, loop: asyncio.AbstractEventLoop = None):
         self.runtime, self.orchestrator, self.job_manager, self.event_bus = build_runtime(cfg)
         self.loop = loop
         self.events: asyncio.Queue = asyncio.Queue()
@@ -420,7 +437,7 @@ class Session:
         self.current_task_id = ""
         self.agent_config: dict = {}
 
-        b = get_backend(cfg)
+        b = get_backend()
         self.task_store = getattr(self.orchestrator, "task_store", None)
         self.continuation = b.get("continuation")
         # Phase 6B: the shared JobLifecycle observer is subscribed to this
@@ -625,7 +642,8 @@ def _shutdown_backend():
 
 
 def create_app(cfg: dict | None = None) -> FastAPI:
-    cfg = cfg or config.load()
+    # Legacy ``cfg`` seed is tolerated but ignored: every runtime/backend
+    # consumer sources a fresh snapshot from the Configuration Framework.
     import asyncio as _asyncio
     from contextlib import asynccontextmanager
 
@@ -659,9 +677,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         (CHATS_DIR / "index.json").write_text(json.dumps(idx, indent=2), "utf-8")
 
     def _conv_to_file(conv: dict):
-        mode = conv.get("mode", "chat")
         title = conv.get("title", "Untitled")
-        lines = [f"# {title}", f"mode: {mode}", ""]
+        lines = [f"# {title}", ""]
         for m in conv.get("messages", []):
             role = "User" if m.get("role") == "user" else "Cozmo"
             lines.append(f"## {role}")
@@ -684,7 +701,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 "title": c["title"],
                 "updatedAt": c.get("updatedAt", ""),
                 "pinned": c.get("pinned", False),
-                "mode": c.get("mode", "chat"),
                 "messages": _load_messages(c["id"]),
             }
             for c in idx.get("conversations", [])
@@ -745,7 +761,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         conv_id = body.get("id", "").strip()
         title = body.get("title", "Untitled")
         pinned = body.get("pinned", False)
-        mode = body.get("mode", "chat")
         messages = body.get("messages", [])
 
         if not conv_id:
@@ -765,14 +780,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             entry = existing[0]
             entry["title"] = title
             entry["pinned"] = pinned
-            entry["mode"] = mode
             entry["updatedAt"] = ts
         else:
             entry = {
                 "id": conv_id,
                 "title": title,
                 "pinned": pinned,
-                "mode": mode,
                 "createdAt": ts,
                 "updatedAt": ts,
             }
@@ -781,7 +794,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         _save_idx(idx)
         # write .md file
         md_path.write_text(
-            _conv_to_file({"title": title, "mode": mode, "messages": messages}),
+            _conv_to_file({"title": title, "messages": messages}),
             "utf-8",
         )
         return {"ok": True}
@@ -806,7 +819,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             results.append({
                 "id": c["id"], "title": c["title"],
                 "pinned": c.get("pinned", False),
-                "mode": c.get("mode", "chat"),
                 "match": snippet,
             })
         return results[:20]
@@ -834,7 +846,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     "title": c["title"],
                     "updatedAt": c.get("updatedAt", ""),
                     "pinned": c.get("pinned", False),
-                    "mode": c.get("mode", "chat"),
                     "messages": _load_messages(c["id"]),
                 }
         return None
@@ -891,12 +902,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     except Exception as e:
         print(f"[cozmo] config broadcast hook failed: {e}")
 
-    def _sync_config_snapshot():
-        # Keep the process-wide ``cfg`` dict in sync with framework state so
-        # existing runtime consumers keep reading a fresh snapshot.
-        cfg.clear()
-        cfg.update(configuration.snapshot())
-
     def _after_models_changed():
         """Model-set lifecycle seam.
 
@@ -917,7 +922,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                                  "recommendations": recs.to_dict()})
             except Exception as e:
                 print(f"[cozmo] model recommendation refresh failed: {e}")
-        _sync_config_snapshot()
 
     # Startup: compute advisory recommendations once before the UI serves.
     # Never installs anything and never writes selection.
@@ -974,57 +978,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/config")
     def get_config():
-        _sync_config_snapshot()
-        return redactor.redact_tree(_sanitize_config(cfg))
-
-    @app.put("/api/config")
-    def put_config(body: dict):
-        """Legacy bulk-write compatibility endpoint — delegates to the framework.
-
-        Kept for existing callers during migration. Every key resolves through
-        the configuration registry (exact or namespace sub-path) and is applied
-        via ``configuration.set`` — the single authoritative
-        validate → persist → apply → emit path. A key that is not a registered
-        setting (or under a registered namespace) is surfaced as such rather
-        than silently writing raw dict state, so there is exactly one
-        persistence mechanism.
-        """
-        results = []
-        for k, v in body.items():
-            if registry_has(configuration, k):
-                if redactor.is_secret(k) and isinstance(v, dict) and redactor.is_masked(v):
-                    # masked read-back of a secret — leave the stored value
-                    # untouched instead of persisting the placeholder
-                    results.append({"id": k, "ok": True, "unchanged": True,
-                                    "value": redactor.redact(k, configuration.get(k))})
-                    continue
-                setting = configuration.registry.resolve(k)
-                if setting is not None and setting.namespace and isinstance(v, dict):
-                    v = _fill_masked(v, configuration.get(k) or {})
-                try:
-                    configuration.set(k, v, by="webui")
-                    results.append({"id": k, "ok": True,
-                                    "value": redactor.redact(k, configuration.get(k))})
-                except ValidationError as e:
-                    results.append({"id": k, "ok": False, "errors": e.errors})
-                except Exception as e:
-                    results.append({"id": k, "ok": False, "error": str(e)})
-            else:
-                results.append({"id": k, "ok": False, "raw": False,
-                                "error": f"'{k}' is not a registered setting"})
-        _sync_config_snapshot()
-        # notify the shared backend so in-memory state matches disk
-        with _backend_lock:
-            backend = _shared_backend
-        if backend:
-            try:
-                backend["mcp"].refresh_from_config(cfg)
-            except Exception as e:
-                print(f"[cozmo] MCP config refresh failed: {e}")
-        return {"ok": True, "results": results}
-
-    def registry_has(configuration, k: str) -> bool:
-        return configuration.registry.has(k)
+        return redactor.redact_tree(_sanitize_config(configuration.snapshot()))
 
     # ── Configuration Framework API ────────────────────────────────
 
@@ -1034,7 +988,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/configuration")
     def get_configuration_state():
-        _sync_config_snapshot()
         return redactor.redact_tree(configuration.snapshot())
 
     @app.patch("/api/configuration")
@@ -1060,12 +1013,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 out.append({"id": k, "ok": False, "errors": e.errors})
             except Exception as e:
                 out.append({"id": k, "ok": False, "error": str(e)})
-        _sync_config_snapshot()
         with _backend_lock:
             backend = _shared_backend
         if backend:
             try:
-                backend["mcp"].refresh_from_config(cfg)
+                backend["mcp"].refresh_from_config(configuration.snapshot())
             except Exception as e:
                 print(f"[cozmo] MCP config refresh failed: {e}")
         return out
@@ -1120,7 +1072,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             for workload in WORKLOADS
         }
         result = apply_selection(configuration, cleaned, installed=None, by=by)
-        _sync_config_snapshot()
         return {"ok": True, **result}
 
     @app.post("/api/configuration/models/recommend")
@@ -1155,7 +1106,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 }
             data["selection"] = apply_selection(
                 configuration, models, installed=discovered, by="webui")
-        _sync_config_snapshot()
         return {"ok": True, **data}
 
     @app.post("/api/configuration/models/setup/dismiss")
@@ -1175,7 +1125,6 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         if name not in current:
             configuration.set(
                 "models.recommendations.dismissed", [*current, name], by="webui")
-            _sync_config_snapshot()
         return {"ok": True, "name": name}
 
     # ── Model discovery (dynamic, status + recommendations) ─────────
@@ -1296,7 +1245,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/memory/list")
     def list_memory():
-        b = get_backend(cfg)
+        b = get_backend()
         mem = b.get("memory")
         if not mem:
             return []
@@ -1306,7 +1255,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def search_memory(q: str = ""):
         if not q.strip():
             return []
-        b = get_backend(cfg)
+        b = get_backend()
         mem = b.get("memory")
         if not mem:
             return []
@@ -1319,7 +1268,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.delete("/api/memory/{item_id}")
     def delete_memory(item_id: str):
-        b = get_backend(cfg)
+        b = get_backend()
         mem = b.get("memory")
         if not mem:
             return {"ok": False}
@@ -1337,7 +1286,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
         User-facing only: kind/title/detail/timestamp + per-row instance id.
         """
-        b = get_backend(cfg)
+        b = get_backend()
         service = b.get("timeline_service")
         if service is None:
             return []
@@ -1353,7 +1302,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         Only category / label / content / evidence. Never ids, scores,
         distances, embeddings, or storage paths.
         """
-        b = get_backend(cfg)
+        b = get_backend()
         return build_knowledge_overview(b.get("brain"))
 
     @app.post("/api/transcribe")
@@ -1621,7 +1570,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             detail["source"] = "custom"
             detail["capabilities"] = []
         # merge permissions from config
-        servers = cfg.get("mcp", {}).get("servers", {})
+        servers = configuration.get("mcp", {}).get("servers", {})
         server_cfg = servers.get(name)
         if server_cfg and "permissions" in server_cfg:
             detail["permissions"] = server_cfg["permissions"]
@@ -1641,7 +1590,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         name = body.get("name", "")
         if not name:
             return {"ok": False, "error": "name required"}
-        servers = cfg.get("mcp", {}).get("servers", {})
+        servers = configuration.get("mcp", {}).get("servers", {})
         server_cfg = servers.get(name)
         if not server_cfg:
             return {"ok": False, "error": f"server '{name}' not found in config"}
@@ -1755,7 +1704,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         TaskStore Task (``cozmo_task_id``) so continuation can discover it.
         """
         from .services.background import run_background
-        b = get_backend(cfg)
+        b = get_backend()
         ctx = b.get("context")
         result = run_background(ctx, task.prompt,
                                 conversation_id=f"queue:{task.id}",
@@ -1807,7 +1756,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         await ws.accept()
         loop = asyncio.get_running_loop()
         conn_id = _register_sender(loop, ws)
-        session = Session(cfg, loop)
+        session = Session(loop=loop)
 
         async def pump_events():
             while True:
@@ -1855,7 +1804,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     goal = (msg.get("goal") or "").strip()
                     if not goal:
                         continue
-                    run_id = _start_background_run(goal, cfg)
+                    run_id = _start_background_run(goal)
                     await ws.send_text(json.dumps({
                         "type": "background_run_update", "run_id": run_id,
                         "status": "queued", "goal": goal
@@ -1876,20 +1825,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         continue
                     desc = msg.get("description", "")
                     interval = int(msg.get("interval_minutes", 0))
-                    _ensure_scheduler(cfg)
+                    _ensure_scheduler()
                     s = _scheduler_inst.add(goal, desc, interval)
                     await ws.send_text(json.dumps({"type": "schedule_created", "schedule": s.to_dict()}))
                 elif mtype == "schedule_list":
-                    _ensure_scheduler(cfg)
+                    _ensure_scheduler()
                     schedules = [s.to_dict() for s in _scheduler_inst.list()]
                     await ws.send_text(json.dumps({"type": "schedule_list", "schedules": schedules}))
                 elif mtype == "schedule_delete":
-                    _ensure_scheduler(cfg)
+                    _ensure_scheduler()
                     sid = msg.get("schedule_id", "")
                     ok = _scheduler_inst.remove(sid)
                     await ws.send_text(json.dumps({"type": "schedule_deleted", "schedule_id": sid, "ok": ok}))
                 elif mtype == "schedule_toggle":
-                    _ensure_scheduler(cfg)
+                    _ensure_scheduler()
                     sid = msg.get("schedule_id", "")
                     ok = _scheduler_inst.toggle(sid)
                     s = _scheduler_inst.get(sid)
@@ -1899,7 +1848,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     }))
                 elif mtype == "agent_memory":
                     action = msg.get("action")
-                    b = get_backend(cfg)
+                    b = get_backend()
                     brain = b.get("brain")
                     mem = b.get("memory")
                     if action == "save":
@@ -2000,10 +1949,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     await ws.send_text(json.dumps({"type": "projects_list", "projects": raw}))
                 elif mtype == "get_recent_conversations":
                     idx = _conversations_idx()
-                    mode_filter = msg.get("mode")
                     convs = idx.get("conversations", [])
-                    if mode_filter:
-                        convs = [c for c in convs if c.get("mode") == mode_filter]
                     convs.sort(key=lambda c: c.get("updatedAt", ""), reverse=True)
                     limit = msg.get("limit", 15)
                     await ws.send_text(json.dumps({"type": "recent_conversations", "conversations": convs[:limit]}))

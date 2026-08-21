@@ -27,6 +27,7 @@ dependencies = [
     "langchain-ollama",
     "langchain-core",
     "langchain-openai",
+    "langgraph",
     "lancedb",
     "sentence-transformers",
     "tomli-w",

@@ -49,9 +49,9 @@ class VectorStore:
         if isinstance(embed_model, EmbeddingService):
             embed_service = embed_model
         else:
-            from ... import config as cozmo_config
+            from ...configuration.bootstrap import get_configuration
 
-            cfg = cozmo_config.load()
+            cfg = get_configuration().snapshot()
             model_name = embed_model or cfg.get("embedding", {}).get("model", "")
             embed_cfg = dict(cfg)
             embed_cfg.setdefault("embedding", {})["model"] = model_name
@@ -191,6 +191,36 @@ class VectorStore:
             return None
         return self._row(rows[0])
 
+    def get_many(self, item_ids: list[str]) -> list[dict]:
+        """Batch durable-id lookup (M4.1).
+
+        One indexed scan for the whole id set instead of one ``get()`` per
+        neighbor. Rows arrive in arbitrary store order — callers must map by
+        ``row["id"]``. Missing/deleted ids are simply absent from the result;
+        never raises.
+        """
+        wanted: list[str] = []
+        seen: set[str] = set()
+        for item_id in item_ids or ():
+            iid = str(item_id)
+            if iid and iid not in seen:
+                seen.add(iid)
+                wanted.append(iid)
+        if not wanted:
+            return []
+        clause = ", ".join(f"'{_esc(i)}'" for i in wanted)
+        try:
+            rows = (
+                self._table.search([0.0] * self._embed_dim)
+                .where(f"id IN ({clause})")
+                .limit(len(wanted))
+                .to_list()
+            )
+        except Exception:
+            log.warning("batch knowledge fetch failed", exc_info=True)
+            return []
+        return [self._row(r) for r in rows]
+
     def list_all(self, limit: int = 100) -> list[dict]:
         try:
             rows = self._table.search().limit(limit).to_list()
@@ -255,6 +285,7 @@ class VectorStore:
             "text": r.get("text", ""),
             "form": r.get("form", KnowledgeForm.ATOMIC.value),
             "status": r.get("status", KnowledgeStatus.CANDIDATE.value),
+            "confidence": float(r.get("confidence", 0.0)),
             "tags": list(r.get("tags", ()) or ()),
             "sources": list(r.get("sources", ()) or ()),
             "scenario_id": r.get("scenario_id"),

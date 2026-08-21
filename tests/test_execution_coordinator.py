@@ -346,16 +346,14 @@ def _force_continuation_intent(coord):
 @pytest.fixture
 def session():
     from cozmo.webui_server import Session
-    from cozmo import config
     from cozmo.runtime.event_bus import EventBus
     from unittest.mock import patch, MagicMock
 
-    cfg = config.load()
     loop = MagicMock()
     loop.call_soon_threadsafe = lambda fn, *a: fn(*a) if callable(fn) else None
     backend = (MagicMock(), MagicMock(), MagicMock(), EventBus())
     with patch("cozmo.webui_server.build_runtime", return_value=backend):
-        sess = Session(cfg, loop)
+        sess = Session(loop=loop)
     return sess
 
 

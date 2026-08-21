@@ -339,3 +339,133 @@ fake runtime â€” no real MCP servers/subprocesses, no MCPHost, no MCPManager
 facade). Full M5.2 / M5.3 / M5.4 / webui-boot regressions green. Full-suite
 state unchanged: the only reds are the same 7 pre-existing ordering-dependent
 `test_tool_retrieval.py` failures.
+---
+
+## 2026-08-21 — M3: WikiLink Resolution + Knowledge Graph Relationships
+
+M3 turns WikiLinks from creation-only eferences placeholders into a resolvable
+relationship graph over the existing RelationshipStore (no new graph DB, no
+second relationship store, no LangGraph).
+
+- **cozmo/brain/wikilinks.py** (new): deterministic, ordered WikiLink resolution
+  (exact note identity/path ? canonical title ? normalized title ? aliases),
+  NoteIndex rebuilt from Markdown only, WikilinkSynchronizer doing diff-based
+  idempotent reconciliation (add/remove eferences edges), dangling-link
+  retention as 
+ote:<Title> edges, ambiguity left unresolved with a warning.
+- **cozmo/brain/storage/relationship_store.py**: emove(), list(kind=…),
+  has(), in-batch de-dup, INSERT OR IGNORE, and a best-effort unique edge
+  index (degrades to a warning on pre-existing duplicates instead of crashing).
+- **cozmo/brain/brain.py**: creation-time link materialization now resolves to
+  durable Brain identities (M2's 
+ote:<Title> preserved only when dangling);
+  new sync_wikilinks(), acklinks(), 
+eighborhood(); econcile_markdown
+  runs the full diff (add/remove stale, orphan sweep on deleted/churned source
+  notes, dangling recovery when a target note returns). Alias text is
+  presentation-only and resolves to the canonical target.
+- **	ests/test_m3_wikilinks.py** (new, 30 tests): resolution
+  (exact/canonical/normalized/path/note-identity/alias/ambiguous/unresolved),
+  relationships (outgoing/incoming/backlinks/dedup-deletion/stale-cleanup/
+  provenance-preservation), lifecycle (dangling?created?dangling/deleted/
+  recreated/source-deleted/idempotent), Obsidian compatibility
+  ([[Title]]/[[Title|Alias]]/frontmatter/user links preserved), and retrieval
+  preparation (lookup returns real kn- identities; traversal uses one store).
+
+Suite: 30 new M3 tests green; 1483?1523 (+40 net) full suite, 0 failures, no
+regression. LanceDB remains derived; no model fallback; no CWD-relative
+knowledge paths; no LangGraph added to Brain.
+
+---
+
+## 2026-08-21 - M4: WikiLink-Aware Retrieval Expansion
+
+M4 adds an additive retrieval stage: when semantic retrieval fails the
+sufficiency gate, a bounded, deterministic WikiLink neighborhood walk
+(`references` + backlinks through the existing RelationshipStore) discovers
+neighboring knowledge and appends it to the existing result stream. No new
+result type, no graph database, no second store, no ranking change.
+
+- **cozmo/brain/reasoning/expansion.py** (new): pure traversal core.
+  `traverse()` = BFS over injected `neighborhood` callables; bounded by
+  `ExpansionConfig` (depth=1, max_neighbors=8, hop_decay=0.5), cycle-safe via
+  visited-set, deterministic (sorted candidate ids per node), dangling
+  `note:<Title>` targets skipped, callable failures degrade to no-edges.
+- **cozmo/brain/reasoning/resolver.py**: new optional constructor callables
+  (`neighborhood` / `fetch_knowledge`) + `expansion` config. When both
+  semantic layers fail the gate, seeds (scoped+global hits, durable-id dedup)
+  feed the walk; discovered neighbors enter the normal `RecallItem` stream
+  tagged `origin="wikilink"`/`hops`/`via` with parent-decayed scores;
+  plan gains `graph_items`, layer `"graph"`, gate `"graph"`. Zero
+  discoveries fall through to the conversation/memory fallback byte-identically
+  to pre-M4. Unwired callables disable the stage entirely.
+- **cozmo/brain/brain.py**: default resolver wires `Brain.neighborhood` +
+  new `knowledge_items(item_ids)` fetcher (durable-id lookup through the
+  knowledge layer; missing/deleted ids skipped silently).
+- **cozmo/memory/knowledge_index.py**: chunk metadata now carries the note's
+  frontmatter `id` as `item_id` - the dedup bridge between path-chunked
+  semantic rows and graph neighbors by durable identity.
+- **cozmo/runtime/sources/knowledge.py**: Brain-backed sources expand gated
+  (best score < 0.4 sufficiency threshold) through the same traversal core,
+  appending `RetrievedItem` neighbors tagged `origin="wikilink"`,
+  deduped by durable id (+ content-level fallback for pre-M4 rows), never
+  touching/reordering semantic results, never raising into retrieval.
+  Plain-index sources unchanged.
+- **tests/test_m4_graph_retrieval.py** (new, 34 tests): sufficiency gating,
+  outgoing/backlink traversal, hop/max-neighbor bounds, cycle termination,
+  durable-id dedup, dangling/deleted/fetch-failure safety, deterministic
+  order + score decay, legacy-equivalence when edgeless/unwired, scoping
+  (incl. documented cross-scenario post-gate semantics), resolver pipeline
+  integration, real-store Brain.recall end-to-end, source-level matrix.
+- **tests/evaluate_retrieval_expansion.py** (new): baseline vs expanded
+  measurement harness (12 linked clusters + 12 distractors, controlled weak
+  semantic hits isolating graph contribution). Results:
+  relevant recall 0.33 -> **1.0** (both surfaces); query success 0/12 ->
+  **12/12**; irrelevant introduced 0; duplicate rate 0.0; context grows
+  12 -> 36 items (~400 -> ~1500 chars) only where links exist;
+  expansion adds ~21 ms mean per gate-failing query (per-neighbor
+  VectorStore.get fetch dominates - optimization explicitly deferred).
+
+Suite: 34 new M4 tests green; 1523 -> 1557 full suite, 0 failures. LanceDB
+remains derived; RelationshipStore remains the only relationship store;
+LangGraph untouched; model selection/provider behavior untouched.
+
+Known limitations (deferred): graph fetch may surface superseded items
+(matches current index semantics; filtering is a ranking decision);
+cross-scenario neighbors reachable post-gate (same regime as global
+expansion - pinned by test); un-reindexed chunks lack `item_id` until
+their next mtime-triggered re-index (text-level fallback covers overlap).
+
+---
+
+## 2026-08-21 - M4.1: Graph Retrieval Hardening
+
+Three validated fixes on top of M4 - no ranking redesign, no ResultMerger,
+no storage-model change.
+
+- **cozmo/brain/storage/vector_store.py**: new `get_many(item_ids)` - one
+  indexed `id IN (...)` scan per batch instead of one zero-vector ANN probe
+  per neighbor. Missing ids omitted, junk ids ignored, never raises.
+- **cozmo/brain/brain.py**: `knowledge_items()` now fetches through
+  `get_many` (per-id fallback for stores without it), deduplicates input
+  ids, and filters SUPERSEDED items at the Brain boundary - superseded claims
+  can no longer re-enter retrieval through the graph on either surface
+  (resolver and runtime source share this path).
+- **cozmo/brain/reasoning/resolver.py**: graph neighbors carry advisory
+  `scenario_affinity` metadata ("same" only when an active scenario matches
+  the neighbor's owner; "cross" otherwise, including no-active-scenario).
+  Traversal still crosses scenarios freely - the future ranking layer can
+  prefer same-scenario neighbors without hard-blocking global knowledge. The
+  source surface has no query context, so it emits no affinity key rather
+  than fabricating one.
+- **tests/test_m4_graph_retrieval.py** (+9 = 43): batch lookup + parity with
+  per-id get(), batching actually bypasses store.get(), superseded filtered
+  in knowledge_items / recall e2e / source surface, affinity same/cross/
+  absent-without-context, cross-scenario traversal preserved with "cross"
+  affinity pinned.
+
+Evaluation baseline preserved exactly (relevant recall 1.0, query success
+12/12, 0 irrelevant introduced, duplicate rate 0.0); expansion latency drops
+~21 ms -> ~7 ms mean per gate-failing query from the batched fetch.
+
+Suite: 43 M4/M4.1 tests green; 1557 -> 1566 full suite (+9), 0 failures.

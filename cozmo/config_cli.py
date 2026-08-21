@@ -1,23 +1,11 @@
-"""cozmo config show|set|reset"""
+"""cozmo config show|set|reset
 
+Every read and write goes through the Configuration Framework — the single
+persistence authority. There is no direct TOML mutation here.
+"""
 
-def _deep_get(d: dict, key: str):
-    parts = key.split(".")
-    for p in parts:
-        if isinstance(d, dict) and p in d:
-            d = d[p]
-        else:
-            return None
-    return d
-
-
-def _deep_set(d: dict, key: str, value):
-    parts = key.split(".")
-    for p in parts[:-1]:
-        if p not in d:
-            d[p] = {}
-        d = d[p]
-    d[parts[-1]] = value
+from .configuration.bootstrap import DEFAULT_CONFIG, get_configuration
+from .configuration import ValidationError, UnknownSettingError
 
 
 def _print_cfg(d: dict, indent: str = ""):
@@ -29,14 +17,14 @@ def _print_cfg(d: dict, indent: str = ""):
             print(f"{indent}{k} = {v!r}")
 
 
-def handle_config(args, config_mod):
-    cfg = config_mod.load()
+def handle_config(args):
+    configuration = get_configuration()
 
     if args.action is None or args.action == "show":
-        _print_cfg(cfg)
+        _print_cfg(configuration.snapshot())
 
     elif args.action == "reset":
-        cfg = config_mod.init()
+        _reset_to_defaults(configuration)
         print("Config reset to defaults.")
 
     elif args.action == "set":
@@ -50,8 +38,16 @@ def handle_config(args, config_mod):
                 parsed = float(args.value)
             except ValueError:
                 parsed = args.value
-        _deep_set(cfg, args.key, parsed)
-        import tomli_w
-        with open(config_mod.CONFIG_PATH, "wb") as f:
-            tomli_w.dump(cfg, f)
-        print(f"Set {args.key} = {parsed!r}")
+        try:
+            configuration.set(args.key, parsed, by="cli")
+            print(f"Set {args.key} = {parsed!r}")
+        except UnknownSettingError:
+            print(f"'{args.key}' is not a registered setting.")
+        except ValidationError as e:
+            print(f"'{args.key}' failed validation: {e.errors}")
+
+
+def _reset_to_defaults(configuration):
+    """Rewrite the config file to framework defaults (framework-owned write)."""
+    configuration.store.write(dict(DEFAULT_CONFIG))
+    configuration.initialize()

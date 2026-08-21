@@ -68,6 +68,30 @@ class KnowledgeStore(Protocol):
     def item_from_row(cls, row: dict) -> KnowledgeItem: ...
 
 
+class MarkdownStore(Protocol):
+    """Persistence for the OKF Markdown mirror of Brain knowledge.
+
+    Markdown is a canonical human-readable durable layer (A.4), not a derived
+    index. The Brain writes through to it on learn/correct/extract and reads
+    it back during reconciliation. Identity is the frontmatter ``id``; the
+    deterministic content ``identity`` key keeps synchronization idempotent.
+    """
+
+    def write_item(
+        self, item: KnowledgeItem, *, source_kind: str = "explicit"
+    ) -> tuple[str, bool]: ...
+
+    def parse(self, path: str | Path) -> tuple[dict, str]: ...
+
+    def list_files(self) -> tuple[Path, ...]: ...
+
+    def find_for_id(self, item_id: str) -> Optional[Path]: ...
+
+    def update_status(self, item_id: str, status: KnowledgeStatus) -> bool: ...
+
+    def read_item(self, path: str | Path) -> Optional[KnowledgeItem]: ...
+
+
 class ScenarioStore(Protocol):
     """Persistence for scenarios."""
 

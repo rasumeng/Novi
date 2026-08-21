@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .. import config as cozmo_config
+from ..configuration.bootstrap import get_configuration
 
 log = logging.getLogger("cozmo.context")
 
@@ -58,7 +58,7 @@ class CozmoContext:
     @property
     def config(self) -> dict:
         if self._cfg is None:
-            self._cfg = cozmo_config.load()
+            self._cfg = get_configuration().snapshot()
         return self._cfg
 
     # ── provider wiring (Phase B: ModelService replaces ModelManager) ───
@@ -157,6 +157,7 @@ class CozmoContext:
         from ..brain.layers.scenarios import ScenarioLayer
         from ..brain.reasoning.extraction import KnowledgeExtractor, Summarizer
         from ..brain.storage.conversation_store import ConversationStore
+        from ..brain.storage.markdown_store import MarkdownStore
         from ..brain.storage.relationship_store import RelationshipStore
         from ..brain.storage.scenario_store import ScenarioStore
         from ..brain.storage.vector_store import VectorStore
@@ -171,11 +172,17 @@ class CozmoContext:
                 persist_dir=persist_dir, embed_model=self.embedding_service
             )
             scenario_store = ScenarioStore(persist_dir=persist_dir)
+            markdown_store = MarkdownStore(
+                knowledge_dir=self.config.get("workspace", {}).get(
+                    "knowledge", "~/.cozmo/knowledge"
+                )
+            )
             self._brain_event_bus = EventBus()
             self._brain = Brain(
                 memory=self.memory,
                 project_index=self.project_index,
                 knowledge_index=get_knowledge_index(),
+                markdown_store=markdown_store,
                 conversation_store=ConversationStore(persist_dir=persist_dir),
                 event_bus=self._brain_event_bus,
                 extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.simple_llm.invoke)),
@@ -363,8 +370,10 @@ class CozmoContext:
         from ..memory.knowledge_index import init_knowledge_index
 
         if not self._knowledge_inited:
+            knowledge_cfg = self.config.get("workspace", {}).get(
+                "knowledge", "~/.cozmo/knowledge")
             init_knowledge_index(
-                knowledge_dir=self.config.get("workspace", {}).get("knowledge", "~/.cozmo/knowledge"),
+                knowledge_dir=str(Path(knowledge_cfg).expanduser().resolve()),
                 persist_dir=str(Path.home() / ".cozmo" / "knowledge_index"),
                 reranker=self.reranker_service,
             )
@@ -376,6 +385,22 @@ class CozmoContext:
         from ..orchestrator.projection import TaskLifecycleProjection
 
         orchestrator = overrides.get("orchestrator", self.orchestrator)
+        research_graph = overrides.get("research_graph", None)
+        if research_graph is None:
+            # Phase 7 Stage 3C: LangGraph research workflow. Model + search are
+            # injected per-run by the runtime (state["model"] / state["search"]),
+            # so the graph can be built once here without resolving a model.
+            from ..graphs import ResearchGraph
+
+            research_graph = ResearchGraph()
+        coding_graph = overrides.get("coding_graph", None)
+        if coding_graph is None:
+            # Phase 7 Stage 3D: LangGraph coding workflow. Model + run_loop are
+            # injected per-run by the runtime (state["model"] / state["run_loop"]),
+            # so the graph can be built once here without resolving a model.
+            from ..graphs import CodingGraph
+
+            coding_graph = CodingGraph()
         runtime = CozmoRuntime(
             model_service=overrides.get("model_service", self.model_service),
             memory=overrides.get("memory", self.memory),
@@ -387,6 +412,8 @@ class CozmoContext:
             skills=overrides.get("skills", None),
             registry=overrides.get("registry", None),
             orchestrator=orchestrator,
+            research_graph=research_graph,
+            coding_graph=coding_graph,
         )
 
         # Wire Task lifecycle projection: runtime only emits events; this

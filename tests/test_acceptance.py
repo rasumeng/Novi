@@ -81,7 +81,7 @@ class StubKnowledgeLayer:
                 it.status = status
         return True
 
-    def write(self, statement, tags=()):
+    def write(self, statement, tags=(), source_kind="explicit"):
         if self.fail:
             raise RuntimeError("write down")
         new_id = f"kn-new-{len(self.written) + 1}"

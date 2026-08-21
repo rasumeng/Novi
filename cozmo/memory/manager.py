@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..services import EmbeddingService
-from .. import config as cozmo_config
+from ..configuration.bootstrap import get_configuration
 from .lancedb_store import LanceStore
 
 log = logging.getLogger("cozmo.memory.manager")
@@ -84,7 +84,7 @@ class MemoryManager:
         if isinstance(embed_model, EmbeddingService):
             embed_service = embed_model
         else:
-            cfg = cozmo_config.load()
+            cfg = get_configuration().snapshot()
             model_name = embed_model or cfg.get("embedding", {}).get("model", "")
             embed_cfg = dict(cfg)
             embed_cfg.setdefault("embedding", {})["model"] = model_name
@@ -102,7 +102,7 @@ class MemoryManager:
             embed_func=embed,
             embed_dim=embed_dim,
             embed_model=embed_service.model_name,
-            vector_index=cozmo_config.load().get("vector_index", {}).get("enabled", True),
+            vector_index=get_configuration().get("vector_index.enabled", True),
         )
 
     def add_interaction(self, user: str, assistant: str):

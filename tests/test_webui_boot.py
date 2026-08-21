@@ -56,12 +56,13 @@ def _isolate_user_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("HOMEDRIVE", str(tmp_path))
     monkeypatch.setenv("HOMEPATH", "")
-    # Point the config module at a nonexistent file so load() returns
-    # defaults (ollama embedding backend) instead of the real user config.
-    import cozmo.config as cozmo_config
+    # Point the configuration framework at a nonexistent file so
+    # get_configuration() builds defaults (ollama embedding backend) instead
+    # of the real user config.
+    import cozmo.configuration.bootstrap as boot
 
-    monkeypatch.setattr(cozmo_config, "CONFIG_DIR", tmp_path / ".cozmo")
-    monkeypatch.setattr(cozmo_config, "CONFIG_PATH", tmp_path / ".cozmo" / "config.toml")
+    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".cozmo" / "config.toml")
+    monkeypatch.setattr(boot, "_configuration", None)
 
 
 @pytest.fixture(autouse=True)

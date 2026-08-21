@@ -33,17 +33,18 @@ def _hermetic(monkeypatch):
     from cozmo.memory import rebuild as rebuild_mod
     from cozmo.services.embedding_providers import OllamaEmbeddingProvider
 
-    def cfg():
-        return {
-            "embedding": {
-                "backend": "ollama",
-                "model": "nomic-embed-text",
-                "dimension": 768,
-            },
-            "ollama": {"url": "http://localhost:11434"},
-        }
+    class _StubConfig:
+        def snapshot(self):
+            return {
+                "embedding": {
+                    "backend": "ollama",
+                    "model": "nomic-embed-text",
+                    "dimension": 768,
+                },
+                "ollama": {"url": "http://localhost:11434"},
+            }
 
-    monkeypatch.setattr(rebuild_mod.cozmo_config, "load", cfg)
+    monkeypatch.setattr(rebuild_mod, "get_configuration", lambda: _StubConfig())
 
     def fake_embed(self, text):
         digest = hashlib.sha256(text.encode("utf-8")).digest()

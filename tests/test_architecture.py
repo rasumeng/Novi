@@ -35,7 +35,6 @@ HARDCODED_MODEL_PATTERNS = [
 # Ollama protocol keys (e.g. ``llama.context_length``) that are GGUF metadata
 # field names, not model names.
 ALLOWED_HARDCODE_FILES = {
-    "cozmo/config.py",         # DEFAULT_CONFIG with empty model values only
     "cozmo/ollama_util.py",    # deleted — no longer exists
     "cozmo/ollama.py",         # Ollama process mgmt (start/stop/check)
     "cozmo/cli.py",            # Ollama process mgmt integration
@@ -79,6 +78,7 @@ PROVIDER_ONLY_IMPORTS = [
 ALLOWED_PROVIDER_DIRS = {
     "cozmo/providers",
     "cozmo/runtime/providers",
+    "cozmo/runtime/models",
 }
 
 
@@ -312,6 +312,7 @@ def test_model_resolution_ownership():
     ]
     bypass_files = {
         "cozmo/runtime/model_selector.py",  # ModelSelector — owned by runtime, allowed
+        "cozmo/runtime/models/factory.py",  # ModelRuntime — thin provider boundary, allowed
     }
     violations = []
     for pyfile in _iter_py_files(COZMO_SRC):
@@ -465,3 +466,493 @@ def test_brain_observe_does_not_call_legacy_memory():
             raise AssertionError(
                 f"cozmo/brain/brain.py:{i}: legacy add_interaction still called from Brain"
             )
+
+
+# ── Phase 7 Stage 1 — ModelRuntime architecture guards ───────────────────
+
+def _iter_runtime_files():
+    """Yield all .py files under cozmo/runtime/ (incl. runtime/models/)."""
+    return _iter_py_files(COZMO_SRC / "runtime")
+
+
+# ── Guard 1 — no hardcoded model IDs in the runtime ──────────────────────
+
+def test_no_hardcoded_model_ids_in_runtime():
+    """The runtime (incl. cozmo/runtime/models/) must contain no model IDs.
+
+    The runtime receives ``selected_model.model`` from Cozmo's resolver; a
+    literal model name must never appear in runtime execution code.
+    """
+    violations = []
+    for pyfile in _iter_runtime_files():
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for pattern in HARDCODED_MODEL_PATTERNS:
+                if re.search(pattern, line, re.IGNORECASE):
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Hardcoded model IDs found in runtime execution code:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 2 — no model-name substring branching in runtime ───────────────
+
+def test_runtime_no_model_name_substring_conditionals():
+    """Model-name substrings must never drive runtime logic.
+
+    The runtime never branches on a model name; resolution happens strictly
+    upstream in Cozmo's model-selection system.
+    """
+    violations = []
+    for pyfile in _iter_runtime_files():
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for token in NAME_EVIDENCE_TOKENS:
+                if token in line and " in " in line:
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Model-name substring conditionals in runtime code:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 3 — LangChain model construction confined to providers/ + runtime/models ──
+
+def test_langchain_model_construction_confined():
+    """ChatOllama / ChatOpenAI construction imports stay inside the provider
+    boundary (cozmo/providers/, cozmo/runtime/models/).
+
+    Message-type imports from langchain_core in the runtime remain allowed —
+    they are not model construction.
+    """
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        is_allowed = any(rel.startswith(d) for d in ALLOWED_PROVIDER_DIRS)
+        if is_allowed:
+            continue
+        text = pyfile.read_text("utf-8", errors="replace")
+        for pattern in PROVIDER_ONLY_IMPORTS:
+            if pattern in text:
+                for i, line in enumerate(text.splitlines(), 1):
+                    if pattern in line and ("import" in line or "from" in line):
+                        violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "LangChain model construction outside the approved boundary:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 4 — no recommendation→execution coupling ───────────────────────
+
+def test_runtime_does_not_import_recommendation():
+    """The runtime must not import recommendation logic. Model selection is a
+    configuration-system concern; the runtime only executes the resolved
+    selection."""
+    forbidden = [
+        "configuration.recommendation",
+        "configuration.catalog",
+        "ModelRecommendationEngine",
+        "recommend",
+    ]
+    violations = []
+    for pyfile in _iter_runtime_files():
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for token in forbidden:
+                if token in line and ("import" in line or "from" in line):
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Runtime imports recommendation logic (recommendation→execution coupling):\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 5 — graph modules must never select/recommend models ───────────
+
+def test_graph_modules_never_select_models():
+    """If any LangGraph module exists it must receive its model from Cozmo's
+    resolver — it must never resolve, recommend, or select a model itself."""
+    graphs_dir = COZMO_SRC / "graphs"
+    if not graphs_dir.exists():
+        return  # no graphs in Stage 1 — guard is dormant
+    forbidden = [
+        "ModelService",
+        "ModelSelector",
+        "ModelRecommendationEngine",
+        "recommend",
+        "apply_selection",
+        "create_provider",
+        "configuration.resolver",
+        "llm.workloads",
+    ]
+    violations = []
+    for pyfile in graphs_dir.rglob("*.py"):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for token in forbidden:
+                if token in line and ("import" in line or "from" in line):
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Graph module selects/recommends its own model:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 6 — no model fallback/substitution vocabulary in the boundary ──
+
+def test_no_model_fallback_or_substitution_vocabulary():
+    """The model boundary must never express fallback/substitution of the
+    selected model. Tool-level fallbacks and retrieval source fallbacks are
+    unrelated and remain allowed."""
+    forbidden = [
+        "fallback_model",
+        "model_fallback",
+        "backup_model",
+        "substitute_model",
+        "alternate_model",
+        "auto_select",
+    ]
+    scope = [COZMO_SRC / "runtime" / "models", COZMO_SRC / "models"]
+    violations = []
+    for root in scope:
+        for pyfile in root.rglob("*.py"):
+            rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+            text = pyfile.read_text("utf-8", errors="replace")
+            for i, line in enumerate(text.splitlines(), 1):
+                if _is_comment(line):
+                    continue
+                for token in forbidden:
+                    if token in line:
+                        violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Model fallback/substitution vocabulary in the model boundary:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 7 — no Automatic vocabulary in the runtime/models boundary ─────
+
+def test_no_automatic_vocabulary_in_runtime_models():
+    """The runtime and model boundary must not reintroduce any Automatic
+    concept. Selection is user-explicit; there is no automatic mode."""
+    violations = []
+    scope = [COZMO_SRC / "runtime", COZMO_SRC / "models"]
+    for root in scope:
+        for pyfile in root.rglob("*.py"):
+            rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+            text = pyfile.read_text("utf-8", errors="replace")
+            for i, line in enumerate(text.splitlines(), 1):
+                if _is_comment(line):
+                    continue
+                if re.search(r"\b[Aa]utomatic\b", line):
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Automatic-selection vocabulary in runtime/models boundary:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard 8 — apply_selection is the sole selection writer ───────────────
+
+def test_apply_selection_is_sole_selection_writer():
+    """apply_selection() may only be referenced by the selection system and
+    the WebUI selection endpoints — never by runtime/model construction code.
+
+    It is the single persisted-selection write path (Phase 6 contract).
+    """
+    allowed = {
+        "cozmo/configuration/resolver.py",   # definition
+        "cozmo/configuration/catalog.py",    # docstring reference
+        "cozmo/webui_server.py",             # selection endpoints
+        "cozmo/runtime/models/factory.py",   # prohibition reference (never calls it)
+    }
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        if rel in allowed:
+            continue
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "apply_selection" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "apply_selection referenced outside the selection system (second writer):\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Phase 7 Stage 2 — legacy config shim guards ─────────────────────────
+# The legacy compatibility layer is gone: cozmo/config.py (deleted),
+# legacy_config()/COZMO_OLLAMA_URL (bootstrap.py), the raw-TOML CLI writes,
+# the PUT /api/config bulk endpoint, the sync cfg shadow dict, the
+# conversation ``mode`` field, run_stream ``force_mode``, and the brain=None
+# ``memory.add_interaction`` runtime fallback. These guards make sure none of
+# them regress.
+
+
+# ── Guard A — legacy config module erased ────────────────────────────────
+
+def test_no_legacy_config_module():
+    """The legacy ``cozmo/config.py`` dict-shim module must never return."""
+    assert not (COZMO_SRC / "config.py").exists(), \
+        "cozmo/config.py must stay deleted — bootstrap get_configuration() is the entry"
+    forbidden = ["config.load(", "config.init(", "legacy_config("]
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if any(tok in line for tok in forbidden):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Legacy config shim API still referenced in production:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard B — no environment-variable shims ─────────────────────────────
+
+def test_no_env_override_shims():
+    """The COZMO_OLLAMA_URL env hack (and friends) must never return."""
+    forbidden = ["COZMO_OLLAMA_URL", "_apply_env_overrides"]
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if any(tok in line for tok in forbidden):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Legacy env-override shims found:\n" + "\n".join(violations)
+        )
+
+
+# ── Guard C — no direct TOML writes outside the framework ───────────────
+
+def test_no_direct_toml_writes_outside_framework():
+    """Raw TOML serialization lives only inside cozmo/configuration/."""
+    forbidden = ["tomli_w", "toml.dump", '".toml", "w"']
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        if rel.startswith("cozmo/configuration/"):
+            continue
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if any(tok in line for tok in forbidden):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Direct TOML serialization outside the Configuration Framework:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard D — no legacy bulk config endpoint ────────────────────────────
+
+def test_no_legacy_put_config_endpoint():
+    """PUT /api/config (put_config) must not reappear in the WebUI server."""
+    webui = (COZMO_SRC / "webui_server.py").read_text("utf-8", errors="replace")
+    for i, line in enumerate(webui.splitlines(), 1):
+        if _is_comment(line):
+            continue
+        if "def put_config" in line or '@app.put("/api/config")' in line:
+            raise AssertionError(
+                f"cozmo/webui_server.py:{i}: legacy bulk-write endpoint returned"
+            )
+
+
+# ── Guard E — no legacy bulk-write consumers ────────────────────────────
+
+def test_no_legacy_config_write_consumers():
+    """No active frontend/backend code writes config via PUT /api/config."""
+    violations = []
+    for f in _iter_frontend_files():
+        rel = f.relative_to(PROJECT_ROOT).as_posix()
+        text = f.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith("//") or line.strip().startswith("*"):
+                continue
+            if "api/config" in line and "PUT" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "put_config" in line or "@app.put" in line and "/api/config" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Legacy bulk-write config consumers still present:\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard F — no conversation-mode persistence ──────────────────────────
+
+def test_no_conversation_mode_persistence():
+    """The obsolete conversation ``mode`` field must never be persisted."""
+    webui = (COZMO_SRC / "webui_server.py").read_text("utf-8", errors="replace")
+    forbidden = [
+        'body.get("mode"',
+        '"mode": mode',
+        "mode: {mode}",
+        'get("mode", "chat")',
+        '"mode": c.get("mode"',
+    ]
+    for i, line in enumerate(webui.splitlines(), 1):
+        if _is_comment(line):
+            continue
+        if any(tok in line for tok in forbidden):
+            raise AssertionError(
+                f"cozmo/webui_server.py:{i}: legacy conversation mode persisted: {line.strip()[:80]}"
+            )
+
+
+# ── Guard G — no force_mode ─────────────────────────────────────────────
+
+def test_no_force_mode_in_runtime():
+    """run_stream ``force_mode`` was removed — force_capability/force_model only."""
+    violations = []
+    for pyfile in _iter_runtime_files():
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if re.search(r"\bforce_mode\b", line):
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "force_mode returned (use force_capability / force_model):\n"
+            + "\n".join(violations)
+        )
+
+
+# ── Guard H — no brain=None memory fallback in the runtime ──────────────
+
+def test_no_legacy_memory_fallback_in_runtime():
+    """The runtime never writes to MemoryManager directly.
+
+    _remember routes through Brain.observe only; the brain=None
+    memory.add_interaction fallback was removed (Phase 7 Stage 2).
+    """
+    violations = []
+    for pyfile in _iter_runtime_files():
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "add_interaction" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Legacy memory fallback in the runtime:\n" + "\n".join(violations)
+        )
+
+
+# ── Guard I — single configuration authority ────────────────────────────
+
+def test_configuration_constructed_only_in_framework():
+    """Configuration instances are built only inside cozmo/configuration/.
+
+    Every other consumer reads/writes through ``get_configuration()`` — the
+    single composition root for configuration state.
+    """
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        if rel.startswith("cozmo/configuration/"):
+            continue
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "Configuration(" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "Configuration constructed outside the framework:\n" + "\n".join(violations)
+        )
+
+
+# ── Guard J — CLI config goes through the framework ─────────────────────
+
+def test_cli_config_uses_framework():
+    """config_cli.py must route every read/write through the framework."""
+    cli_cfg = COZMO_SRC / "config_cli.py"
+    if not cli_cfg.exists():
+        raise AssertionError("cozmo/config_cli.py missing")
+    text = cli_cfg.read_text("utf-8", errors="replace")
+    if "get_configuration" not in text:
+        raise AssertionError("config_cli.py must use get_configuration()")
+    for i, line in enumerate(text.splitlines(), 1):
+        if _is_comment(line):
+            continue
+        if any(tok in line for tok in ("tomli_w", "config_mod", ".write_text(", 'open(""')):
+            raise AssertionError(
+                f"cozmo/config_cli.py:{i}: direct config file I/O: {line.strip()[:80]}"
+            )
+
+
+# ── Guard K — knowledge directory owned by configuration ─────────────────
+
+def test_no_cwd_relative_knowledge_path():
+    """M1: the knowledge base directory must come from ``workspace.knowledge``,
+    never a CWD-relative ``./knowledge`` literal.
+
+    The knowledge base lives under the configured workspace
+    (``~/.cozmo/knowledge`` by default); a process that starts elsewhere must
+    not silently read/write a different ``./knowledge`` folder.
+    """
+    forbidden = ['"./knowledge"', "KNOWLEDGE = Path", "Path('./knowledge')"]
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            for tok in forbidden:
+                if tok in line:
+                    violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "CWD-relative knowledge path returned (use workspace.knowledge):\n"
+            + "\n".join(violations)
+        )

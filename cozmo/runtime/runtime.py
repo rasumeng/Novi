@@ -188,6 +188,8 @@ class CozmoRuntime:
         debug_trace: bool = False,
         brain=None,
         mcp_permissions=None,
+        research_graph=None,
+        coding_graph=None,
     ):
         self.model_service = model_service
         self.simple_llm = simple_llm
@@ -264,6 +266,17 @@ class CozmoRuntime:
         self.mcp_permissions = mcp_permissions
         if mcp_permissions is not None:
             self.tool_executor.mcp_permissions = mcp_permissions
+        # Phase 7 Stage 3C: LangGraph research workflow. When wired (composition
+        # root) the research intent executes through the graph's explicit
+        # search/evaluate/synthesize/validate transitions instead of the
+        # hand-rolled inline ReAct loop. None = legacy behavior unchanged.
+        self._research_graph = research_graph
+        # Phase 7 Stage 3D: LangGraph coding workflow. When wired the coding
+        # intent executes through the graph's explicit
+        # implement/verify transitions (bounded re-implement loop) while tool
+        # execution stays in the runtime's ReAct loop / ToolExecutor. None =
+        # legacy behavior unchanged.
+        self._coding_graph = coding_graph
         # NOTE: legacy inline-planning knobs were removed in Milestone 5
         # Phase 3 — PlannerEngine is the sole planning authority.
     def set_config(self, **kwargs):
@@ -404,7 +417,6 @@ class CozmoRuntime:
         return content
     def run_stream(self, user_input: str | None = None,
                    attachments: list[dict] | None = None,
-                   force_mode: str | None = None,
                    force_capability: str | None = None,
                    force_model: str | None = None,
                    execution_plan: object | None = None,
@@ -449,11 +461,6 @@ class CozmoRuntime:
             elif self._orchestrator is not None:
                 ctx.analysis = self._orchestrator.analyze(user_input, self.history, has_images)
                 ctx.allowed_tools = self._capability_registry.get_tool_names(ctx.cap_ids)
-            elif force_mode is not None:
-                log.warning("force_mode='%s' is deprecated. Use force_capability / force_model.", force_mode)
-                cap_name = ctx.force_capability or force_mode
-                ctx.allowed_tools = self._capability_registry.get_tool_names(
-                    self._intent_cap_ids.get(cap_name, ["conversation"]))
             else:
                 intent = classify_intent(user_input, self.simple_llm, self.history, has_images)
                 cap_name = ctx.force_capability or intent.value
@@ -607,9 +614,7 @@ class CozmoRuntime:
             if not ctx.model_supports_tools:
                 lc_tools = []
 
-            mm = self.model_service
-            runnable = (mm.bind_model(ctx.model_name, lc_tools, temperature=ctx.temperature)
-                        if lc_tools else mm.client_for_model(ctx.model_name, ctx.temperature))
+            runnable = self._bind_runnable(ctx, lc_tools)
 
             full_grounding = ctx.grounding_text
 
@@ -665,7 +670,84 @@ class CozmoRuntime:
             final = ""
             stop_reason = "completed"
 
-            if plan_steps:
+            if self._research_graph is not None and intent_str == "research":
+                # Phase 7 Stage 3C: LangGraph research workflow. The graph
+                # composes the existing retrieval/evidence pipeline into
+                # explicit search→evaluate→synthesize→validate transitions and
+                # receives the runnable Cozmo bound for THIS run. Plan/step
+                # lifecycle stays the runtime's contract.
+                from ..planner.models import PlanStatus, PlanStepStatus
+
+                if plan_ref is not None:
+                    plan_ref.status = PlanStatus.ACTIVE
+                    self._emit_bus(EventType.PLAN_STARTED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_count=remaining_steps)
+                    yield ("plan.started", plan_ref.id,
+                           "Research workflow (LangGraph)")
+
+                state = self._research_graph_state(ctx, runnable, base_msgs, user_input)
+                result = self._research_graph.run(state)
+                final = result.get("answer") or ""
+                stop_reason = "completed" if final.strip() else "empty"
+
+                if plan_ref is not None:
+                    for plan_step in plan_steps:
+                        plan_step.status = PlanStepStatus.COMPLETED
+                        plan_step.result = final
+                    plan_ref.status = PlanStatus.COMPLETED
+                    self._emit_bus(EventType.PLAN_COMPLETED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_count=len(plan_steps))
+                    yield ("plan.completed", plan_ref.id,
+                           f"Completed {len(plan_steps)} step(s) (research workflow)")
+
+                yield ("token", final)
+            elif self._coding_graph is not None and intent_str == "coding":
+                # Phase 7 Stage 3D: LangGraph coding workflow. The graph
+                # orchestrates implement→verify (bounded re-implement loop);
+                # each implement attempt delegates to the runtime's ReAct
+                # agent loop (``run_loop``), which routes every tool call
+                # through ToolExecutor's permission/risk gate. The loop's
+                # stream events are captured and replayed here, so streaming
+                # and plan/step lifecycle stay the runtime's contract.
+                from ..planner.models import PlanStatus, PlanStepStatus
+
+                if plan_ref is not None:
+                    plan_ref.status = PlanStatus.ACTIVE
+                    self._emit_bus(EventType.PLAN_STARTED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_count=remaining_steps)
+                    yield ("plan.started", plan_ref.id,
+                           "Coding workflow (LangGraph)")
+
+                state = self._coding_graph_state(
+                    ctx, runnable, base_msgs, user_input, step_budget)
+                result = self._coding_graph.run(state)
+                for ev in result.get("events") or []:
+                    yield ev
+                final = result.get("answer") or ""
+                stop_reason = result.get("stop_reason") or (
+                    "completed" if final.strip() else "empty")
+                if final.strip() and not any(
+                        ev and ev[0] == "token" for ev in (result.get("events") or [])):
+                    yield ("token", final)
+
+                if plan_ref is not None:
+                    for plan_step in plan_steps:
+                        plan_step.status = PlanStepStatus.COMPLETED
+                        plan_step.result = final
+                    plan_ref.status = PlanStatus.COMPLETED
+                    self._emit_bus(EventType.PLAN_COMPLETED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_count=len(plan_steps))
+                    yield ("plan.completed", plan_ref.id,
+                           f"Completed {len(plan_steps)} step(s) (coding workflow)")
+            elif plan_steps:
                 from ..planner.models import PlanStatus, PlanStepStatus
 
                 plan_ref.status = PlanStatus.ACTIVE
@@ -703,7 +785,7 @@ class CozmoRuntime:
                     step_reason = "completed"
                     step_tools: list[dict] = []
                     for chunk in self._run_agent_loop(
-                            ctx, mm, runnable, intent_str, step_budget, base_msgs,
+                            ctx, runnable, intent_str, step_budget, base_msgs,
                             step=plan_step, step_index_base=len(ctx.trace.steps)):
                         if chunk[0] == _LOOP_DONE:
                             step_final, step_reason, step_ok = chunk[1], chunk[2], chunk[3]
@@ -765,7 +847,7 @@ class CozmoRuntime:
                 # plan/step lifecycle events — they belong to planned execution.
                 # Standalone/direct runs (no orchestrator) rely on this path.
                 for chunk in self._run_agent_loop(
-                        ctx, mm, runnable, intent_str, step_budget, base_msgs,
+                        ctx, runnable, intent_str, step_budget, base_msgs,
                         step=None, step_index_base=0):
                     if chunk[0] == _LOOP_DONE:
                         final, stop_reason, _ = chunk[1], chunk[2], chunk[3]
@@ -825,7 +907,87 @@ class CozmoRuntime:
             self.event_bus.emit(event_type, **data)
         except Exception:
             pass
-    def _run_agent_loop(self, ctx, mm, runnable, intent_str, step_budget,
+    def _research_graph_state(self, ctx, runnable, base_msgs, user_input):
+        """Build the per-run state handed to the research graph.
+
+        The graph receives the ALREADY-resolved, ALREADY-bound runnable
+        (``state["model"]``), the runtime's system prompt, and per-run
+        search/coordinator collaborators so it composes the runtime's own
+        retrieval executor and budget authority.
+        """
+        graph = self._research_graph
+
+        def search(query: str):
+            return self.retrieval_executor.execute_search(query, trace=ctx.trace)
+
+        return {
+            "user_input": user_input,
+            "analysis": ctx.analysis,
+            "retrieval_plan": ctx.retrieval_plan,
+            "grounding_text": ctx.grounding_text,
+            "quality": ctx.grounding_quality or "",
+            "query": user_input,
+            "search_attempts": 0,
+            "max_search_attempts": graph.max_search_attempts,
+            "system_prompt": base_msgs[0].content if base_msgs else "",
+            "plan_step_index": ctx.resume_from or 0,
+            "model": runnable,
+            "search": search,
+            "coordinator": ctx.retrieval_coordinator,
+        }
+
+    def _coding_graph_state(self, ctx, runnable, base_msgs, user_input, step_budget):
+        """Build the per-run state handed to the coding graph.
+
+        The graph receives the ALREADY-resolved, ALREADY-bound runnable
+        (``state["model"]``) and a ``run_loop`` callable wrapping the runtime's
+        ReAct agent loop for one implement attempt. The callable consumes the
+        loop's stream into an event list the runtime replays, so tool
+        execution, permission gating, and streaming all stay with the
+        runtime/ToolExecutor boundaries.
+        """
+
+        def run_loop(state):
+            events = []
+            final, reason, ok = "", "completed", True
+            for chunk in self._run_agent_loop(
+                    ctx, runnable, "coding", step_budget, base_msgs,
+                    step=None, step_index_base=0):
+                events.append(chunk)
+                if chunk[0] == _LOOP_DONE:
+                    final, reason, ok = chunk[1], chunk[2], chunk[3]
+            return events, final, reason, ok
+
+        return {
+            "user_input": user_input,
+            "analysis": ctx.analysis,
+            "retrieval_plan": ctx.retrieval_plan,
+            "system_prompt": base_msgs[0].content if base_msgs else "",
+            "plan_step_index": ctx.resume_from or 0,
+            "model": runnable,
+            "run_loop": run_loop,
+        }
+
+    def _bind_runnable(self, ctx, tools, temperature: float | None = None):
+        """Single runtime binding seam.
+
+        Constructs the LangChain runnable for the ALREADY-resolved
+        ``ctx.model_name`` through ``ModelService → ModelRuntime → providers``.
+
+        Recovery/escalation logic must call this instead of reconstructing
+        LangChain runnables inline. When ``tools`` is non-empty the model is
+        bound to them (``bind_model``); otherwise a plain chat client is built
+        (``client_for_model``). ``ctx.model_name`` was resolved verbatim from
+        ``llm.workloads.<workload>.model`` before this point — no selection,
+        substitution, or fallback happens here.
+        """
+        temp = ctx.temperature if temperature is None else temperature
+        mm = self.model_service
+        if tools:
+            return mm.bind_model(ctx.model_name, tools, temperature=temp)
+        return mm.client_for_model(ctx.model_name, temperature=temp)
+
+    def _run_agent_loop(self, ctx, runnable, intent_str, step_budget,
                         base_msgs, step=None, step_index_base=0):
         """Run the ReAct loop for one plan step (or a whole unplanned run).
 
@@ -903,8 +1065,7 @@ class CozmoRuntime:
                             search_tools = self._capability_registry.get_tool_names(["search"])
                             ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
                             lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
-                            mm = self.model_service
-                            runnable = mm.bind_model(ctx.model_name, lc_tools, temperature=ctx.temperature)
+                            runnable = self._bind_runnable(ctx, lc_tools)
                             msgs.append(SystemMessage(
                                 content="[Web search tools (web_search, web_fetch) are now available. "
                                         "Use them if you need current information.]"
@@ -985,7 +1146,7 @@ class CozmoRuntime:
                         search_tools = self._capability_registry.get_tool_names(["search"])
                         ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
                         new_lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
-                        runnable = mm.bind_model(ctx.model_name, new_lc_tools, temperature=ctx.temperature)
+                        runnable = self._bind_runnable(ctx, new_lc_tools)
                         state = self.retrieval_executor.commit_recovery(ctx, recovery_decision, "post_tool_escalation")
                         msgs.append(SystemMessage(
                             content="[Knowledge base returned no results. Web search tools "
@@ -1046,12 +1207,6 @@ class CozmoRuntime:
                     assistant=final,
                     conversation_id=conversation_id or None,
                 ))
-            except Exception:
-                pass
-            return
-        if self.memory and hasattr(self.memory, "add_interaction"):
-            try:
-                self.memory.add_interaction(user_input, final)
             except Exception:
                 pass
     def _compact(self):

@@ -44,8 +44,25 @@ def _config(general_model=""):
     }
 
 
+class _StubConfig:
+    """Read-only config facade implementing the framework ``.get`` dotted API."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def get(self, key, default=None):
+        node = self._data
+        for part in key.split("."):
+            if isinstance(node, dict) and part in node:
+                node = node[part]
+            else:
+                return default
+        return node
+
+
 def _patch_config(cfg):
-    return patch("cozmo.config.load", return_value=cfg)
+    return patch("cozmo.configuration.bootstrap.get_configuration",
+                 return_value=_StubConfig(cfg))
 
 
 def _fake_caps(supports_vision):

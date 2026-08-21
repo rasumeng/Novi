@@ -25,7 +25,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from .. import config as cozmo_config
+from ..configuration.bootstrap import get_configuration
 
 log = logging.getLogger("cozmo.memory.rebuild")
 
@@ -77,7 +77,7 @@ def rebuild(home: Path) -> dict:
 def _reindex_knowledge(knowledge_dir: str, persist_dir: str) -> int:
     from ..services.embedding import EmbeddingService
 
-    cfg = cozmo_config.load()
+    cfg = get_configuration().snapshot()
     cfg.setdefault("embedding", {}).setdefault("dimension", 768)
     from ..memory.knowledge_index import KnowledgeIndex
 

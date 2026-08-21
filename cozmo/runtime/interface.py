@@ -26,7 +26,6 @@ class RuntimeInterface(Protocol):
     def run_stream(self,
                    user_input: str | None = None,
                    attachments: list[dict] | None = None,
-                   force_mode: str | None = None,
                    agent_runtime: object | None = None,
                    force_capability: str | None = None,
                    force_model: str | None = None,

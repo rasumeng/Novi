@@ -174,7 +174,7 @@ def test_webui_execution_persists_checkpoint(webui_backend, monkeypatch):
     """A normal WebUI execution → exactly one Job → durable Checkpoint."""
     import cozmo.webui_server as ws
     backend = webui_backend
-    monkeypatch.setattr(ws, "get_backend", lambda cfg: backend)
+    monkeypatch.setattr(ws, "get_backend", lambda cfg=None: backend)
 
     harness = _HarnessRuntime()
     monkeypatch.setattr(ws, "CozmoRuntime", _fake_cozmo_runtime_factory(harness))
@@ -222,7 +222,7 @@ def test_webui_plan_started_does_not_double_create_job(webui_backend,
     JobLifecycle whose plan.started fallback is ready to create a second."""
     import cozmo.webui_server as ws
     backend = webui_backend
-    monkeypatch.setattr(ws, "get_backend", lambda cfg: backend)
+    monkeypatch.setattr(ws, "get_backend", lambda cfg=None: backend)
 
     harness = _HarnessRuntime()
     monkeypatch.setattr(ws, "CozmoRuntime", _fake_cozmo_runtime_factory(harness))
