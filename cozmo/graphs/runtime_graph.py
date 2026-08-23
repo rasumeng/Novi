@@ -45,8 +45,9 @@ from .state import RuntimeState, append_error, should_stop
 
 log = logging.getLogger("cozmo.graphs.runtime")
 
-# Mirrors Runtime._run_agent_loop's terminal strings so downstream consumers
-# see identical stop_reason/completion vocabulary on both paths.
+# Mirrors the generic ReAct executor's (cozmo/runtime/react_attempt.py)
+# terminal strings so downstream consumers see identical stop_reason and
+# completion vocabulary on both paths.
 _MAX_STEPS_MESSAGE = (
     "I ran out of steps before finishing. Here's where I got to — ask me to "
     "continue if you want me to keep going."

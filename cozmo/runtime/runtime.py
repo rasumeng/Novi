@@ -870,9 +870,25 @@ class CozmoRuntime:
                     step_ok = True
                     step_reason = "completed"
                     step_tools: list[dict] = []
-                    for chunk in self._run_agent_loop(
-                            ctx, runnable, intent_str, step_budget, base_msgs,
-                            step=plan_step, step_index_base=len(ctx.trace.steps)):
+                    # Phase 9C: the sequential planned-step path drives the
+                    # generic single-attempt ReAct executor directly.
+                    for chunk in run_react_attempt(
+                            ctx=ctx,
+                            runnable=runnable,
+                            tool_executor=self.tool_executor,
+                            tracer=self.tracer,
+                            retrieval_executor=self.retrieval_executor,
+                            capability_registry=self._capability_registry,
+                            scan_skills=self._scan_skills,
+                            skill_block=self._skill_block,
+                            bind_runnable=self._bind_runnable,
+                            stop_probe=self._stop_probe(),
+                            event_bus=self.event_bus,
+                            debug_trace=self.debug_trace,
+                            step_budget=step_budget,
+                            base_msgs=base_msgs,
+                            step=plan_step,
+                            step_index_base=len(ctx.trace.steps)):
                         if chunk[0] == _LOOP_DONE:
                             step_final, step_reason, step_ok = chunk[1], chunk[2], chunk[3]
                         else:
@@ -932,9 +948,24 @@ class CozmoRuntime:
                 # single unplanned ReAct loop. This intentionally bypasses the
                 # plan/step lifecycle events — they belong to planned execution.
                 # Standalone/direct runs (no orchestrator) rely on this path.
-                for chunk in self._run_agent_loop(
-                        ctx, runnable, intent_str, step_budget, base_msgs,
-                        step=None, step_index_base=0):
+                # Phase 9C: drives the generic executor directly.
+                for chunk in run_react_attempt(
+                        ctx=ctx,
+                        runnable=runnable,
+                        tool_executor=self.tool_executor,
+                        tracer=self.tracer,
+                        retrieval_executor=self.retrieval_executor,
+                        capability_registry=self._capability_registry,
+                        scan_skills=self._scan_skills,
+                        skill_block=self._skill_block,
+                        bind_runnable=self._bind_runnable,
+                        stop_probe=self._stop_probe(),
+                        event_bus=self.event_bus,
+                        debug_trace=self.debug_trace,
+                        step_budget=step_budget,
+                        base_msgs=base_msgs,
+                        step=None,
+                        step_index_base=0):
                     if chunk[0] == _LOOP_DONE:
                         final, stop_reason, _ = chunk[1], chunk[2], chunk[3]
                     else:
@@ -1132,12 +1163,13 @@ class CozmoRuntime:
                 msgs.append(SystemMessage(
                     content="VERIFICATION FEEDBACK from your previous "
                             f"attempt:\n{feedback}"))
-            # Phase 9B: implement attempts execute through the generic
+            # Phase 9B/9C: implement attempts execute through the generic
             # single-attempt ReAct executor DIRECTLY — the historical
-            # _run_agent_loop entry point is bypassed (it remains only for
-            # the sequential/unplanned paths). Collaborator wiring is
-            # identical to the wrapper's delegation, so event tuples,
-            # dedup/cancellation/recovery semantics are unchanged.
+            # _run_agent_loop entry point was retired in Phase 9C and the
+            # executor is the sole generic ReAct loop. Collaborator wiring is
+            # identical to the sequential/unplanned call sites in run_stream,
+            # so event tuples, dedup/cancellation/recovery semantics are
+            # unchanged.
             for chunk in run_react_attempt(
                     ctx=ctx,
                     runnable=runnable,
@@ -1314,45 +1346,6 @@ class CozmoRuntime:
             return mm.bind_model(ctx.model_name, tools, temperature=temp)
         return mm.client_for_model(ctx.model_name, temperature=temp)
 
-    def _run_agent_loop(self, ctx, runnable, intent_str, step_budget,
-                        base_msgs, step=None, step_index_base=0,
-                        seed_seen=None):
-        """Thin delegation wrapper (Phase 9B) over the generic single-attempt
-        ReAct executor.
-
-        The loop body was extracted VERBATIM into
-        ``cozmo.runtime.react_attempt.run_react_attempt``; this wrapper exists
-        only so the sequential planned-step path and the unplanned path keep
-        their historical entry point — same signature, same lazy-generator
-        semantics, identical event stream. ``intent_str`` is vestigial (the
-        loop body never referenced it). CodingGraph's ``run_loop``
-        collaborator targets the executor DIRECTLY (see
-        ``_coding_graph_state``), leaving exactly two production callers for
-        this wrapper; retire it only when zero callers remain AND parity has
-        been proven.
-
-        Do not grow loop mechanics back into this method — the executor owns
-        them.
-        """
-        yield from run_react_attempt(
-            ctx=ctx,
-            runnable=runnable,
-            tool_executor=self.tool_executor,
-            tracer=self.tracer,
-            retrieval_executor=self.retrieval_executor,
-            capability_registry=self._capability_registry,
-            scan_skills=self._scan_skills,
-            skill_block=self._skill_block,
-            bind_runnable=self._bind_runnable,
-            stop_probe=self._stop_probe(),
-            event_bus=self.event_bus,
-            debug_trace=self.debug_trace,
-            step_budget=step_budget,
-            base_msgs=base_msgs,
-            step=step,
-            step_index_base=step_index_base,
-            seed_seen=seed_seen,
-        )
     def run(self, user_input: str, attachments: list[dict] | None = None) -> str:
         chunks = []
         for kind, text in self.run_stream(user_input, attachments):

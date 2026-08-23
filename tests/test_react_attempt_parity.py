@@ -1,23 +1,29 @@
-"""Phase 9B — react_attempt extraction parity & boundary tests.
+"""Phase 9C — react_attempt retirement parity & architecture tests.
 
-The ReAct loop body moved verbatim from ``CozmoRuntime._run_agent_loop`` into
-``cozmo.runtime.react_attempt.run_react_attempt``. These tests prove:
+Phase 9B extracted the ReAct loop body verbatim from
+``CozmoRuntime._run_agent_loop`` into
+``cozmo.runtime.react_attempt.run_react_attempt``. Phase 9C retired the
+wrapper entirely: every consumer — sequential planned steps, the unplanned
+path, and the coding graph's ``run_loop`` collaborator — now drives the
+executor directly. These tests prove:
 
-1. GOLDEN PARITY — the delegation wrapper and a direct executor wiring that
-   replicates the coding ``run_loop`` collaborator produce identical event
-   streams (including ``_LOOP_DONE`` payloads) across every terminal path:
-   completion, tool rounds, duplicate-call dedup, max-steps, empty output,
-   mid-stream model failure, pre-run cancellation, mid-round cancellation.
+1. GOLDEN PARITY — the executor produces identical event streams (including
+   ``_LOOP_DONE`` payloads) across every terminal path: completion, tool
+   rounds, duplicate-call dedup, max-steps, empty output, mid-stream model
+   failure, pre-run cancellation, mid-round cancellation. The planned-step
+   and unplanned production wirings are behaviorally interchangeable when
+   their explicit step parameters match.
 2. GOLDEN LITERALS — key legacy vocabulary is pinned against hardcoded
-   expected tuples so "wrapper == executor" cannot mask joint drift.
+   expected tuples so joint drift cannot hide behind a passing comparison.
 3. EXECUTOR-DIRECT DEDUP — the Phase 8F seed_seen contract driven through
-   ``run_react_attempt`` itself (mirrors the wrapper-level hardening tests).
+   ``run_react_attempt`` itself.
 4. CLOSURE INTEGRATION — the real ``run_loop`` collaborator + real executor
    blocks an identical mutating repeat across repair attempts end-to-end.
-5. ARCHITECTURE GUARDS — the wrapper stays pure delegation, the executor
-   never imports the graph layer, the coding state builder targets the
-   executor (not the wrapper), RuntimeWorkflowGraph is untouched by the
-   extraction, and the sentinel contract is preserved.
+5. ARCHITECTURE GUARDS — no production definition or caller of
+   ``_run_agent_loop`` remains, ``run_react_attempt`` is the sole generic
+   ReAct loop, the executor never imports the graph layer or storage, the
+   coding state builder targets the executor directly, RuntimeWorkflowGraph
+   is untouched, and the sentinel contract is preserved.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ import inspect
 import json
 import re
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -50,6 +57,22 @@ _DEDUP_WORDING = (
     "Error: you already made this exact {name} call "
     "and have its result above. Use it, or try a "
     "DIFFERENT call — do not repeat yourself.")
+
+# Collaborator kwargs shared verbatim by ALL three production call sites
+# (sequential planned steps, unplanned single-run, coding run_loop).
+_COLLABORATOR_KWARGS = [
+    "ctx=ctx",
+    "tool_executor=self.tool_executor",
+    "tracer=self.tracer",
+    "retrieval_executor=self.retrieval_executor",
+    "capability_registry=self._capability_registry",
+    "scan_skills=self._scan_skills",
+    "skill_block=self._skill_block",
+    "bind_runnable=self._bind_runnable",
+    "stop_probe=self._stop_probe()",
+    "event_bus=self.event_bus",
+    "debug_trace=self.debug_trace",
+]
 
 
 # ── scripted collaborators ───────────────────────────────────────────────────
@@ -202,8 +225,25 @@ def _wire(rt, ctx, runnable, budget, seed=None):
     )
 
 
-def _drive(path: str, cfg: dict):
-    """Run ONE scenario through 'wrapper' or 'executor' on fresh, identically
+def _wire_planned_like(rt, ctx, runnable, budget, step, base_msgs, seed=None):
+    """Kwarg expansion mirroring run_stream's SEQUENTIAL PLANNED-STEP site:
+    identical collaborators, plus the site's step/step_index_base choices."""
+    kw = _wire(rt, ctx, runnable, budget, seed=seed)
+    kw["base_msgs"] = base_msgs
+    kw["step"] = step
+    kw["step_index_base"] = len(ctx.trace.steps)
+    return kw
+
+
+def _wire_unplanned_like(rt, ctx, runnable, budget, base_msgs, seed=None):
+    """Kwarg expansion mirroring run_stream's UNPLANNED SINGLE-RUN site."""
+    kw = _wire(rt, ctx, runnable, budget, seed=seed)
+    kw["base_msgs"] = base_msgs
+    return kw
+
+
+def _drive(cfg: dict, wire=None):
+    """Run ONE scenario through the canonical executor on fresh, identically
     constructed fixtures. Returns (events, trace_projection, fx)."""
     fx = _FakeToolExecutor(results=cfg.get("tool_results"))
     fr = _FakeRetrieval()
@@ -217,15 +257,9 @@ def _drive(path: str, cfg: dict):
                            if cfg.get("stop_after_stream") else None)
     ctx = _make_ctx()
 
-    if path == "wrapper":
-        gen = rt._run_agent_loop(ctx, model, "coding",
-                                 cfg.get("budget", 3),
-                                 [SystemMessage(content="sys")],
-                                 seed_seen=set(cfg.get("seed") or ()))
-    else:
-        gen = react_attempt.run_react_attempt(
-            **_wire(rt, ctx, model, cfg.get("budget", 3),
-                    seed=cfg.get("seed")))
+    builder = wire or (lambda rt_, ctx_, model_, cfg_: _wire(
+        rt_, ctx_, model_, cfg_.get("budget", 3), seed=cfg_.get("seed")))
+    gen = react_attempt.run_react_attempt(**builder(rt, ctx, model, cfg))
     events = list(gen)
 
     steps = [{
@@ -258,6 +292,9 @@ SCENARIOS = {
     "stream_error": dict(
         turns=[[_tc("read_file", {"path": "a.py"}, "c1")], _RAISE()],
         tool_results={"read_file": "ok"}),
+    "tool_failure": dict(
+        turns=[[_tc("write_file", {"path": "a.py"}, "c1")], "recovered"],
+        tool_results={"write_file": "Error: permission denied"}),
     "cancelled_before_run": dict(turns=["never reached"], stop=True),
     "cancelled_mid_round": dict(
         turns=[[_tc("read_file", {"path": "a.py"}, "c1")], "later"],
@@ -266,14 +303,25 @@ SCENARIOS = {
 
 
 @pytest.mark.parametrize("scenario", sorted(SCENARIOS))
-@pytest.mark.parametrize("path", ["wrapper", "executor"])
-def test_golden_parity_wrapper_equals_executor_direct(scenario, path):
-    events, trace_proj, _fx = _drive(path, SCENARIOS[scenario])
-    # Reference run through the OTHER path must be byte-identical.
-    other = "executor" if path == "wrapper" else "wrapper"
-    ref_events, ref_trace, _fx2 = _drive(other, SCENARIOS[scenario])
-    assert events == ref_events, f"{scenario}: event streams diverged"
-    assert trace_proj == ref_trace, f"{scenario}: traces diverged"
+def test_golden_parity_planned_site_equals_unplanned_site(scenario):
+    """Both retired-wrapper replacement sites feed the executor through
+    IDENTICAL collaborator expansions; with matching explicit step
+    parameters their event streams must be byte-identical."""
+    cfg = SCENARIOS[scenario]
+    msgs = [SystemMessage(content="sys")]
+
+    def planned(rt, ctx, model, cfg_):
+        return _wire_planned_like(rt, ctx, model, cfg_.get("budget", 3),
+                                  None, msgs, seed=cfg_.get("seed"))
+
+    def unplanned(rt, ctx, model, cfg_):
+        return _wire_unplanned_like(rt, ctx, model, cfg_.get("budget", 3),
+                                    msgs, seed=cfg_.get("seed"))
+
+    a_events, a_trace, _ = _drive(cfg, wire=planned)
+    b_events, b_trace, _ = _drive(cfg, wire=unplanned)
+    assert a_events == b_events, f"{scenario}: event streams diverged"
+    assert a_trace == b_trace, f"{scenario}: traces diverged"
 
 
 def test_golden_parity_seed_seen_symmetry():
@@ -282,17 +330,25 @@ def test_golden_parity_seed_seen_symmetry():
     cfg = dict(turns=[[_tc("write_file", {"path": "a.py", "content": "x"},
                            "x1")]],
                seed={sig}, tool_results={"write_file": "[written]"})
-    a_events, _, a_fx = _drive("wrapper", cfg)
-    b_events, _, b_fx = _drive("executor", cfg)
+    msgs = [SystemMessage(content="sys")]
+    fx = _FakeToolExecutor(results=cfg["tool_results"])
+    rt = _make_rt(fx, _FakeRetrieval())
+    model = _ScriptedModel(list(cfg["turns"]))
+    ctx_a, ctx_b = _make_ctx(), _make_ctx()
+    a_events = list(react_attempt.run_react_attempt(**_wire_planned_like(
+        rt, ctx_a, model, 3, None, msgs, seed=cfg["seed"])))
+    model_b = _ScriptedModel(list(cfg["turns"]))
+    b_events = list(react_attempt.run_react_attempt(**_wire_unplanned_like(
+        rt, ctx_b, model_b, 3, msgs, seed=cfg["seed"])))
     assert a_events == b_events
-    assert a_fx.calls == [] and b_fx.calls == []
+    assert fx.calls == []
 
 
 # ── golden literals ──────────────────────────────────────────────────────────
 
 
 def test_literal_plain_answer_vocabulary():
-    events, _, _ = _drive("executor", SCENARIOS["plain_answer"])
+    events, _, _ = _drive(SCENARIOS["plain_answer"])
     assert events == [
         ("token", "Hello"),
         ("token", " there"),
@@ -301,8 +357,7 @@ def test_literal_plain_answer_vocabulary():
 
 
 def test_literal_tool_round_sequence_with_category_and_diff():
-    events, trace_proj, _ = _drive("executor",
-                                   SCENARIOS["single_tool_round"])
+    events, trace_proj, _ = _drive(SCENARIOS["single_tool_round"])
     assert events == [
         ("thinking", "Running: read_file",
          'read_file({"path": "a.py"})', None),
@@ -338,7 +393,7 @@ def test_literal_duplicate_call_gets_legacy_message_and_skips_execution():
 
 
 def test_literal_max_steps_wording_and_reason():
-    events, _, _ = _drive("executor", SCENARIOS["max_steps"])
+    events, _, _ = _drive(SCENARIOS["max_steps"])
     assert events[-1] == (_LOOP_DONE, _MAX_STEPS_WORDING, "max_steps", False)
     assert ("token", _MAX_STEPS_WORDING) in events
     assert len([e for e in events if e[0] == "tool_result"]) == 2
@@ -347,7 +402,7 @@ def test_literal_max_steps_wording_and_reason():
 def test_literal_empty_output_fallback():
     """Legacy quirk preserved verbatim: a fully empty model output is
     replaced by the fallback wording, which then reads as 'completed'."""
-    events, _, _ = _drive("executor", SCENARIOS["empty_output"])
+    events, _, _ = _drive(SCENARIOS["empty_output"])
     assert events == [
         ("token", _EMPTY_WORDING),
         (_LOOP_DONE, _EMPTY_WORDING, "completed", True),
@@ -355,15 +410,52 @@ def test_literal_empty_output_fallback():
 
 
 def test_literal_error_path_converts_exception_to_sentinel():
-    events, _, _ = _drive("executor", SCENARIOS["stream_error"])
+    events, _, _ = _drive(SCENARIOS["stream_error"])
     assert events[-1] == (_LOOP_DONE, "I hit an error: model exploded",
                           "error", False)
     assert ("token", "I hit an error: model exploded") in events
     assert any(e[0] == "tool_result" for e in events[:-2])
 
 
+def test_literal_tool_failure_flows_through_and_loop_continues():
+    events, trace_proj, fx = _drive(SCENARIOS["tool_failure"])
+    result = next(e for e in events if e[0] == "tool_result")
+    assert result[1] == "write_file"
+    assert result[2] == "Error: permission denied"
+    # Failure is recorded in the trace and the loop continues to round 2.
+    assert trace_proj[0]["tools"][0][3] is False
+    assert trace_proj[0]["tools"][0][4] == "Error: permission denied"
+    assert fx.calls == [("write_file", {"path": "a.py"})]
+    assert events[-1] == (_LOOP_DONE, "recovered", "completed", True)
+
+
+def test_literal_reasoning_content_event():
+    """Chunks carrying reasoning_content stream as ('reasoning', text)."""
+
+    class _ReasoningModel:
+        def __init__(self):
+            self.round = 0
+
+        def stream(self, msgs):
+            self.round += 1
+            if self.round == 1:
+                c = AIMessageChunk(content="")
+                c.additional_kwargs = {"reasoning_content": "thinking hard"}
+                yield c
+                yield AIMessageChunk(content="answer")
+            # round 2 never needed — plain answer ends the loop
+
+    fx = _FakeToolExecutor()
+    rt = _make_rt(fx, _FakeRetrieval())
+    ctx = _make_ctx()
+    events = list(react_attempt.run_react_attempt(
+        **_wire(rt, ctx, _ReasoningModel(), 3)))
+    assert ("reasoning", "thinking hard") in events
+    assert events[-1] == (_LOOP_DONE, "answer", "completed", True)
+
+
 def test_literal_cancelled_before_run_payload_exact():
-    events, _, fx = _drive("executor", SCENARIOS["cancelled_before_run"])
+    events, _, fx = _drive(SCENARIOS["cancelled_before_run"])
     assert events == [(_LOOP_DONE, "", "stopped", False)]
     assert fx.calls == []
 
@@ -385,10 +477,10 @@ def test_literal_cancelled_mid_round_before_execution():
     assert fx.calls == []
 
 
-# ── event-bus parity ─────────────────────────────────────────────────────────
+# ── event-bus emissions ──────────────────────────────────────────────────────
 
 
-def test_event_bus_emissions_identical_both_paths():
+def test_event_bus_emissions_on_canonical_path():
     class _Bus:
         def __init__(self):
             self.seen = []
@@ -396,27 +488,16 @@ def test_event_bus_emissions_identical_both_paths():
         def emit(self, *a, **k):
             self.seen.append((a, k))
 
-    seen_by_path = {}
-    events_by_path = {}
-    for path in ("wrapper", "executor"):
-        bus = _Bus()
-        fx = _FakeToolExecutor(results={"read_file": "b"})
-        rt = _make_rt(fx, _FakeRetrieval())
-        rt.event_bus = bus
-        ctx = _make_ctx()
-        model = _ScriptedModel(SCENARIOS["single_tool_round"]["turns"])
-        if path == "wrapper":
-            gen = rt._run_agent_loop(ctx, model, "coding", 3,
-                                     [SystemMessage(content="sys")])
-        else:
-            gen = react_attempt.run_react_attempt(**_wire(rt, ctx, model, 3))
-        events_by_path[path] = list(gen)
-        seen_by_path[path] = bus.seen
-    assert seen_by_path["wrapper"] == seen_by_path["executor"]
-    assert len(seen_by_path["wrapper"]) == 2          # tool_called+tool_result
-    assert events_by_path["wrapper"] == events_by_path["executor"]
-    kinds = [a[0] for a, _k in seen_by_path["wrapper"]]
-    assert kinds == ["tool_called", "tool_result"]
+    bus = _Bus()
+    fx = _FakeToolExecutor(results={"read_file": "b"})
+    rt = _make_rt(fx, _FakeRetrieval())
+    rt.event_bus = bus
+    ctx = _make_ctx()
+    model = _ScriptedModel(SCENARIOS["single_tool_round"]["turns"])
+    events = list(react_attempt.run_react_attempt(**_wire(rt, ctx, model, 3)))
+    assert [a[0] for a, _k in bus.seen] == ["tool_called", "tool_result"]
+    assert any(e[0] == "tool_call" for e in events)
+    assert any(e[0] == "tool_result" for e in events)
 
 
 # ── executor-direct Phase 8F dedup (seed_seen) ───────────────────────────────
@@ -518,19 +599,63 @@ def test_closure_real_executor_blocks_repeat_across_attempts():
 # ── architecture guards ──────────────────────────────────────────────────────
 
 
-def test_executor_never_imports_graph_layer():
+def _cozmo_package_sources():
+    pkg_dir = Path(runtime_module.__file__).parent.parent
+    for path in sorted(pkg_dir.rglob("*.py")):
+        yield path, path.read_text(encoding="utf-8")
+
+
+def test_no_production_definition_of_run_agent_loop():
+    offenders = [str(p) for p, src in _cozmo_package_sources()
+                 if re.search(r"def\s+_run_agent_loop\b", src)]
+    assert offenders == [], (
+        f"_run_agent_loop was retired in Phase 9C; defined again in {offenders}")
+
+
+def test_no_production_caller_references_run_agent_loop():
+    offenders = [str(p) for p, src in _cozmo_package_sources()
+                 if re.search(r"\._run_agent_loop\(|\brun_agent_loop\(", src)
+                 and "_run_agent_loop entry point was retired" not in src]
+    assert offenders == [], (
+        f"_run_agent_loop callers must not exist post-Phase 9C: {offenders}")
+
+
+def test_cozmo_runtime_has_no_run_agent_loop_attribute():
+    assert not hasattr(CozmoRuntime, "_run_agent_loop"), (
+        "the legacy wrapper attribute must be gone from CozmoRuntime")
+
+
+def test_run_react_attempt_is_the_sole_react_loop():
+    assert inspect.isgeneratorfunction(react_attempt.run_react_attempt)
+    loops = [p.name for p, src in _cozmo_package_sources()
+             if re.search(r"for\s+outer_step\s+in\s+range\(", src)]
+    assert loops == ["react_attempt.py"], (
+        f"exactly ONE generic ReAct loop may exist, found in {loops}")
+
+
+def test_all_three_production_sites_drive_the_executor_with_same_collaborators():
+    run_stream_src = inspect.getsource(CozmoRuntime.run_stream)
+    for kwarg in _COLLABORATOR_KWARGS:
+        found = run_stream_src.count(kwarg)
+        assert found >= 2, (
+            f"both run_stream call sites must pass {kwarg!r}; found {found}")
+    # The coding closure wires the same collaborators.
+    closure_src = inspect.getsource(CozmoRuntime._coding_graph_state)
+    for kwarg in _COLLABORATOR_KWARGS:
+        assert kwarg in closure_src, (
+            f"coding run_loop must pass {kwarg!r} to the executor")
+
+
+def test_executor_never_imports_graph_layer_or_storage():
     src = inspect.getsource(react_attempt)
     assert not re.search(r"(from|import)\s+\S*graphs", src), (
         "the generic executor must not depend on the graph layer")
-
-
-def test_wrapper_is_pure_delegation():
-    src = inspect.getsource(CozmoRuntime._run_agent_loop)
-    assert "yield from run_react_attempt(" in src
-    for forbidden in ("extract_calls", "ToolMessage(", "for outer_step",
-                      "seen_calls", ".stream("):
-        assert forbidden not in src, (
-            f"wrapper must not own loop mechanics ({forbidden})")
+    assert not re.search(r"(from|import)\s+\S*storage", src), (
+        "the generic executor must never touch storage")
+    # History mutation and Brain observation stay OUTSIDE the executor
+    # (owned by the runtime's post-run finalization).
+    assert "self.history" not in src and ".observe(" not in src
+    assert "_remember" not in src
 
 
 def test_coding_state_targets_executor_not_wrapper():
@@ -540,15 +665,7 @@ def test_coding_state_targets_executor_not_wrapper():
         if not ln.lstrip().startswith("#"))
     assert "run_react_attempt(" in src
     assert "_run_agent_loop" not in src, (
-        "CodingGraph run_loop must bypass the legacy entry point entirely")
-
-
-def test_wrapper_signature_unchanged_for_remaining_callers():
-    params = [p.name for p in
-              inspect.signature(CozmoRuntime._run_agent_loop)
-              .parameters.values()]
-    assert params == ["self", "ctx", "runnable", "intent_str", "step_budget",
-                      "base_msgs", "step", "step_index_base", "seed_seen"]
+        "CodingGraph run_loop must target the executor directly")
 
 
 def test_sentinel_contract_preserved():
@@ -557,14 +674,15 @@ def test_sentinel_contract_preserved():
 
 
 def test_binding_seam_invocation_lives_only_in_executor():
-    wrap_src = inspect.getsource(CozmoRuntime._run_agent_loop)
     exec_src = inspect.getsource(react_attempt)
-    # Wrapper PASSES the seam along but never INVOKES it.
-    assert "bind_runnable=self._bind_runnable," in wrap_src
-    assert "self._bind_runnable(" not in wrap_src
-    assert "bind_model" not in wrap_src and "client_for_model" not in wrap_src
+    rt_src = inspect.getsource(runtime_module)
     # The executor is the sole rebinding call site (recovery paths).
     assert re.search(r"\bbind_runnable\(ctx,", exec_src)
+    assert "bind_model" not in exec_src and "client_for_model" not in exec_src
+    # The runtime invokes the seam exactly once — the INITIAL bind — and all
+    # in-loop rebinding flows through the injected seam.
+    assert rt_src.count("self._bind_runnable(") == 1
+    assert rt_src.count("bind_runnable=self._bind_runnable") == 3
 
 
 def test_runtime_workflow_graph_untouched_by_extraction():

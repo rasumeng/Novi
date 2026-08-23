@@ -215,10 +215,11 @@ the generic path:
 
 ```
 plan steps (PlannerEngine templates, deterministic) or unplanned single loop
-   └─> _run_agent_loop  (ReAct)
-          model stream → tool calls → ToolExecutor gate → ToolMessage → loop
-          recovery hooks: UPGRADE_SEARCH / ESCALATE_WEB (re-bind via
-          _bind_runnable; budget committed through RetrievalExecutor)
+   └─> run_react_attempt  (cozmo/runtime/react_attempt.py — sole generic
+           ReAct executor since Phase 9C)
+           model stream → tool calls → ToolExecutor gate → ToolMessage → loop
+           recovery hooks: UPGRADE_SEARCH / ESCALATE_WEB (re-bind via
+           _bind_runnable; budget committed through RetrievalExecutor)
 ```
 
 This path is deliberately retained: it serves bare `CozmoRuntime()`
@@ -296,12 +297,12 @@ dependency that blocks removal:
 | Component | Verdict | Blocking dependency / reason |
 |---|---|---|
 | Legacy ReAct branch in `run_stream` (planned sequential + unplanned) | **RETAIN** | It IS the `workflow_engine="legacy"` escape hatch surface, the bare-`CozmoRuntime()` evaluation baseline, and the fallback when graphs are not wired. Removing it is Phase-5-final work, gated on the conditions below. |
-| `_run_agent_loop` | **RETAIN** | Live production dependency: `CodingGraph`'s injected `run_loop` (`runtime.py` `_coding_graph_state`) delegates every implement attempt to it. Migration would mean re-platforming the coding workflow onto `RuntimeWorkflowGraph` — an architecture project, not retirement. |
+| `_run_agent_loop` | **RETIRED (Phase 9C)** | No production definition or caller remains. The loop body lives verbatim in `cozmo/runtime/react_attempt.py::run_react_attempt` — the sole generic ReAct executor, driven directly by the sequential planned-step path, the unplanned path, and CodingGraph's `run_loop`. Guards: `tests/test_react_attempt_parity.py` (retirement architecture tests). |
 | `_rank_memories` (`RetrievalExecutor`, sole caller `_setup_memory_context`) | **RETAIN** | Implements memory-context importance ranking (frequency × recency × (1−distance)). `ResultMerger` has no frequency/recency semantics (its deltas: confidence×status, scenario affinity, hop penalty). Routing memory context through the merger changes prompt-context ordering — a behavior change, not parity. Known debt: a second importance formula exists at store level (`LanceStore.search_with_importance`, relevance × recency × frequency); consolidation requires new ranking semantics in one component + eval gates. |
 | `search_with_importance` (`LanceStore`) | **RETAIN** | Not a legacy path: it is the store's candidate-fetch primitive used by `KnowledgeIndex` (canonical retrieval architecture) and `MemoryManager.query` (Brain's flat-memory read). Both live. |
 | `MemoryManager` | **RETAIN** | It is Brain's storage engine (`Brain.recall` fallback without resolver, `learn → store_fact`, `consolidate`), the WebUI `/api/memory/*` + agent_memory backend, the no-brain runtime/tool fallback, and the source corpus for `storage/migrations.py`. Removal = Brain storage-layer rewrite (tracked as Phase G roadmap, explicitly out of scope for this stage). |
 | `get_memory_manager` global | **RETAIN** | Mirrors the `get_brain`/`get_knowledge_index` accessor pattern; consumed by `tools/memory_ops.py` fallback and Brain's bootstrap default. Phase G item 3 will retire it with the brain=None fallback. |
-| `workflow_engine="legacy"` escape hatch | **RETAIN** | Phase-5 preconditions unmet: legacy branch + `_run_agent_loop` still live (coding graph), and the parity harness itself exercises the legacy engine as its comparison baseline. |
+| `workflow_engine="legacy"` escape hatch | **RETAIN** | The parity harness itself exercises the legacy engine as its comparison baseline; removal remains Phase-5-final work. (Its former `_run_agent_loop` precondition is resolved — the executor is shared by both engines since Phase 9C.) |
 
 Retired in this stage (audit-proven zero production callers):
 `Brain.retrieve_memory_rows` (flat compat adapter; MemoryRetrievalSource
@@ -313,9 +314,9 @@ method). Guards: `tests/test_architecture.py`
 `test_composition_roots_default_langgraph_engine`.
 
 Phase-5 (escape-hatch removal) preconditions checklist, for the record:
-legacy branch gone ☐ · `_run_agent_loop` gone ☐ · coding-graph loop
-migrated ☐ · parity harness re-based ☐ · full suite green under
-langgraph-only ☐
+legacy branch gone ☐ · `_run_agent_loop` gone ☑ (Phase 9C) · coding-graph
+loop migrated ☑ (Phase 8) · parity harness re-based ☐ · full suite green
+under langgraph-only ☐
 
 ## 13. Dependency posture
 

@@ -112,14 +112,17 @@ def test_run_stream_initial_bind_goes_through_seam():
 
 
 def test_run_stream_does_not_reconstruct_inline():
-    """The agent loop rebinds through the seam only — raw bind_model /
-    client_for_model calls never appear inside the loop body."""
+    """The ReAct executor rebinds through the seam only — raw bind_model /
+    client_for_model calls never appear inside the loop body, and the
+    runtime hands the seam to the executor without invoking it."""
     import inspect
 
-    loop_src = inspect.getsource(CozmoRuntime._run_agent_loop)
+    import cozmo.runtime.react_attempt as react_attempt
+
+    loop_src = inspect.getsource(react_attempt.run_react_attempt)
     seam_src = inspect.getsource(CozmoRuntime._bind_runnable)
 
-    assert "_bind_runnable" in loop_src
+    assert "bind_runnable(ctx," in loop_src
     assert "bind_model" not in loop_src
     assert "client_for_model" not in loop_src
     assert "bind_model" in seam_src and "client_for_model" in seam_src

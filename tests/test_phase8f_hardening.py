@@ -211,15 +211,42 @@ def _ctx_with_trace():
     return ctx
 
 
+def _drive_loop(rt, ctx, model, budget=1, seed=None):
+    """Phase 9C: drive the canonical executor with the same collaborator
+    wiring every production site uses (the retired wrapper is gone)."""
+    from cozmo.runtime.react_attempt import run_react_attempt
+
+    return run_react_attempt(
+        ctx=ctx,
+        runnable=model,
+        tool_executor=rt.tool_executor,
+        tracer=rt.tracer,
+        retrieval_executor=rt.retrieval_executor,
+        capability_registry=rt._capability_registry,
+        scan_skills=rt._scan_skills,
+        skill_block=rt._skill_block,
+        bind_runnable=rt._bind_runnable,
+        stop_probe=rt._stop_probe(),
+        event_bus=rt.event_bus,
+        debug_trace=rt.debug_trace,
+        step_budget=budget,
+        base_msgs=[],
+        step=None,
+        step_index_base=0,
+        seed_seen=set(seed or ()),
+    )
+
+
 def test_seed_seen_blocks_identical_mutating_repeat():
     rt = _bare_runtime()
     ctx = _ctx_with_trace()
     sig = 'write_file:' + json.dumps({"path": "a.py", "content": "x"},
                                      sort_keys=True)
     consumed = []
-    for chunk in rt._run_agent_loop(
-            ctx, _ToolCallModel("write_file", {"path": "a.py", "content": "x"}),
-            "coding", 1, [], seed_seen={sig}):
+    for chunk in _drive_loop(
+            rt, ctx,
+            _ToolCallModel("write_file", {"path": "a.py", "content": "x"}),
+            seed={sig}):
         consumed.append(chunk)
     results = [c for c in consumed if c[0] == "tool_result"]
     assert results and "already made this exact" in results[0][2]
@@ -229,9 +256,9 @@ def test_fresh_loop_without_seed_executes_mutating_call():
     rt = _bare_runtime()
     ctx = _ctx_with_trace()
     consumed = []
-    for chunk in rt._run_agent_loop(
-            ctx, _ToolCallModel("write_file", {"path": "a.py", "content": "x"}),
-            "coding", 1, []):
+    for chunk in _drive_loop(
+            rt, ctx,
+            _ToolCallModel("write_file", {"path": "a.py", "content": "x"})):
         consumed.append(chunk)
     results = [c for c in consumed if c[0] == "tool_result"]
     assert results and "already made" not in results[0][2]

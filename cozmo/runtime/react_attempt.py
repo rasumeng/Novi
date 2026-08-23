@@ -1,4 +1,4 @@
-"""Generic single-attempt ReAct executor (Phase 9B).
+"""Generic single-attempt ReAct executor (Phase 9B; sole loop since 9C).
 
 The loop body formerly inline in ``CozmoRuntime._run_agent_loop``, moved
 VERBATIM into a runtime-owned collaborator so callers other than that
@@ -8,10 +8,10 @@ historical entry point can drive one implement/execution attempt:
                  → ToolMessage feedback → recovery escalation → repeat
                  ↘ no calls / budget exhausted / stop / error → outcome
 
-This is the SAME loop, not a second one: ``CozmoRuntime._run_agent_loop`` is
-now a thin delegation wrapper over this function (sequential planned-step and
-unplanned paths), and the coding graph's ``run_loop`` collaborator targets it
-directly.
+Since Phase 9C this is the ONLY generic ReAct loop: the historical
+``CozmoRuntime._run_agent_loop`` wrapper was retired and every consumer —
+sequential planned steps, the unplanned path, and the coding graph's
+``run_loop`` collaborator — drives ``run_react_attempt`` directly.
 
 Ownership boundaries (unchanged):
 
