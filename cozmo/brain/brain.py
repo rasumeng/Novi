@@ -187,43 +187,6 @@ class Brain:
         )
         return RecallResult(query=query, items=items)
 
-    def retrieve_memory_rows(
-        self,
-        query: str,
-        k: int = 5,
-        distance_threshold: Optional[float] = 0.5,
-        memory_types: Optional[list[str]] = None,
-    ) -> list[dict]:
-        """Temporary compat adapter: RecallResult → legacy flat memory rows.
-
-        Bridges the runtime's memory formatter (which consumes flat dicts with
-        id/text/score/distance/metadata) to the canonical ``recall`` API so the
-        runtime keeps talking only to the Brain. Removed once the runtime memory
-        section consumes ``RecallResult`` directly.
-        """
-        result = self.recall(
-            query,
-            QueryContext(
-                top_k=k,
-                distance_threshold=distance_threshold,
-                memory_types=tuple(memory_types or ()),
-            ),
-        )
-        rows = []
-        for item in result.items:
-            metadata = dict(item.metadata)
-            distance = metadata.pop("distance", 1.0 - item.score if item.score else 0.5)
-            rows.append(
-                {
-                    "id": str(metadata.pop("id", "")),
-                    "text": item.text,
-                    "score": item.score,
-                    "distance": distance,
-                    "metadata": metadata,
-                }
-            )
-        return rows
-
     def _default_resolver(self):
         """Build the layered resolver from the injected layers, if present.
 

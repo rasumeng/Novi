@@ -401,6 +401,20 @@ class CozmoContext:
             from ..graphs import CodingGraph
 
             coding_graph = CodingGraph()
+        runtime_graph = overrides.get("runtime_graph", None)
+        if runtime_graph is None:
+            # Dual-path migration: general runtime workflow. Built eagerly
+            # like research/coding (no model resolution at build time);
+            # execution is opt-in via the workflow_engine setting below.
+            from ..graphs import RuntimeWorkflowGraph
+
+            runtime_graph = RuntimeWorkflowGraph(
+                max_steps=int(self.config.get("runtime", {}).get("max_steps", 10))
+            )
+        workflow_engine = overrides.get(
+            "workflow_engine",
+            self.config.get("runtime", {}).get("workflow_engine", "langgraph"),
+        )
         runtime = CozmoRuntime(
             model_service=overrides.get("model_service", self.model_service),
             memory=overrides.get("memory", self.memory),
@@ -414,6 +428,8 @@ class CozmoContext:
             orchestrator=orchestrator,
             research_graph=research_graph,
             coding_graph=coding_graph,
+            runtime_graph=runtime_graph,
+            workflow_engine=workflow_engine,
         )
 
         # Wire Task lifecycle projection: runtime only emits events; this

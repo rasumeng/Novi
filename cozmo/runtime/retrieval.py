@@ -28,6 +28,7 @@ from .sources import (
     WebRetrievalSource,
 )
 from .trace import DebugTraceEvent, TraceAction, TraceEvent
+from .unified_retrieval import SourceBinding, UnifiedRetriever
 
 log = logging.getLogger("cozmo.retrieval")
 
@@ -281,6 +282,35 @@ class RetrievalExecutor:
 
     # ── internal helpers ────────────────────────────────────────────────
 
+    # ── structured evidence (Phase 7 → live path integration) ───────────
+
+    def _apply_web_evidence(self, ctx: ExecutionContext, bundle: EvidenceBundle) -> None:
+        """Populate grounding for a collected web bundle.
+
+        Default behavior is unchanged: ``ctx.grounding_text`` receives the raw
+        merged text. The EvidenceProcessor then runs best-effort; when it
+        produces a trusted non-fallback context, the model-facing grounding is
+        upgraded to the rendered structured form (which preserves source
+        identity/URLs and adds confidence, conflicts and attribution). Any
+        processor failure keeps the raw text — a processing failure can never
+        fabricate or erase evidence.
+        """
+        ctx.grounding_text = bundle.merged_text
+        if not bundle.results:
+            return
+        try:
+            from ..evidence import EvidenceProcessor, render_evidence_context
+
+            processed = EvidenceProcessor().process(bundle)
+        except Exception:
+            log.warning("evidence processing failed; keeping raw grounding",
+                        exc_info=True)
+            return
+        ctx.evidence_context = processed
+        rendered = render_evidence_context(processed)
+        if rendered:
+            ctx.grounding_text = rendered
+
     def _emit_bus(self, event_type: str, **data):
         if self.event_bus:
             try:
@@ -381,21 +411,65 @@ class RetrievalExecutor:
     def retrieve_knowledge(self, query: str, k: int = 5) -> str:
         if self._knowledge_source is None:
             return ""
-        try:
-            result = self._knowledge_source.retrieve(
-                query, ContextAllocation(max_results=min(k, 20)))
-        except Exception:
-            return ""
-        if not result.items:
+        items = self._unified_knowledge_items(query, k)
+        if items is None:
+            # Single-source binding: preserve the legacy byte-identical path.
+            try:
+                result = self._knowledge_source.retrieve(
+                    query, ContextAllocation(max_results=min(k, 20)))
+            except Exception:
+                return ""
+            items = list(result.items)
+        if not items:
             return ""
         lines = []
-        for item in result.items:
+        for item in items:
             meta = item.metadata
             path = meta.get("path", "?")
             title = meta.get("title", path)
             text = item.text[:300].replace("\n", " ")
             lines.append(f"- **{title}** ({path}, score={item.score:.2f}): {text}")
         return "\n".join(lines)
+
+    def _unified_knowledge_items(self, query: str, k: int):
+        """M5 unified candidate pool: knowledge (+ graph) merged with memory
+        and project context when those stores are wired.
+
+        Returns the minimum-sufficient selected items, the full ranked pool
+        when selection comes back empty (empty-query edge), or None when only
+        the knowledge source participates — in which case the caller keeps
+        the pre-M5 behavior exactly.
+        """
+        bindings = []
+        memory_store = self._brain if self._brain is not None else self._memory
+        if memory_store is not None:
+            bindings.append(
+                SourceBinding("memory", MemoryRetrievalSource(memory_store))
+            )
+        project_store = self._brain if self._brain is not None else self._project_index
+        if project_store is not None:
+            bindings.append(
+                SourceBinding("project", ProjectRetrievalSource(project_store))
+            )
+        if not bindings:
+            return None
+        bindings.append(SourceBinding("knowledge", self._knowledge_source))
+
+        allocation = ContextAllocation(max_results=min(k, 20))
+        outcome = UnifiedRetriever().retrieve(query, allocation, bindings)
+        selected = outcome.selected
+        if not selected:
+            # Nothing survived ranking/dedup/budget — report empty rather
+            # than re-querying through the legacy path.
+            return [] if not outcome.merged.items else list(outcome.merged.items)
+
+        # Knowledge-grounding lines are knowledge-shaped; a project/memory
+        # row without path/title metadata still renders via its id/text.
+        shaped = [
+            it for it in selected
+            if "path" in it.metadata or it.source == "knowledge"
+        ]
+        return shaped or list(selected)
 
     # ── single entry point ──────────────────────────────────────────────
 
@@ -628,7 +702,7 @@ class RetrievalExecutor:
             yield ("thinking", event.action.value, event.summary, user_input)
             t0 = time.time()
             bundle = self.execute_search(user_input, trace=ctx.trace)
-            ctx.grounding_text = bundle.merged_text
+            self._apply_web_evidence(ctx, bundle)
             ctx.grounding_error = bundle.error
             ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
             ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
@@ -696,7 +770,7 @@ class RetrievalExecutor:
             ctx.trace.retrieval_escalated = True
             yield ("thinking", "Escalating to web search...", "", user_input)
             bundle = self.execute_search(user_input, trace=ctx.trace)
-            ctx.grounding_text = bundle.merged_text
+            self._apply_web_evidence(ctx, bundle)
             ctx.grounding_error = bundle.error
             ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
             ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
@@ -729,7 +803,7 @@ class RetrievalExecutor:
         yield ("thinking", event.action.value, event.summary, user_input)
         t0 = time.time()
         bundle = self.execute_search(user_input, trace=ctx.trace)
-        ctx.grounding_text = bundle.merged_text
+        self._apply_web_evidence(ctx, bundle)
         ctx.grounding_error = bundle.error
         ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
         ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
@@ -778,7 +852,7 @@ class RetrievalExecutor:
         yield ("thinking", event.action.value, event.summary, user_input)
         t0 = time.time()
         bundle = self.execute_search(user_input, trace=ctx.trace)
-        ctx.grounding_text = bundle.merged_text
+        self._apply_web_evidence(ctx, bundle)
         ctx.grounding_error = bundle.error
         ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
         ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)

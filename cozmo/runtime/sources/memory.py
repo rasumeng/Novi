@@ -23,8 +23,8 @@ class MemoryRetrievalSource:
     when a Brain is wired it owns memory, and the adapter asks the Brain via
     ``recall`` (layered resolver) and translates RecallItems back to flat rows.
     Both return the identical row shape, so translation is byte-for-byte.
-    ``Brain.retrieve_memory_rows`` is retained only as the direct-call
-    compatibility adapter for callers that bypass the source contract.
+    This source is the only remaining flat-row consumer; the retired
+    direct-call adapter on Brain was removed (post-cutover stage).
 
     Args:
         memory_manager: Underlying memory store (or Brain).

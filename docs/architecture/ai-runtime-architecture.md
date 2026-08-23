@@ -193,8 +193,7 @@ START → understand → plan → implement → verify ─┬─ all passed ─�
   prior attempts are seeded into the loop's dedup gate; reads/commands stay
   repeatable.
 * Terminal taxonomy: `completed | stopped | environment_error |
-  permission_denied | verification_failed | verification_timeout |
-  empty | error` — and `_finalize_
+  permission_denied | verification_failed | empty | error` — and `_finalize_
   graph_plan_step` marks the logical step COMPLETED only on `completed`
   (partial output under a failing reason is a FAILED step).
 * The loop's stream events are captured into `state["events"]` and replayed by
@@ -289,6 +288,35 @@ Tool-to-LangChain wrapping happens in `ToolRegistry.as_lc_tools()`
 | Three fetch tools (`web_fetch` / `fetch_url` / `webfetch`) | All registered, risk/category-mapped, referenced by `RetrievalCoordinator._FETCH_TOOLS`; removal changes the tool inventory, which is out of scope for cleanup. |
 | Bare `CozmoRuntime()` in evaluation driver | Intentional measurement baseline; wiring graphs there would silently change benchmark semantics. |
 
+### 12.1 Post-cutover legacy audit (LangGraph-default stabilization stage)
+
+Audit verdict per retained legacy component — what remains, and the exact
+dependency that blocks removal:
+
+| Component | Verdict | Blocking dependency / reason |
+|---|---|---|
+| Legacy ReAct branch in `run_stream` (planned sequential + unplanned) | **RETAIN** | It IS the `workflow_engine="legacy"` escape hatch surface, the bare-`CozmoRuntime()` evaluation baseline, and the fallback when graphs are not wired. Removing it is Phase-5-final work, gated on the conditions below. |
+| `_run_agent_loop` | **RETAIN** | Live production dependency: `CodingGraph`'s injected `run_loop` (`runtime.py` `_coding_graph_state`) delegates every implement attempt to it. Migration would mean re-platforming the coding workflow onto `RuntimeWorkflowGraph` — an architecture project, not retirement. |
+| `_rank_memories` (`RetrievalExecutor`, sole caller `_setup_memory_context`) | **RETAIN** | Implements memory-context importance ranking (frequency × recency × (1−distance)). `ResultMerger` has no frequency/recency semantics (its deltas: confidence×status, scenario affinity, hop penalty). Routing memory context through the merger changes prompt-context ordering — a behavior change, not parity. Known debt: a second importance formula exists at store level (`LanceStore.search_with_importance`, relevance × recency × frequency); consolidation requires new ranking semantics in one component + eval gates. |
+| `search_with_importance` (`LanceStore`) | **RETAIN** | Not a legacy path: it is the store's candidate-fetch primitive used by `KnowledgeIndex` (canonical retrieval architecture) and `MemoryManager.query` (Brain's flat-memory read). Both live. |
+| `MemoryManager` | **RETAIN** | It is Brain's storage engine (`Brain.recall` fallback without resolver, `learn → store_fact`, `consolidate`), the WebUI `/api/memory/*` + agent_memory backend, the no-brain runtime/tool fallback, and the source corpus for `storage/migrations.py`. Removal = Brain storage-layer rewrite (tracked as Phase G roadmap, explicitly out of scope for this stage). |
+| `get_memory_manager` global | **RETAIN** | Mirrors the `get_brain`/`get_knowledge_index` accessor pattern; consumed by `tools/memory_ops.py` fallback and Brain's bootstrap default. Phase G item 3 will retire it with the brain=None fallback. |
+| `workflow_engine="legacy"` escape hatch | **RETAIN** | Phase-5 preconditions unmet: legacy branch + `_run_agent_loop` still live (coding graph), and the parity harness itself exercises the legacy engine as its comparison baseline. |
+
+Retired in this stage (audit-proven zero production callers):
+`Brain.retrieve_memory_rows` (flat compat adapter; MemoryRetrievalSource
+reads `recall` directly) and `MemoryManager.store_project_context` (dead
+method). Guards: `tests/test_architecture.py`
+(`test_no_retired_retrieve_memory_rows_adapter`,
+`test_no_retired_store_project_context_method`). The composition roots'
+`"langgraph"` default is pinned by
+`test_composition_roots_default_langgraph_engine`.
+
+Phase-5 (escape-hatch removal) preconditions checklist, for the record:
+legacy branch gone ☐ · `_run_agent_loop` gone ☐ · coding-graph loop
+migrated ☐ · parity harness re-based ☐ · full suite green under
+langgraph-only ☐
+
 ## 13. Dependency posture
 
 * LangChain usage is narrow by policy: `langchain-core` messages/tools types,
@@ -332,18 +360,16 @@ Coding metrics: task_completion (final verification verdict matches fixture
 expectation), test_pass_rate (passed verifications / total verifications),
 regression_rate (first attempt passed then failed later = repair churn),
 avg_repair_attempts, unnecessary_edit_rate (edits with zero failing
-verifications), tool_failure_rate, staged_repair_rate (driver-supplied
-fixture edits are DISCLOSED, never counted as observed agent repair;
-per-case records also carry driver_mode scripted|live).
+verifications), tool_failure_rate.
 
 **Regression thresholds** (`cozmo/evaluation/regression.py`). Comparison is
 per-metric ABSOLUTE delta against `DEFAULT_THRESHOLDS` (0.05 for quality
 metrics, 0.02 for tools.recovery_rate); latency alone uses RELATIVE delta
 with a 50 ms absolute noise floor so identical runs never false-flag. Higher
-is better except `tools.recovery_rate`, `latency`, `coding.regression_rate`
-and `coding.verification_failure_rate`. Exit code: 0 = PASS, 1 = regression
-found. `research.*` / `coding.*` families ship WITH default thresholds (0.05
-quality metrics; 0.02 for the two lower-is-better coding rates).
+is better except `tools.recovery_rate` and `latency`. Exit code: 0 = PASS,
+1 = regression found. New `research.*` / `coding.*` metrics ship WITHOUT
+default thresholds — add explicit thresholds per metric when a baseline
+history exists; absent thresholds never spuriously fail.
 
 **LLM-as-judge** remains optional behind an explicit flag (`AnswerJudge`
 protocol on `MetricCollector`; `evidence --judge-model`) and is never used by

@@ -461,29 +461,6 @@ def test_recall_packages_query_results():
     assert item.metadata == {"type": "preference"}
 
 
-def test_recall_memory_compat_adapter_flat_rows():
-    mem = StubMemory()
-    mem._results = [
-        {"id": "1", "text": "prefers python", "metadata": {"type": "preference"}, "score": 0.8}
-    ]
-    brain = Brain(memory=mem)
-    rows = brain.retrieve_memory_rows(
-        "what do i prefer", k=3, distance_threshold=0.4, memory_types=["fact"]
-    )
-    assert len(rows) == 1
-    assert rows[0]["text"] == "prefers python"
-    assert rows[0]["score"] == 0.8
-    assert rows[0]["metadata"] == {"type": "preference"}
-    assert rows[0]["distance"] == pytest.approx(0.2)
-    assert mem.queries == [("what do i prefer", 3, 0.4, ["fact"])]
-
-
-def test_recall_compat_adapter_none_memory_types_is_none():
-    mem = StubMemory()
-    Brain(memory=mem).retrieve_memory_rows("hello")
-    assert mem.queries == [("hello", 5, 0.5, None)]
-
-
 def test_recall_without_resolver_routes_through_query():
     mem = StubMemory()
     mem._results = [{"text": "prefers go", "score": 0.9, "metadata": {"type": "preference"}}]

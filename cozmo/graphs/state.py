@@ -167,6 +167,51 @@ class ResearchState(AgentStateBase, total=False):
     coordinator: Any         # RetrievalCoordinator (single budget authority)
 
 
+class RuntimeState(AgentStateBase, total=False):
+    """Per-run state for the general runtime workflow (dual-path migration).
+
+    Covers the target workflow: analyze → retrieve → reason → (act → reason)*
+    → reflect → answer. Same boundaries as the research/coding states:
+
+    - ``analysis`` comes from the Orchestrator (computed upstream or via the
+      injected ``analyze`` collaborator) — never derived in-graph.
+    - Retrieved context arrives through the injected ``prepare_context``
+      collaborator, snapshotting what RetrievalExecutor / UnifiedRetriever /
+      the evidence pipeline ALREADY produced for this run. Zero retrieval
+      logic lives in-graph; there is no second retrieval system.
+    - ``model`` is the runnable Cozmo bound for THIS run — graphs never
+      select, substitute, or fall back. ModelUnavailableError propagates.
+    - ``execute_tool`` routes every call through ToolExecutor (the sole
+      execution gate); ``tool_events`` captures runtime-style
+      thinking/tool_call/tool_result chunks for verbatim stream replay.
+    - ``reflect`` is the optional Brain consolidation hook; default no-op
+      preserves current observe-per-turn memory semantics.
+
+    Deliberately ABSENT: storage handles, Brain, configuration, checkpoints,
+    model-selection state.
+    """
+
+    analysis: Any                 # TaskAnalysis (orchestrator)
+    grounding_text: str           # retrieved context snapshot (runtime-owned)
+    memory_context: str
+    project_context: str
+    evidence_context: Any         # EvidenceContext | None (observational)
+    quality: str                  # RetrievalQuality.value snapshot
+    messages: list[Any]           # LangChain conversation incl. ToolMessages
+    seed_messages: list[Any]      # runtime-supplied history+human seed (base_msgs[1:])
+    pending_tool_calls: list[Any] # parsed AIMessage.tool_calls awaiting Act
+    seen_calls: list[str]         # "name:{args}" dedup registry (legacy parity)
+    observations: list[Any]       # [{name, args, output}] per executed tool
+    events: list[Any]             # thinking/tool_call/tool_result/token chunks replayed verbatim
+    answer: str                   # final response text
+
+    # per-run collaborators injected by the runtime boundary
+    analyze: Any                  # Callable[[str], TaskAnalysis] | None
+    prepare_context: Any          # Callable[[], dict] context snapshot
+    execute_tool: Any             # Callable[[str, dict, int], tuple(output, diff, success)]
+    reflect: Any                  # Callable[[], Any] | None
+
+
 class CodingState(AgentStateBase, total=False):
     """Per-run state for the coding workflow (Phase 7 Stage 3D; 8A seam).
 

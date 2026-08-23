@@ -16,18 +16,16 @@ import logging
 import re
 import sys
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
 )
 from ..orchestrator.intent import classify_intent
 from .model_selector import ModelSelector, model_capabilities
-from .trace import DebugTraceEvent, ExecutionTrace, StepTrace, TraceAction
+from .trace import DebugTraceEvent, ExecutionTrace, TraceAction
 from .execution_context import ExecutionContext
 from .retrieval import RecoveryAction, RetrievalExecutor
 from .sources import KnowledgeRetrievalSource
@@ -117,9 +115,11 @@ from .retrieval import RetrievalExecutor
 from .tool_executor import ToolExecutor
 from .event_bus import EventType
 
-# Sentinel emitted by CozmoRuntime._run_agent_loop carrying the loop outcome.
-# Payload: (_LOOP_DONE, final_text, stop_reason, success)
-_LOOP_DONE = "__plan_step_done__"
+# Phase 9B: the ReAct loop body lives in the generic single-attempt executor
+# (cozmo/runtime/react_attempt.py). The sentinel and its payload contract
+# ((_LOOP_DONE, final_text, stop_reason, success)) are re-exported here
+# because run_stream's branches and graph collaborators consume them.
+from .react_attempt import _LOOP_DONE, run_react_attempt
 
 _IDENTITY = (
     "You are Cozmo, a capable local AI assistant running entirely on-device via Ollama. "
@@ -160,6 +160,8 @@ class CozmoRuntime:
         mcp_permissions=None,
         research_graph=None,
         coding_graph=None,
+        runtime_graph=None,
+        workflow_engine: str = "legacy",
     ):
         self.model_service = model_service
         self.simple_llm = simple_llm
@@ -247,6 +249,14 @@ class CozmoRuntime:
         # execution stays in the runtime's ReAct loop / ToolExecutor. None =
         # legacy behavior unchanged.
         self._coding_graph = coding_graph
+        # Dual-path migration: the general runtime workflow graph
+        # (analyze → retrieve → reason → act → reflect → answer). Opt-in via
+        # ``workflow_engine="langgraph"``; "legacy" (default) keeps
+        # run_stream's ReAct path byte-identical. The graph composes existing
+        # Cozmo components only — it never owns retrieval, storage, tools,
+        # or model selection.
+        self._runtime_graph = runtime_graph
+        self._workflow_engine = workflow_engine
         # NOTE: legacy inline-planning knobs were removed in Milestone 5
         # Phase 3 — PlannerEngine is the sole planning authority.
     def set_config(self, **kwargs):
@@ -763,6 +773,66 @@ class CozmoRuntime:
                 if final.strip() and not any(
                         ev and ev[0] == "token" for ev in (result.get("events") or [])):
                     yield ("token", final)
+            elif (self._runtime_graph is not None
+                  and self._workflow_engine == "langgraph"):
+                # Dual-path migration: general runtime workflow
+                # (analyze → retrieve → reason → act → reflect → answer).
+                # Same one-logical-step plan semantics as the research/coding
+                # graphs; tool execution stays behind ToolExecutor; model is
+                # the already-bound runnable; exceptions (including
+                # ModelUnavailableError) propagate exactly like the legacy
+                # loop into this generator's handler.
+                from ..planner.models import PlanStatus, PlanStepStatus
+
+                exec_idx = self._graph_exec_step_index(ctx, plan_steps)
+                graph_step = plan_steps[exec_idx] if plan_steps else None
+
+                if plan_ref is not None:
+                    plan_ref.status = PlanStatus.ACTIVE
+                    self._emit_bus(EventType.PLAN_STARTED,
+                                   task_id=ctx.execution_plan.task_id,
+                                   plan_id=plan_ref.id,
+                                   step_count=remaining_steps)
+                    yield ("plan.started", plan_ref.id,
+                           "Runtime workflow (LangGraph)")
+                    if graph_step is not None:
+                        graph_step.status = PlanStepStatus.RUNNING
+                        self._emit_bus(EventType.STEP_STARTED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_id=graph_step.id,
+                                       index=exec_idx,
+                                       description="Runtime workflow")
+                        yield ("step.started", graph_step.id,
+                               "Runtime workflow")
+
+                state = self._runtime_graph_state(ctx, runnable, base_msgs, user_input)
+                result = self._runtime_graph.run(state)
+                for ev in result.get("events") or []:
+                    yield ev
+                for ev in result.get("stream_events") or []:
+                    yield ("phase", ev)
+                final = result.get("answer") or ""
+                stop_reason = result.get("completion_reason") or (
+                    "completed" if final.strip() else "empty")
+
+                if plan_ref is not None:
+                    yield from self._finalize_graph_plan_step(
+                        ctx, plan_ref, plan_steps, exec_idx, graph_step,
+                        final=final, stop_reason=stop_reason,
+                        label="Runtime workflow")
+                    if stop_reason == "completed":
+                        plan_ref.status = PlanStatus.COMPLETED
+                        self._emit_bus(EventType.PLAN_COMPLETED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_count=1)
+                        yield ("plan.completed", plan_ref.id,
+                               "Completed runtime workflow")
+
+                if final.strip() and not any(
+                        ev and ev[0] == "token" for ev in (result.get("events") or [])):
+                    yield ("token", final)
             elif plan_steps:
                 from ..planner.models import PlanStatus, PlanStepStatus
 
@@ -1062,9 +1132,29 @@ class CozmoRuntime:
                 msgs.append(SystemMessage(
                     content="VERIFICATION FEEDBACK from your previous "
                             f"attempt:\n{feedback}"))
-            for chunk in self._run_agent_loop(
-                    ctx, runnable, "coding", step_budget, msgs,
-                    step=None, step_index_base=0,
+            # Phase 9B: implement attempts execute through the generic
+            # single-attempt ReAct executor DIRECTLY — the historical
+            # _run_agent_loop entry point is bypassed (it remains only for
+            # the sequential/unplanned paths). Collaborator wiring is
+            # identical to the wrapper's delegation, so event tuples,
+            # dedup/cancellation/recovery semantics are unchanged.
+            for chunk in run_react_attempt(
+                    ctx=ctx,
+                    runnable=runnable,
+                    tool_executor=self.tool_executor,
+                    tracer=self.tracer,
+                    retrieval_executor=self.retrieval_executor,
+                    capability_registry=self._capability_registry,
+                    scan_skills=self._scan_skills,
+                    skill_block=self._skill_block,
+                    bind_runnable=self._bind_runnable,
+                    stop_probe=self._stop_probe(),
+                    event_bus=self.event_bus,
+                    debug_trace=self.debug_trace,
+                    step_budget=step_budget,
+                    base_msgs=msgs,
+                    step=None,
+                    step_index_base=0,
                     seed_seen=prior_sigs):
                 events.append(chunk)
                 if chunk[0] == _LOOP_DONE:
@@ -1132,6 +1222,71 @@ class CozmoRuntime:
             return [f"{exe} -m pytest -q"]
         return []
 
+    def _runtime_graph_state(self, ctx, runnable, base_msgs, user_input):
+        """Build the per-run state handed to the general runtime workflow.
+
+        Injection boundary (identical philosophy to the research/coding
+        states): the graph receives the ALREADY-bound runnable, the already-
+        computed analysis, a context SNAPSHOT callable (retrieval ran upstream
+        through RetrievalExecutor/UnifiedRetriever/evidence — the graph never
+        retrieves), and an execute_tool callable that routes every call
+        through ToolExecutor with this run's coordinator/trace. Reflection is
+        opt-in via workflow.reflect_on_run; default off preserves the current
+        observe-per-turn semantics (Brain.observe still runs in the shared
+        run_stream tail).
+        """
+        rt_cfg = self.cfg.get("runtime", {}) if isinstance(self.cfg, dict) else {}
+
+        def prepare_context():
+            return {
+                "grounding_text": ctx.grounding_text or "",
+                "memory_context": ctx.memory_context or "",
+                "project_context": ctx.project_context or "",
+                "evidence_context": ctx.evidence_context,
+                "quality": ctx.grounding_quality or "",
+            }
+
+        def execute_tool(name: str, args: dict, step_idx: int):
+            result = self.tool_executor.execute(
+                name, args,
+                coordinator=ctx.retrieval_coordinator,
+                step_idx=step_idx, trace=ctx.trace,
+            )
+            return result.output, result.diff, result.success
+
+        reflect = None
+        brain_ref = self.brain
+        if brain_ref is not None and rt_cfg.get("workflow.reflect_on_run"):
+            def reflect():
+                try:
+                    return brain_ref.reflect(on_demand=True)
+                except Exception:
+                    return None
+
+        seed_messages = list(base_msgs[1:]) if base_msgs else []
+
+        return {
+            "user_input": user_input,
+            "analysis": ctx.analysis,
+            "grounding_text": ctx.grounding_text or "",
+            "memory_context": ctx.memory_context or "",
+            "project_context": ctx.project_context or "",
+            "evidence_context": ctx.evidence_context,
+            "quality": ctx.grounding_quality or "",
+            "system_prompt": base_msgs[0].content if base_msgs else "",
+            "seed_messages": seed_messages,
+            "messages": [],
+            "attempt": 0,
+            "max_steps": ctx.max_steps,
+            "model": runnable,
+            "analyze": None,  # analysis is precomputed upstream by executor/orchestrator
+            "prepare_context": prepare_context,
+            "execute_tool": execute_tool,
+            "reflect": reflect,
+            # Phase 8A cancellation seam (see _research_graph_state).
+            "should_stop": self._stop_probe(),
+        }
+
     def _stop_probe(self):
         """Runtime-owned cancellation probe for graph node boundaries."""
 
@@ -1162,213 +1317,42 @@ class CozmoRuntime:
     def _run_agent_loop(self, ctx, runnable, intent_str, step_budget,
                         base_msgs, step=None, step_index_base=0,
                         seed_seen=None):
-        """Run the ReAct loop for one plan step (or a whole unplanned run).
+        """Thin delegation wrapper (Phase 9B) over the generic single-attempt
+        ReAct executor.
 
-        Yields the runtime streaming events (token/reasoning/thinking/tool_*)
-        exactly as the legacy single loop did. Ends by yielding the
-        ``_LOOP_DONE`` sentinel carrying ``(final, stop_reason, success)`` so the
-        caller can drive sequential plan steps or terminate on failure.
+        The loop body was extracted VERBATIM into
+        ``cozmo.runtime.react_attempt.run_react_attempt``; this wrapper exists
+        only so the sequential planned-step path and the unplanned path keep
+        their historical entry point — same signature, same lazy-generator
+        semantics, identical event stream. ``intent_str`` is vestigial (the
+        loop body never referenced it). CodingGraph's ``run_loop``
+        collaborator targets the executor DIRECTLY (see
+        ``_coding_graph_state``), leaving exactly two production callers for
+        this wrapper; retire it only when zero callers remain AND parity has
+        been proven.
 
-        ``step`` is an optional :class:`PlanStep`. When given, its objective is
-        injected as a trailing system instruction so the model executes that
-        specific step. ``step_index_base`` offsets StepTrace indexing so plan
-        steps accumulate into one global trace.
-
-        ``seed_seen`` (Phase 8F): pre-populates the exact-call dedup set so a
-        repair attempt cannot repeat an identical mutating call (same tool +
-        same args) it already made in a previous attempt. Only callers that
-        ACCUMULATE the signatures from prior attempts pass this; fresh loops
-        are unaffected.
-
-        Future checkpoint execution: the loop is index-addressed and
-        idempotent per step. A future Job-driven executor (which already owns
-        Checkpoint step/messages/tool_states in cozmo/jobs) can resume by
-        feeding ``Checkpoint.step`` as ``step_index_base`` and the restored
-        messages as ``base_msgs`` — no re-planning and no new planning logic
-        needed here. Runtime stays the generic per-step executor.
+        Do not grow loop mechanics back into this method — the executor owns
+        them.
         """
-        msgs = list(base_msgs)
-        if step is not None:
-            msgs.append(SystemMessage(
-                content=f"CURRENT STEP ({step.id}): {step.description}"
-            ))
-        seen_calls: set[str] = set(seed_seen or ())
-        final = ""
-        try:
-            for outer_step in range(step_budget):
-                idx = step_index_base + outer_step
-                acc = None
-                content_buf = ""
-                step_start = time.time()
-                tokens_in_step = 0
-
-                for chunk in runnable.stream(msgs):
-                    if self.stop_event and self.stop_event.is_set():
-                        self.tracer.finalize(ctx.trace, "stopped")
-                        yield (_LOOP_DONE, "", "stopped", False)
-                        return
-                    acc = chunk if acc is None else acc + chunk
-                    reasoning_content = chunk.additional_kwargs.get("reasoning_content", "")
-                    if reasoning_content:
-                        yield ("reasoning", reasoning_content)
-                    piece = chunk.content or ""
-                    if piece:
-                        content_buf += piece
-                        tokens_in_step += 1
-                        yield ("token", piece)
-
-                ai = acc if acc is not None else AIMessage(content=content_buf)
-                model_ms = round((time.time() - step_start) * 1000, 2)
-                while len(ctx.trace.steps) <= idx:
-                    ctx.trace.steps.append(StepTrace(step=len(ctx.trace.steps)))
-                ctx.trace.steps[idx].model_inference_ms = model_ms
-                ctx.trace.steps[idx].tokens_generated = tokens_in_step
-
-                calls = self.tool_executor.extract_calls(ai)
-
-                if not calls:
-                    newly = self._scan_skills(content_buf, ctx.activated_skills)
-                    if newly:
-                        ctx.activated_skills.extend(newly)
-                        names = ", ".join(s["name"] for s in newly)
-                        yield ("thinking", f"Activating skill: {names}",
-                               f"Loading skill instructions: {names}", None)
-                        msgs.append(ai if isinstance(ai, AIMessage)
-                                    else AIMessage(content=content_buf))
-                        for sk in newly:
-                            msgs.append(SystemMessage(content=self._skill_block(sk)))
-                        continue
-                    recovery_decision = self.retrieval_executor.recommend_when_model_answered(ctx)
-                    if recovery_decision.action != RecoveryAction.NONE:
-                        if recovery_decision.action == RecoveryAction.UPGRADE_SEARCH:
-                            search_tools = self._capability_registry.get_tool_names(["search"])
-                            ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
-                            lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
-                            runnable = self._bind_runnable(ctx, lc_tools)
-                            msgs.append(SystemMessage(
-                                content="[Web search tools (web_search, web_fetch) are now available. "
-                                        "Use them if you need current information.]"
-                            ))
-                            state = self.retrieval_executor.commit_recovery(
-                                ctx, recovery_decision, recovery_decision.action.value)
-                            self.tracer.debug(ctx.trace, "recovery", {
-                                "action": recovery_decision.action.value,
-                                "reason": recovery_decision.reason,
-                                "attempt": state.attempts_used,
-                                "allowed_tools": list(ctx.allowed_tools),
-                            })
-                        continue
-                    final = content_buf.strip()
-                    break
-
-                msgs.append(ai if isinstance(ai, AIMessage)
-                            else AIMessage(content=content_buf))
-                names = ", ".join(c["name"] for c in calls)
-                arg_sigs = [json.dumps(c["args"], sort_keys=True, default=str) for c in calls]
-                calls_detail = "; ".join(
-                    f"{c['name']}({sig[:200]})"
-                    for c, sig in zip(calls, arg_sigs)
-                )
-                yield ("thinking", f"Running: {names}", calls_detail, None)
-
-                for c, args_sig in zip(calls, arg_sigs):
-                    if self.stop_event and self.stop_event.is_set():
-                        self.tracer.finalize(ctx.trace, "stopped")
-                        yield (_LOOP_DONE, "", "stopped", False)
-                        return
-                    sig = f"{c['name']}:{args_sig}"
-                    call_id = f"call-{idx}-{c['name']}"
-                    yield ("tool_call", c["name"], c["args"], call_id, self.tool_executor.tool_category(c["name"]))
-                    if self.event_bus:
-                        try:
-                            self.event_bus.emit("tool_called", tool=c["name"], args=c["args"], step=idx)
-                        except Exception:
-                            pass
-                    if sig in seen_calls:
-                        out = (f"Error: you already made this exact {c['name']} call "
-                               f"and have its result above. Use it, or try a "
-                               f"DIFFERENT call — do not repeat yourself.")
-                        tool_success = False
-                        tool_t0 = time.time()
-                        diff = self.tool_executor.compute_diff(c["name"], c["args"])
-                        tool_ms = round((time.time() - tool_t0) * 1000, 2)
-                        self.tracer.record_tool(
-                            step_idx=idx, name=c["name"], args=c["args"],
-                            result=out, latency_ms=tool_ms, success=tool_success,
-                            error=out if out.startswith("Error") else None,
-                            trace=ctx.trace,
-                        )
-                    else:
-                        seen_calls.add(sig)
-                        result = self.tool_executor.execute(
-                            c["name"], c["args"],
-                            coordinator=ctx.retrieval_coordinator,
-                            step_idx=idx, trace=ctx.trace,
-                        )
-                        out = result.output
-                        tool_success = result.success
-                        diff = result.diff
-                    yield ("tool_result", c["name"], out, call_id, diff)
-                    if self.event_bus:
-                        try:
-                            self.event_bus.emit("tool_result", tool=c["name"], call_id=call_id,
-                                                is_error=out.startswith("Error"))
-                        except Exception:
-                            pass
-                    msgs.append(ToolMessage(content=out, tool_call_id=c["id"]))
-
-                    # Post-tool recovery: executor detects empty knowledge result → escalate to web
-                    recovery_decision = self.retrieval_executor.recommend_after_tool(ctx, c["name"], out)
-                    if (recovery_decision.action == RecoveryAction.ESCALATE_WEB
-                            and not any(s in ctx.allowed_tools for s in
-                                        self._capability_registry.get_tool_names(["search"]))):
-                        search_tools = self._capability_registry.get_tool_names(["search"])
-                        ctx.allowed_tools = list(set(ctx.allowed_tools) | set(search_tools))
-                        new_lc_tools = self.tool_executor.tools_for_mode(allowed_tools=ctx.allowed_tools)
-                        runnable = self._bind_runnable(ctx, new_lc_tools)
-                        state = self.retrieval_executor.commit_recovery(ctx, recovery_decision, "post_tool_escalation")
-                        msgs.append(SystemMessage(
-                            content="[Knowledge base returned no results. Web search tools "
-                                    "(web_search, web_fetch) are now available. Use them to find "
-                                    "current information.]"
-                        ))
-                        if self.debug_trace and ctx.trace is not None:
-                            ctx.trace.debug_events.append(DebugTraceEvent(
-                                category="recovery",
-                                data={
-                                    "action": "post_tool_escalation",
-                                    "reason": recovery_decision.reason,
-                                    "attempt": state.attempts_used,
-                                    "step": idx,
-                                    "tool": c["name"],
-                                },
-                            ))
-
-                    if self.stop_event and self.stop_event.is_set():
-                        self.tracer.finalize(ctx.trace, "stopped")
-                        yield (_LOOP_DONE, "", "stopped", False)
-                        return
-                yield ("thinking", "Thinking...", "Processing tool results and forming response", None)
-            else:
-                final = ("I ran out of steps before finishing. Here's where I "
-                         "got to — ask me to continue if you want me to keep going.")
-                yield ("token", final)
-
-            if not final:
-                final = "(no response — the model returned empty output; try rephrasing)"
-                yield ("token", final)
-
-            stop_reason = "completed"
-            if not final.strip():
-                stop_reason = "empty"
-            elif "ran out of steps" in final:
-                stop_reason = "max_steps"
-            success = stop_reason not in ("max_steps", "error")
-            yield (_LOOP_DONE, final, stop_reason, success)
-        except Exception as e:
-            final = f"I hit an error: {e}"
-            yield ("token", final)
-            yield (_LOOP_DONE, final, "error", False)
+        yield from run_react_attempt(
+            ctx=ctx,
+            runnable=runnable,
+            tool_executor=self.tool_executor,
+            tracer=self.tracer,
+            retrieval_executor=self.retrieval_executor,
+            capability_registry=self._capability_registry,
+            scan_skills=self._scan_skills,
+            skill_block=self._skill_block,
+            bind_runnable=self._bind_runnable,
+            stop_probe=self._stop_probe(),
+            event_bus=self.event_bus,
+            debug_trace=self.debug_trace,
+            step_budget=step_budget,
+            base_msgs=base_msgs,
+            step=step,
+            step_index_base=step_index_base,
+            seed_seen=seed_seen,
+        )
     def run(self, user_input: str, attachments: list[dict] | None = None) -> str:
         chunks = []
         for kind, text in self.run_stream(user_input, attachments):

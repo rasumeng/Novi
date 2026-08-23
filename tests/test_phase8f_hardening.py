@@ -239,25 +239,33 @@ def test_fresh_loop_without_seed_executes_mutating_call():
 
 def test_run_loop_accumulates_signatures_across_attempts():
     """The runtime coding collaborator feeds prior attempt signatures into
-    the next attempt's loop (the safe-subset contract)."""
+    the next attempt's loop (the safe-subset contract).
+
+    Phase 9B: the closure targets the generic single-attempt executor
+    (``run_react_attempt``) directly, so the spy follows that seam. The
+    captured kwargs contract is otherwise asserted verbatim."""
     rt = _bare_runtime()
     base_msgs = []
     captured_seeds = []
 
-    def agent_loop(ctx, runnable, intent, budget, msgs,
-                   step=None, step_index_base=0, seed_seen=None):
-        captured_seeds.append(set(seed_seen or ()))
+    def fake_executor(**kwargs):
+        captured_seeds.append(set(kwargs.get("seed_seen") or ()))
         yield ("tool_call", "write_file", {"path": "b.py", "content": "y"},
                "c2", "workspace")
         yield ("_LOOP_DONE", "out", "completed", True)
 
-    rt._run_agent_loop = agent_loop
-    fake_ctx = SimpleNamespace(analysis=None, retrieval_plan=None,
-                               resume_from=0)
-    builder = CozmoRuntime._coding_graph_state(rt, fake_ctx, None, base_msgs,
-                                               "fix", 3)
-    list(builder["run_loop"]({}))
-    list(builder["run_loop"]({}))
+    import cozmo.runtime.runtime as runtime_module
+    original = runtime_module.run_react_attempt
+    runtime_module.run_react_attempt = fake_executor
+    try:
+        fake_ctx = SimpleNamespace(analysis=None, retrieval_plan=None,
+                                   resume_from=0)
+        builder = CozmoRuntime._coding_graph_state(rt, fake_ctx, None,
+                                                   base_msgs, "fix", 3)
+        list(builder["run_loop"]({}))
+        list(builder["run_loop"]({}))
+    finally:
+        runtime_module.run_react_attempt = original
 
     assert any("write_file:" in s for s in captured_seeds[-1]), (
         "second attempt must be seeded with attempt-1 signatures")

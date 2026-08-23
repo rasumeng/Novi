@@ -1,29 +1,61 @@
 """ResultMerger — deterministic cross-source merge, rank, and dedup.
 
-Phase 9.5 step 1. Pure component: no runtime execution, no store access, no
-network. Consumes per-source ``RetrievalResult`` objects and produces a single
-frozen ``MergedRetrievalResult`` carrying a normalized cross-source ranking.
+Phase 9.5 step 1; extended in M5 into the single unified candidate pipeline:
+filter → normalize → deduplicate (durable identity first) → rank → select.
 
-Normalization (docs/phase9.5-blueprint.md section 2.3):
+Pure component: no runtime execution, no store access, no network. Consumes
+per-source ``RetrievalResult`` objects and produces a frozen
+``MergedRetrievalResult`` carrying a normalized cross-source ranking.
 
-    final = α·source_prior(source) + β·positional_rank + γ·query_overlap
+Ranking model (M5, documented):
 
-- ``source_prior`` — source-kind priority, default memory > project >
-  knowledge > web.
+    final = clamp( base + delta )
+
+    base = α·source_prior(source) + β·positional_rank + γ·query_overlap
+
+- ``source_prior`` — source-kind priority, default memory > identity >
+  project > scenario > knowledge > web > file.
 - ``positional_rank`` — within-source position (1 - index/k), scale-agnostic
   and robust to incomparable per-source similarity scores.
 - ``query_overlap`` — fraction of query key terms present in the item text.
 
-Weights are configurable via ``MergeWeights`` (must sum to 1). Scores clamp to
-[0,1]. Provenance (original score, merge score, source rank, normalization
-method) is recorded in each item's metadata so ranking is evaluable.
+    delta = w_mem·memory_signal + w_aff·affinity_signal − w_hop·hop_penalty
 
-Duplicates across sources are removed deterministically, mirroring the
-retrieval coordinator's term-overlap rule (retrieval_coordinator.py); the
-surviving item preserves attribution for every source that contributed the
-same content.
+- ``memory_signal`` — confidence × status weight (verified 1.0 / corroborated
+  0.7 / candidate 0.4 / superseded filtered earlier). Rewards trustworthy
+  structured-memory semantics without letting them dominate relevance.
+- ``affinity_signal`` — 1.0 when ``scenario_affinity == "same"``, else 0.
+  Same-scenario knowledge is preferred; cross-scenario stays neutral so
+  explicitly-linked global knowledge is never discarded (spec M4 §4 / M5 §4).
+- ``hop_penalty`` — max(0, hops−1) capped at 2, halved per hop: direct
+  WikiLink neighbors compete freely, multi-hop neighbors are discounted.
 
-Determinism: same inputs → identical ``MergedRetrievalResult``.
+The deltas are bounded adjustments on top of the Phase 9.5 formula (which the
+existing test suite pins exactly): they can reorder near-ties and demote deep
+graph hops, never outweigh a strong semantic hit. Weights are configurable via
+``MergeWeights`` (base, must sum to 1) and ``RankAdjustments`` (deltas).
+Scores clamp to [0,1]. Provenance (original score, merge score, source rank,
+delta components, normalization method) is recorded in each item's metadata
+so ranking is evaluable.
+
+Deduplication (M5): primary key is durable identity — knowledge by Brain item
+id (``metadata["item_id"]``, so all chunks of one note collapse into their
+best-ranked representative), everything else by its deterministic result id
+(chunk id / conversation id / turn id). Only candidates with no usable
+identity fall back to the coordinator's term-overlap rule. Unrelated content
+with similar text but different durable identities is kept apart.
+
+Filtering (M5): superseded knowledge (``metadata["status"] == "superseded"``)
+is dropped before scoring; historical items stay untouched in the Brain.
+
+Context budget (``select()``): after ranking, walks items in rank order,
+accumulating text until ``allocation.max_context_chars`` /
+``allocation.max_results``, stopping early once the picked set covers ≥
+``coverage_target`` of the query's key terms with at least ``min_items``
+picked — minimum sufficient context, not maximum recall. Graph-expanded
+candidates compete for budget like every other candidate.
+
+Determinism: same inputs → identical output.
 """
 
 from __future__ import annotations
@@ -58,6 +90,14 @@ _DEDUP_OVERLAP_RATIO = 0.5
 # Normalization method recorded on every merged item.
 _NORMALIZATION = "weighted_source_position_overlap"
 
+# Knowledge-status weights for the memory-semantics delta (M5). Superseded
+# never reaches ranking — it is filtered before scoring.
+_STATUS_WEIGHT = {
+    "verified": 1.0,
+    "corroborated": 0.7,
+    "candidate": 0.4,
+}
+
 # Default source-kind priority. Layered tiers (Phase E) sit between project
 # and knowledge, mirroring identity → project → scenario → knowledge.
 _SOURCE_PRIOR = {
@@ -70,6 +110,40 @@ _SOURCE_PRIOR = {
     "file": 0.2,
 }
 _DEFAULT_PRIOR = 0.3
+
+# Canonical origin per source when the item carries no explicit origin (M5
+# candidate normalization). Only what the source actually is — never invented
+# detail.
+_SOURCE_ORIGIN = {
+    "memory": "conversation",
+    "project": "project",
+    "scenario": "scenario",
+    "identity": "identity",
+    "knowledge": "semantic",
+    "web": "web",
+    "file": "file",
+}
+
+
+@dataclass(frozen=True)
+class RankAdjustments:
+    """Bounded post-base ranking deltas (M5). Each weight ∈ [0, 1].
+
+    ``memory``     — confidence × status reward.
+    ``affinity``   — same-scenario bonus (cross-scenario stays neutral).
+    ``hop_penalty``— discount per WikiLink hop beyond the first, halved:
+                     depth-1 → 0·w, depth-2 → 0.5·w, depth-3+ → capped at w.
+    """
+
+    memory: float = 0.05
+    affinity: float = 0.06
+    hop_penalty: float = 0.15
+
+    def __post_init__(self) -> None:
+        for name in ("memory", "affinity", "hop_penalty"):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"RankAdjustments.{name} must be in [0,1], got {value}")
 
 
 @dataclass(frozen=True)
@@ -102,11 +176,13 @@ class ResultMerger:
         self,
         weights: MergeWeights | None = None,
         source_prior: Optional[dict[str, float]] = None,
+        adjustments: RankAdjustments | None = None,
     ):
         self._weights = weights or MergeWeights()
         self._prior = dict(_SOURCE_PRIOR)
         if source_prior:
             self._prior.update(source_prior)
+        self._adjustments = adjustments or RankAdjustments()
 
     # ── public ──────────────────────────────────────────────────────────
 
@@ -116,18 +192,101 @@ class ResultMerger:
         query: str,
         allocation: ContextAllocation,
     ) -> MergedRetrievalResult:
-        """Merge per-source results into one ranked, deduplicated result."""
-        scored = self._score_items(results, query)
-        merged = self._dedup(scored)
+        """Merge per-source results into one ranked, deduplicated result.
+
+        Pipeline: superseded filtering → scoring (base + deltas) → durable
+        -identity-first deduplication → rank ordering.
+        """
+        candidates, filtered = self._filter(results)
+        scored = self._score_items(candidates, query)
+        merged, identity_removed = self._dedup(scored)
         items = tuple(sorted(merged, key=lambda it: it.score, reverse=True))
+        metrics = self._metrics(results, len(scored), len(items))
+        if filtered:
+            metrics["filtered_superseded"] = filtered
+        if identity_removed:
+            metrics["identity_dedup_removed"] = identity_removed
         return MergedRetrievalResult(
             query=query,
             items=items,
             source_results=tuple(results),
             quality=self._quality(results, items),
             allocation_used=allocation,
-            metrics=self._metrics(results, len(scored), len(items)),
+            metrics=metrics,
         )
+
+    def select(
+        self,
+        items: tuple[RetrievedItem, ...] | list[RetrievedItem],
+        query: str,
+        allocation: ContextAllocation,
+        *,
+        min_items: int = 2,
+        coverage_target: float = 0.8,
+    ) -> tuple[RetrievedItem, ...]:
+        """Minimum-sufficient context selection over ranked items (M5 §10).
+
+        Walks ``items`` in the given (rank) order, accumulating text until
+        the allocation's char/item budget is reached. Stops early — before
+        burning the whole budget — once at least ``min_items`` are picked and
+        they cover ≥ ``coverage_target`` of the query's key terms. Items with
+        no query-term coverage never satisfy the early stop on their own;
+        with no key terms at all, sufficiency is unmeasurable and selection
+        runs to ``min(max_results, budget)`` instead of guessing.
+
+        Deterministic; returns a new tuple; never mutates inputs.
+        """
+        key_terms = self._query_terms(query)
+        max_items = max(1, allocation.max_results)
+        budget = max(0, allocation.max_context_chars)
+        picked: list[RetrievedItem] = []
+        chars = 0
+        covered: set[str] = set()
+
+        def sufficient() -> bool:
+            if len(picked) < min_items or not key_terms:
+                return False
+            return len(covered) / len(key_terms) >= coverage_target
+
+        for item in items:
+            if len(picked) >= max_items:
+                break
+            cost = len(item.text or "")
+            if picked and chars + cost > budget:
+                break
+            picked.append(item)
+            chars += cost
+            lower = (item.text or "").lower()
+            covered.update(t for t in key_terms if t in lower)
+            if sufficient():
+                break
+
+        return tuple(picked)
+
+    # ── filtering ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _filter(
+        results: list[RetrievalResult],
+    ) -> tuple[list[RetrievalResult], int]:
+        """Drop superseded knowledge candidates before ranking (M5).
+
+        Filtering happens at the candidate boundary only — historical items
+        stay untouched in the Brain (append-only semantics preserved).
+        Returns (usable per-source results, superseded count).
+        """
+        kept: list[RetrievalResult] = []
+        removed = 0
+        for result in results:
+            usable = [
+                it for it in result.items
+                if str(it.metadata.get("status", "")).lower() != "superseded"
+            ]
+            removed += len(result.items) - len(usable)
+            if not usable:
+                continue
+            kept.append(replace(result, items=usable))
+        return kept, removed
 
     # ── normalization ───────────────────────────────────────────────────
 
@@ -136,11 +295,15 @@ class ResultMerger:
         results: list[RetrievalResult],
         query: str,
     ) -> list[RetrievedItem]:
-        """Score every item: α·prior + β·positional + γ·overlap.
+        """Score every item: clamp(base + delta).
+
+        base  = α·prior + β·positional + γ·overlap   (Phase 9.5, unchanged)
+        delta = w_mem·memory + w_aff·affinity − w_hop·hops  (M5)
 
         Sources are processed in a deterministic order (priority descending,
         then original index) so canonical-item selection in dedup is stable
-        regardless of the caller's result ordering.
+        regardless of the caller's result ordering. Each candidate's ``origin``
+        is normalized from its source kind when absent (M5 §5).
         """
         key_terms = self._query_terms(query)
         ordered = sorted(
@@ -154,44 +317,142 @@ class ResultMerger:
             for i, item in enumerate(result.items):
                 positional = 1.0 - (i / k)
                 overlap = self._overlap(item.text, key_terms)
-                raw = (
+                base = (
                     self._weights.alpha * prior
                     + self._weights.beta * positional
                     + self._weights.gamma * overlap
                 )
-                score = self._clamp(raw)
+                d_mem, d_aff, d_hop = self._deltas(item)
+                score = self._clamp(base + d_mem + d_aff - d_hop)
                 meta = dict(item.metadata)
+                meta.setdefault(
+                    "origin", _SOURCE_ORIGIN.get(result.source, "semantic")
+                )
                 meta["original_score"] = float(item.score)
                 meta["merge_score"] = round(score, 6)
+                meta["rank_base"] = round(base, 6)
+                meta["delta_memory"] = round(d_mem, 6)
+                meta["delta_affinity"] = round(d_aff, 6)
+                meta["delta_hops"] = round(d_hop, 6)
                 meta["source_rank"] = i + 1
                 meta["source_prior"] = prior
                 meta["normalization"] = _NORMALIZATION
                 scored.append(replace(item, score=score, metadata=meta))
         return scored
 
+    def _deltas(self, item: RetrievedItem) -> tuple[float, float, float]:
+        """Bounded ranking deltas from candidate metadata (M5).
+
+        Every component defaults to a neutral 0 when the metadata is absent —
+        sources are never forced to manufacture semantics they do not have.
+        """
+        meta = item.metadata
+        adj = self._adjustments
+
+        confidence = meta.get("confidence")
+        try:
+            confidence = float(confidence) if confidence is not None else None
+        except (TypeError, ValueError):
+            confidence = None
+        status_weight = _STATUS_WEIGHT.get(
+            str(meta.get("status", "")).lower()
+        )
+        memory_signal = 0.0
+        if confidence is not None or status_weight is not None:
+            memory_signal = (confidence if confidence is not None else 0.0) * (
+                status_weight if status_weight is not None else 1.0
+            )
+        d_mem = adj.memory * self._clamp(memory_signal)
+
+        d_aff = (
+            adj.affinity
+            if str(meta.get("scenario_affinity", "")).lower() == "same"
+            else 0.0
+        )
+
+        try:
+            hops = int(meta.get("hops", 0))
+        except (TypeError, ValueError):
+            hops = 0
+        hop_penalty = min(2, max(0, hops - 1)) / 2.0
+        d_hop = adj.hop_penalty * hop_penalty
+
+        return d_mem, d_aff, d_hop
+
     # ── deduplication ───────────────────────────────────────────────────
 
-    def _dedup(self, scored: list[RetrievedItem]) -> list[RetrievedItem]:
-        """Remove near-identical content across sources, keeping attribution.
+    def _dedup(self, scored: list[RetrievedItem]) -> tuple[list[RetrievedItem], int]:
+        """Remove duplicates across sources, keeping attribution.
+
+        M5 rule, strict identity-first (spec §6): candidates WITH a durable
+        Brain identity (``metadata["item_id"]`` / ``kn-``-prefixed
+        ``metadata["id"]``) are deduplicated solely by that identity.
+        Similar text under different durable identities is related-but-
+        distinct knowledge and is never collapsed (text similarity alone
+        must not merge unrelated content).
+
+        Candidates without a durable identity — legacy rows, web pages,
+        project blobs — fall back to the Phase 9.5 term-overlap rule
+        (mirrors RetrievalCoordinator._find_duplicate), which also merges
+        the same deterministic chunk discovered through two paths. This
+        keeps pre-M5 merge behavior byte-compatible for every input that
+        lacks knowledge metadata.
 
         The surviving (canonical) item is the first encountered in
         deterministic source-priority order; later duplicates merge their
         source into the canonical item's ``attributed_sources`` metadata.
+        Returns (kept items, duplicates removed count).
         """
         kept: list[RetrievedItem] = []
+        by_identity: dict[str, int] = {}
+        removed = 0
         for item in scored:
+            key = self._identity_key(item)
+            if key is not None:
+                existing_index = by_identity.get(key)
+                if existing_index is not None:
+                    kept[existing_index] = self._attribute(kept[existing_index], item)
+                    removed += 1
+                    continue
+                by_identity[key] = len(kept)
+                kept.append(item)
+                continue
+
+            # No usable identity — content heuristic only.
             dup_index = self._find_duplicate(item, kept)
             if dup_index is None:
                 kept.append(item)
                 continue
-            existing = kept[dup_index]
-            meta = dict(existing.metadata)
-            attributed = set(meta.get("attributed_sources", []))
-            attributed.add(existing.source)
-            attributed.add(item.source)
-            meta["attributed_sources"] = sorted(attributed)
-            kept[dup_index] = replace(existing, metadata=meta)
-        return kept
+            kept[dup_index] = self._attribute(kept[dup_index], item)
+            removed += 1
+        return kept, removed
+
+    @staticmethod
+    def _identity_key(item: RetrievedItem) -> Optional[str]:
+        """Durable dedup identity for a candidate (M5 §6).
+
+        Knowledge carries the Brain item id as ``metadata["item_id"]``
+        (indexed chunks, graph neighbors) or as ``kn-``-prefixed
+        ``metadata["id"]`` (layered-recall rows). Only that durable identity
+        drives identity-based dedup; generic result ids are per-source labels,
+        not durable identities. Returns None when no Brain identity exists.
+        """
+        durable = str(item.metadata.get("item_id") or "").strip()
+        if not durable:
+            meta_id = str(item.metadata.get("id") or "").strip()
+            if meta_id.startswith("kn-"):
+                durable = meta_id
+        return f"know:{durable}" if durable else None
+
+    @staticmethod
+    def _attribute(existing: RetrievedItem, duplicate: RetrievedItem) -> RetrievedItem:
+        """Merge ``duplicate``'s source attribution into ``existing``."""
+        meta = dict(existing.metadata)
+        attributed = set(meta.get("attributed_sources", []))
+        attributed.add(existing.source)
+        attributed.add(duplicate.source)
+        meta["attributed_sources"] = sorted(attributed)
+        return replace(existing, metadata=meta)
 
     @staticmethod
     def _find_duplicate(

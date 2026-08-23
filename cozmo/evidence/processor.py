@@ -119,8 +119,15 @@ class EvidenceProcessor:
     def _build_sources(self, bundle: EvidenceBundle) -> list[Source]:
         query_terms = self._terms(bundle.query)
         sources = []
+        seen_urls: set[str] = set()
         for r in bundle.results:
             domain = _domain(r.url)
+            # Same source collected twice is one source: keep the first
+            # occurrence, never inflate corroboration with duplicates.
+            if r.url:
+                if r.url in seen_urls:
+                    continue
+                seen_urls.add(r.url)
             text = (r.title + " " + r.snippet).lower()
             relevance = self._overlap(text, query_terms)
             sources.append(
@@ -201,15 +208,27 @@ def _authority(domain: str, url: str) -> float:
 
 
 def _parse_freshness(freshness: str | None) -> datetime | None:
+    """Parse a freshness hint into a UTC datetime.
+
+    Determinism contract (evidence parity): identical inputs must produce
+    structurally equal EvidenceContext objects. Wall-clock-relative strings
+    ("2 days ago") are therefore quantized to whole UTC days — freshness
+    ranking operates on day granularity anyway, and sub-second wall-clock
+    noise must never leak into the immutable context.
+    """
     if not freshness:
         return None
+
+    def _day(dt: datetime) -> datetime:
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
     try:
         m = _ISO_DATE.match(freshness.strip())
         if m:
             return datetime.fromisoformat(m.group(0)).replace(tzinfo=timezone.utc)
     except ValueError:
         pass
-    now = datetime.now(timezone.utc)
+    now = _day(datetime.now(timezone.utc))
     m = _RELATIVE.search(freshness.lower())
     if m:
         n = int(m.group(1))
@@ -218,8 +237,8 @@ def _parse_freshness(freshness: str | None) -> datetime | None:
         return now - timedelta(days=days)
     m = _MINUTE.search(freshness.lower())
     if m:
-        return now - timedelta(minutes=int(m.group(1)))
+        return now
     m = _HOUR.search(freshness.lower())
     if m:
-        return now - timedelta(hours=int(m.group(1)))
+        return now
     return None

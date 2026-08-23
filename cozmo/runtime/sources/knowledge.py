@@ -188,6 +188,9 @@ class KnowledgeRetrievalSource:
             score=float(score),
             metadata={
                 "type": "knowledge",
+                # Durable Brain identity — the unified merger's primary dedup
+                # key (same bridge KnowledgeIndex writes for indexed chunks).
+                "item_id": str(getattr(known, "id", "")),
                 "tags": tags,
                 "scenario_id": getattr(known, "scenario_id", None),
                 "origin": "wikilink",

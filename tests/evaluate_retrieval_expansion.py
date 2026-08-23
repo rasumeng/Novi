@@ -39,6 +39,7 @@ from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
 from cozmo.brain.storage.relationship_store import RelationshipStore
 from cozmo.brain.storage.scenario_store import ScenarioStore
 from cozmo.brain.storage.vector_store import VectorStore
+from cozmo.brain.types import KnowledgeStatus
 from cozmo.runtime.retrieval_budget import ContextAllocation
 from cozmo.runtime.sources import KnowledgeRetrievalSource
 from cozmo.services.embedding import EmbeddingService
@@ -105,6 +106,8 @@ class Case:
     # Source arm retrieves the seed as a path-chunked row (id ``<rel>::0``),
     # so its expectation covers exactly what expansion must add: the targets.
     source_expected: tuple[str, ...] = ()
+    # Linked-but-superseded twin: must never surface in any arm.
+    dead_id: str = ""
 
 
 def build_brain(tmp: Path):
@@ -122,7 +125,7 @@ def build_brain(tmp: Path):
 
 
 def build_corpus(brain, rels, idx) -> list[Case]:
-    """Plant CLUSTERS linked triples + distractors; return eval cases."""
+    """Plant CLUSTERS linked triples (+ one superseded twin each) + distractors."""
     cases: list[Case] = []
     for c in range(CLUSTERS):
         seed_id = brain.learn(f"Cluster {c} seed overview hub note.")["item_id"]
@@ -134,11 +137,20 @@ def build_corpus(brain, rels, idx) -> list[Case]:
             rels.add(Relationship(source_id=seed_id, target_id=tid,
                                   kind=EdgeKind.REFERENCES))
             targets.append(tid)
+        # Superseded twin: linked like a real target but status=superseded.
+        # Must never leak into any arm's context (M4.1 boundary + M5 filter).
+        dead_id = brain.learn(
+            f"Cluster {c} target outdated stale material."
+        )["item_id"]
+        brain._knowledge_layer.update_status(dead_id, KnowledgeStatus.SUPERSEDED)
+        rels.add(Relationship(source_id=seed_id, target_id=dead_id,
+                              kind=EdgeKind.REFERENCES))
         cases.append(
             Case(
                 query=f"needle cluster {c} question",
                 expected=(seed_id, *targets),
                 source_expected=tuple(targets),
+                dead_id=dead_id,
                 seed_row={
                     "id": f"cluster-{c}.md::0",
                     "text": f"Cluster {c} seed overview hub note.",
@@ -232,6 +244,32 @@ def run_source_arm(brain, idx, cases, *, expanded: bool):
     return results, latencies
 
 
+def run_unified_arm(brain, idx, cases):
+    """M5 arm: unified pool (knowledge+graph) → merge → rank → budget select.
+
+    Metrics here measure the FINAL selected context — the minimum-sufficient
+    pick — not the full candidate pool.
+    """
+    from cozmo.runtime.sources import KnowledgeRetrievalSource
+    from cozmo.runtime.unified_retrieval import SourceBinding, UnifiedRetriever
+
+    src = KnowledgeRetrievalSource(brain)
+    retriever = UnifiedRetriever()
+    alloc = ContextAllocation(max_results=3, max_context_chars=1500)
+    retriever.retrieve("warmup needle", alloc,
+                       [SourceBinding("knowledge", src)])
+    latencies, ranking_ms, results = [], [], []
+    for case in cases:
+        idx.rows = [case.seed_row]
+        t0 = time.perf_counter()
+        outcome = retriever.retrieve(
+            case.query, alloc, [SourceBinding("knowledge", src)])
+        latencies.append((time.perf_counter() - t0) * 1000.0)
+        ranking_ms.append(outcome.merged.metrics["ranking_latency_ms"])
+        results.append([(i.id, i.text) for i in outcome.selected])
+    return results, latencies, ranking_ms
+
+
 # ── metrics ──────────────────────────────────────────────────────────────────
 
 
@@ -244,31 +282,46 @@ class ArmMetrics:
     duplicates: int = 0
     total_items: int = 0
     total_chars: int = 0
+    relevant_chars: int = 0
+    superseded_leakage: int = 0
     successes: int = 0
     queries: int = 0
     latency_ms: list = field(default_factory=list)
+    ranking_ms: list = field(default_factory=list)
 
     def as_row(self):
         recall = (self.relevant_discovered / self.relevant_possible) if self.relevant_possible else 0.0
         dup_rate = (self.duplicates / self.total_items) if self.total_items else 0.0
         mean_ms = statistics.fmean(self.latency_ms) if self.latency_ms else 0.0
         p95_ms = sorted(self.latency_ms)[int(len(self.latency_ms) * 0.95) - 1] if self.latency_ms else 0.0
+        rank_ms = statistics.fmean(self.ranking_ms) if self.ranking_ms else 0.0
+        efficiency = (self.relevant_chars / self.total_chars) if self.total_chars else 0.0
         return {
             "arm": self.arm,
             "query_success": f"{self.successes}/{self.queries}",
             "relevant_recall": round(recall, 4),
             "irrelevant_introduced": self.irrelevant_introduced,
+            "superseded_leakage": self.superseded_leakage,
             "duplicate_rate": round(dup_rate, 4),
             "context_items": self.total_items,
             "context_chars": self.total_chars,
+            "context_efficiency": round(efficiency, 4),
             "latency_mean_ms": round(mean_ms, 3),
             "latency_p95_ms": round(p95_ms, 3),
+            "ranking_latency_mean_ms": round(rank_ms, 3),
         }
 
 
-def measure(arm: str, cases, results, latencies, *, source: bool = False) -> ArmMetrics:
+def measure(arm: str, cases, results, latencies, *, source: bool = False,
+            ranking_ms=None) -> ArmMetrics:
+    """Score one arm's retrieved/selected pairs against its expectations.
+
+    ``source=True`` measures the source-surface expectation (targets only);
+    the default measures the full durable triple.
+    """
     m = ArmMetrics(arm=arm, queries=len(cases))
     m.latency_ms = latencies
+    m.ranking_ms = list(ranking_ms or [])
     for case, pairs in zip(cases, results):
         expected = case.source_expected if source else case.expected
         seen: set[str] = set()
@@ -281,9 +334,12 @@ def measure(arm: str, cases, results, latencies, *, source: bool = False) -> Arm
             seen.add(iid)
             if iid in expected:
                 m.relevant_discovered += 1
+                m.relevant_chars += len(text or "")
                 unique_hits.add(iid)
             else:
                 m.irrelevant_introduced += 1
+            if case.dead_id and iid == case.dead_id:
+                m.superseded_leakage += 1
         m.relevant_possible += len(expected)
         m.successes += int(unique_hits == set(expected))
     return m
@@ -314,6 +370,10 @@ def main() -> int:
     s_exp, s_exp_lat = run_source_arm(brain, idx, cases, expanded=True)
     arms.append(measure("source: semantic+wikilink", cases, s_exp, s_exp_lat,
                         source=True))
+
+    u_res, u_lat, u_rank = run_unified_arm(brain, idx, cases)
+    arms.append(measure("M5 unified (selected context)", cases, u_res, u_lat,
+                        source=True, ranking_ms=u_rank))
 
     rows = [a.as_row() for a in arms]
     width = max(len(k) for k in rows[0])

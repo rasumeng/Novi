@@ -956,3 +956,73 @@ def test_no_cwd_relative_knowledge_path():
             "CWD-relative knowledge path returned (use workspace.knowledge):\n"
             + "\n".join(violations)
         )
+
+
+# ── Post-cutover stabilization guards (LangGraph default stage) ──────────
+
+def test_no_retired_retrieve_memory_rows_adapter():
+    """The Brain.retrieve_memory_rows flat compat adapter was retired.
+
+    MemoryRetrievalSource reads through ``Brain.recall`` directly; no
+    production code may reference the removed adapter again.
+    """
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "retrieve_memory_rows" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "retired retrieve_memory_rows adapter referenced in production:\n"
+            + "\n".join(violations)
+        )
+
+
+def test_no_retired_store_project_context_method():
+    """MemoryManager.store_project_context was retired (zero callers).
+
+    Project context flows through ProjectIndex / UnifiedRetriever; the flat
+    store must not grow a second write path for it.
+    """
+    violations = []
+    for pyfile in _iter_py_files(COZMO_SRC):
+        rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
+        text = pyfile.read_text("utf-8", errors="replace")
+        for i, line in enumerate(text.splitlines(), 1):
+            if _is_comment(line):
+                continue
+            if "store_project_context" in line:
+                violations.append(f"{rel}:{i}: {line.strip()[:80]}")
+    if violations:
+        raise AssertionError(
+            "retired store_project_context method referenced in production:\n"
+            + "\n".join(violations)
+        )
+
+
+def test_composition_roots_default_langgraph_engine():
+    """Cutover pin: both production composition roots default
+    runtime.workflow_engine to "langgraph".
+
+    Prevents a silent regression to the legacy default; the explicit
+    "legacy" escape hatch (constructor arg or config override) stays legal.
+    """
+    roots = [
+        COZMO_SRC / "webui_server.py",
+        COZMO_SRC / "services" / "context.py",
+    ]
+    for path in roots:
+        text = path.read_text("utf-8", errors="replace")
+        found = any(
+            'workflow_engine' in line and '"langgraph"' in line
+            and not _is_comment(line)
+            for line in text.splitlines()
+        )
+        assert found, (
+            f"{path.relative_to(PROJECT_ROOT)}: composition root no longer "
+            "defaults workflow_engine to langgraph"
+        )

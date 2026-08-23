@@ -374,10 +374,16 @@ def build_runtime(cfg: dict | None = None):
     # loops. Graphs are stateless (model/search/run_loop injected per-run), so
     # they are built once and cached on the shared backend.
     if "research_graph" not in b:
-        from .graphs import CodingGraph, ResearchGraph
+        from .graphs import CodingGraph, ResearchGraph, RuntimeWorkflowGraph
 
         b["research_graph"] = ResearchGraph()
         b["coding_graph"] = CodingGraph()
+        # Dual-path migration: general workflow graph built once; execution
+        # opt-in via runtime.workflow_engine ("legacy" default).
+        b["runtime_graph"] = RuntimeWorkflowGraph(
+            max_steps=int(cfg.get("runtime", {}).get("max_steps", 10))
+        )
+    workflow_engine = cfg.get("runtime", {}).get("workflow_engine", "langgraph")
     runtime = CozmoRuntime(
         model_service=b["model_service"],
         memory=b["memory"],
@@ -392,6 +398,8 @@ def build_runtime(cfg: dict | None = None):
         mcp_permissions=b.get("mcp_permissions"),
         research_graph=b["research_graph"],
         coding_graph=b["coding_graph"],
+        runtime_graph=b.get("runtime_graph"),
+        workflow_engine=workflow_engine,
     )
     # Drive Task lifecycle from runtime plan events; runtime never touches the
     # store itself.

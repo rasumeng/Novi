@@ -6,8 +6,8 @@ back, or persist models — and never read or write configuration.
 
 See ``tests/test_architecture.py`` Guard 5 (graph import boundary).
 """
-
 from .coding_graph import CodingGraph
 from .research_graph import ResearchGraph
+from .runtime_graph import RuntimeWorkflowGraph
 
-__all__ = ["ResearchGraph", "CodingGraph"]
+__all__ = ["ResearchGraph", "CodingGraph", "RuntimeWorkflowGraph"]

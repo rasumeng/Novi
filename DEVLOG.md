@@ -341,7 +341,7 @@ state unchanged: the only reds are the same 7 pre-existing ordering-dependent
 `test_tool_retrieval.py` failures.
 ---
 
-## 2026-08-21 — M3: WikiLink Resolution + Knowledge Graph Relationships
+## 2026-08-21  M3: WikiLink Resolution + Knowledge Graph Relationships
 
 M3 turns WikiLinks from creation-only eferences placeholders into a resolvable
 relationship graph over the existing RelationshipStore (no new graph DB, no
@@ -353,7 +353,7 @@ second relationship store, no LangGraph).
   idempotent reconciliation (add/remove eferences edges), dangling-link
   retention as 
 ote:<Title> edges, ambiguity left unresolved with a warning.
-- **cozmo/brain/storage/relationship_store.py**: emove(), list(kind=…),
+- **cozmo/brain/storage/relationship_store.py**: emove(), list(kind=),
   has(), in-batch de-dup, INSERT OR IGNORE, and a best-effort unique edge
   index (degrades to a warning on pre-existing duplicates instead of crashing).
 - **cozmo/brain/brain.py**: creation-time link materialization now resolves to
@@ -469,6 +469,293 @@ Evaluation baseline preserved exactly (relevant recall 1.0, query success
 ~21 ms -> ~7 ms mean per gate-failing query from the batched fetch.
 
 Suite: 43 M4/M4.1 tests green; 1557 -> 1566 full suite (+9), 0 failures.
+
+---
+
+## 2026-08-21 - M5: Unified Retrieval + Graph-Aware Context Assembly
+
+M5 consolidates the partially-overlapping ranking paths behind one pipeline:
+filter - normalize - dedup (durable identity first) - unified ranking -
+context-budget selection. Migration only: Brain/Markdown/RelationshipStore/
+LanceDB/embeddings untouched; no LangGraph; no model-boundary change;
+`_rank_memories` and `search_with_importance` remain ACTIVE (memory
+prompt-context ranking and KnowledgeIndex candidate fetch) and are explicitly
+deferred to the legacy-removal stage.
+
+Audit result (source of truth = repo): active ranking paths were
+`RetrievalExecutor._rank_memories` (freq x recency x distance), LanceDB
+`search_with_importance` (relevance x recency x frequency), KnowledgeIndex
+hybrid+cross-encoder rerank, LayeredRetrievalResolver (gate/tier/graph),
+M4 source-level expansion with its own gate, and an UNWIRED Phase 9.5
+ResultMerger. M5 wires that merger as the single merge/rank/dedup/budget
+component instead of creating a second one.
+
+- **cozmo/runtime/result_merger.py**: superseded-status filtering at the
+  candidate boundary (metrics: filtered_superseded); strict durable-identity
+  dedup (`item_id` / kn-prefixed `id`) - text similarity NEVER merges
+  distinct knowledge; identity-less candidates keep the Phase 9.5 content
+  rule byte-compatibly; bounded ranking deltas on the pinned base formula
+  (documented in-module): delta = w_mem*confidence*status + w_aff*same-
+  scenario - w_hop*(hops-1)/2 with defaults 0.05/0.06/0.15 - near-tie
+  reordering and deep-hop demotion only, never outweighing semantic hits;
+  every component recorded per item for evaluability; new `select()`
+  minimum-sufficient context walk (char/item budget + query-term coverage
+  early stop); origin normalization from source kind.
+- **cozmo/runtime/unified_retrieval.py** (new): UnifiedRetriever composition
+  root - parallel-ish discovery over injected SourceBindings, per-source
+  latency/quality/contribution metrics, gate observability
+  (sufficient_semantic vs expanded_graph via wikilink origins), merger +
+  selection timings. Web/file deliberately excluded (evidence-pipeline
+  semantics differ; documented integration point for later).
+- **cozmo/runtime/retrieval.py**: `retrieve_knowledge` now routes through
+  the unified pool (knowledge+graph merged with memory/project when wired);
+  single-source bindings keep the pre-M5 byte-identical path; any unified
+  failure falls back to legacy behavior.
+- **cozmo/runtime/sources/knowledge.py**: graph neighbors now carry
+  `item_id` durable-id metadata (dedup bridge parity with indexed chunks).
+- **tests/test_m5_unified_retrieval.py** (new, 38 tests): superseded filter,
+  identity dedup matrix (chunks-of-note / graph twin / cross-surface recall
+  row / distinct-ids-kept-apart / legacy content fallback), delta ranking
+  (base-formula unchanged, confidence lift, affinity bonus with neutral
+  cross, hop demotion, determinism), budget selection (coverage early stop,
+  char cap, max_results cap, empty-query fill, graph competes fairly,
+  immutability), retriever composition/metrics/degradation/order-independence,
+  executor integration incl. legacy fallback, architecture purity guards.
+- **tests/evaluate_retrieval_expansion.py**: M5 arm added measuring FINAL
+  selected context + context_efficiency, superseded_leakage,
+  ranking_latency_mean_ms columns; corpus plants one linked superseded twin
+  per cluster.
+
+Evaluation (12 clusters + 12 distractors): baseline recall 0.33/success 0/12;
+expanded 1.00 / 12-12; M5 unified selected context keeps recall 1.00 and
+12/12 success at identical 36 items / 1482 chars with ZERO superseded
+leakage, zero duplicates, ranking overhead ~0.09 ms/query, total ~10.5 ms.
+Full suite: 1566 -> 1604 (+38), 0 failures.
+
+---
+
+## 2026-08-21 - Post-M5 Audit + Retrieval Hardening (superseded leak closure)
+
+Read-only audit of the post-M5 repository traced all retrieval entry points,
+ranking/dedup/budget paths, Brain-Markdown sync, reconciliation, WikiLink
+synchronization, conversation persistence, legacy MemoryManager paths,
+EvidenceProcessor, and LangGraph boundaries. Findings classified; one A-class
+blocker found and fixed.
+
+**Audit highlights**: LangGraph confined to cozmo/graphs (research/coding
+StateGraphs, no memory role); ModelUnavailableError propagation intact end to
+end; ConversationStore confined to brain/ + composition root; EvidenceProcessor
+mature but unwired into the live search path (deferred - parity unproven);
+_rank_memories / search_with_importance remain active legacy (parity not yet
+proven - untouched per migration discipline).
+
+**A-class finding - superseded leakage through the semantic primitive**:
+`VectorStore.query` returned SUPERSEDED rows; only the optional tiering flag
+masked them, and knowledge-index chunks carried no status at all. Fixed at the
+read boundary, append-only intact:
+
+- **cozmo/brain/storage/vector_store.py**: `query()` excludes superseded by
+  default (NULL-status legacy rows stay eligible); `include_superseded=True`
+  is the explicit history/audit escape hatch mirroring tier_hits. Point
+  lookups (get/get_many) stay policy-free - Brain owns fetch policy.
+- **cozmo/memory/knowledge_index.py**: chunk metadata mirrors frontmatter
+  `status` at index time; `search()` drops superseded rows. Pre-mirror
+  rows pass through until their next mtime-triggered re-index (self-healing).
+- **tests/test_m6_retrieval_hardening.py** (new, 10 tests): store exclusion +
+  escape hatch + live supersede reflection + history preservation + point-
+  lookup neutrality + signature pin; index drop/pass-through/reindex-heal;
+  non-tiered resolver e2e (the old leak regime) + graph fetch boundary.
+
+Evaluation baseline unchanged (recall 1.00, success 12/12, zero leakage/dups).
+Full suite: 1604 -> 1614 (+10), 0 failures.
+
+Deferred (B/C): EvidenceProcessor wiring (needs live-path parity fixtures),
+_rank_memories/search_with_importance removal (legacy stage), LangGraph
+dual-path StateGraph (next major stage once evidence path settles).
+
+---
+
+## 2026-08-21 - EvidenceProcessor Live-Path Integration (parity-first)
+
+Read-only audit traced both evidence paths end to end. Current live path:
+`EvidenceCollector.collect` -> raw `merged_text` ("**Source i**" blocks,
+top 5 x ~3000 chars, URLs+titles included) -> `ctx.grounding_text` -> system
+prompt verbatim (~up to 15k chars). Processor path existed but was consumed
+only by the evaluation harness. The migration seam was already designed:
+`ExecutionContext.evidence_context` sat unwired ("never set by runtime").
+
+Integration (no new frameworks; processor/extractor/ranker extended in place):
+
+- **cozmo/evidence/rendering.py** (new): `render_evidence_context` - the
+  missing parity half. Deterministic model-facing renderer that preserves what
+  raw merged_text guaranteed (source titles + URLs, relevant content, input
+  ordering) and adds confidence header, per-fact `[Sn]` source attribution,
+  and explicit conflict/resolution surfacing. Returns "" for fallback
+  contexts so callers keep raw behavior.
+- **cozmo/evidence/processor.py**: duplicate-URL sources now collapse at
+  build time (same source collected twice is one source - never inflates
+  corroboration).
+- **cozmo/runtime/retrieval.py**: new `_apply_web_evidence` wired into all
+  four web-search sites. Default unchanged (raw text lands first); processing
+  is best-effort - trusted non-fallback contexts upgrade the grounding to the
+  rendered structured form, fallbacks keep byte-identical raw text, and any
+  processor exception keeps raw grounding with `evidence_context` unset.
+  KB-text grounding paths untouched; web evidence still never reaches Brain/
+  knowledge storage.
+- **tests/test_evidence_parity.py** (new, 20 tests): 12-category fixture
+  matrix (clean multi-source, duplicates, conflicts, confidence tiers,
+  temporal, irrelevant, empty, malformed, repeated queries, mixed quality,
+  determinism, failure injection) asserting URL/title/content parity between
+  current and processed pipelines, plus executor gating/degradation tests and
+  architecture guards (evidence package purity: no LangGraph/storage/model
+  selection; no Brain persistence references).
+
+Measured (5x~7k-char sources): raw 7344 chars -> processed 381 chars rendered,
+processing latency ~1 ms. Full suite: 1614 -> 1634 (+20), 0 failures.
+
+Next LangGraph blocker identified: none in evidence - the research StateGraph
+(`cozmo/graphs/research_graph.py`) can now consume structured evidence with
+identical semantics; remaining pre-migration work is the dual-path runtime
+scaffold itself plus legacy retrieval parity proof (_rank_memories /
+search_with_importance removal stays deferred).
+
+---
+
+## 2026-08-21 - LangGraph Dual-Path Runtime Migration
+
+General runtime workflow graph added behind an opt-in engine flag. Legacy
+run_stream remains the default and is byte-inert when the graph is wired but
+the engine stays "legacy".
+
+- **cozmo/graphs/runtime_graph.py** (new): RuntimeWorkflowGraph - explicit
+  analyze -> retrieve -> reason -> act(bounded loop) -> reflect -> answer
+  StateGraph following the established research/coding injection pattern.
+  Retrieve node snapshots context the runtime's RetrievalExecutor/
+  UnifiedRetriever/evidence pipeline ALREADY produced (zero retrieval logic
+  in-graph); every tool call routes through ToolExecutor via the injected
+  execute_tool collaborator; model arrives already-bound (ModelUnavailableError
+  propagates untouched - never caught); reflect is opt-in (workflow.reflect_on_run,
+  default off = parity with observe-per-turn semantics). No checkpointer:
+  Brain/ConversationStore/JobStore remain the only durable authorities.
+  Legacy-parity details pinned: thinking/tool_call/tool_result/token event
+  vocabulary+order, exact-call dedup message, max-steps wording, empty-output
+  fallback string.
+- **cozmo/graphs/state.py**: additive RuntimeState (events, seed_messages,
+  seen_calls, observations, collaborators). ResearchState/CodingState untouched.
+- **cozmo/runtime/runtime.py**: runtime_graph + workflow_engine ctor params;
+  langgraph branch mirrors the one-logical-step plan lifecycle of the other
+  graphs; _runtime_graph_state builds per-run collaborators incl. context
+  snapshot + ToolExecutor-gated execute_tool.
+- **cozmo/services/context.py / webui_server.py**: graph constructed eagerly;
+  engine selected from runtime.workflow_engine ("legacy" default).
+- **tests/test_runtime_workflow_graph.py** (new, 21 tests): no-tool flow,
+  continuation seeding, context snapshot verbatim, single/multi tool rounds,
+  event order, dedup message, max-steps bound + wording, MUE + arbitrary-error
+  propagation, tool-failure-as-observation, cancellation, reflect-on-success-
+  only, determinism, two live run_stream integration tests (token streaming +
+  tool replay through a stubbed ToolExecutor), legacy-default inertness, and
+  package purity guards (no storage/model-selection/checkpointer).
+
+Validation: graph suite 21/21; adjacent graph/architecture/runtime/webui
+suites 93 passed; full suite minus the externally-added in-flight
+test_phase8b_research.py: 1684 passed, 0 failures.
+
+EXTERNAL CONCURRENT WORK (not this stage): tests/test_phase8b_research.py +
+graphs/research_intel.py landed mid-stage from another workstream (Phase 8B
+research decomposition/citations). Several of its assertions currently fail
+because ResearchGraph integration for decompose/manifest/truncation is still
+being implemented by that stream - failures are orthogonal to this migration
+(zero overlapping code paths; verified by failure signatures). Left untouched
+deliberately to avoid colliding with active edits.
+
+---
+
+## 2026-08-21 - LangGraph Cutover Evaluation + Legacy Runtime Parity
+
+Structured parity harness (`tests/runtime_parity_harness.py` +
+`tests/test_runtime_parity.py`, 7 tests) drives legacy and
+`workflow_engine=\"langgraph\"` runtimes over 15 representative workloads
+(chat, memory/knowledge/project retrieval, research/web, evidence processing,
+tool call, multi-tool loop, continuation, tool-gate failure, model
+unavailable, cancellation, insufficient retrieval, graph expansion,
+max-steps exhaustion) with scripted deterministic models/tools and a
+recording Brain.
+
+Result: ZERO behavioral differences across model identity, conversation id,
+tool call order/failures, Brain observations, history length, stop reason,
+final text, errors, cancellation, and non-token event vocabulary. The one
+legitimate granularity difference (legacy streams token deltas via
+`runnable.stream`; the graph replays the final token) is classified
+intentional and documented. Latency is same-magnitude on every workload.
+
+Regressions found and fixed during cutover: my PowerShell-based default flip
+had corrupted `services/context.py`/`webui_server.py` encodings (BOM +
+double-encoded UTF-8 punctuation), breaking two trace-boundary file-read
+tests; repaired via surgical cp1252-inverse restoration - functional code
+was never affected.
+
+Cutover decision: **workflow_engine now defaults to \"langgraph\"** (minimal
+switch: two default literals in the composition roots). Explicit escape hatch
+retained: set `runtime.workflow_engine = \"legacy\"` in configuration or
+pass `CozmoRuntime(workflow_engine=\"legacy\")`. Full suite GREEN under the
+new default: **1778 passed, 0 failures**, confirmed stable across consecutive
+runs; parity/graph/retrieval targeted suites 71 passed.
+
+Legacy retained untouched per migration discipline: `_rank_memories`,
+`search_with_importance`, MemoryManager fallbacks, and the entire legacy
+run_stream ReAct path remain active escape-hatch surfaces for the later
+removal stage.
+
+---
+
+## 2026-08-22 - Post-Cutover Stabilization + Legacy Retirement Audit
+
+Phase 0 baseline re-verified from clean checkout state: full suite **1778
+passed, 0 failures**; parity harness rerun over all 15 workloads x both
+engines -> **0 behavioral differences** across model identity, conversation
+id, tool calls/failures, Brain observations, history, stop reasons, final
+text, errors, cancellation, and non-token event vocabulary (token-chunk
+granularity remains the one intentional difference). Composition roots
+(webui_server.py, services/context.py) confirmed to default
+runtime.workflow_engine="langgraph".
+
+Every listed legacy component was call-site audited before any removal:
+
+- Legacy ReAct branch / `_run_agent_loop`: RETAINED. `_run_agent_loop` has a
+  live production caller beyond the escape hatch - CodingGraph's injected
+  `run_loop` executes each implement attempt through it. Removing it would
+  require re-platforming the coding workflow onto RuntimeWorkflowGraph (an
+  architecture project, out of scope per stage rules).
+- `_rank_memories`: RETAINED. Sole memory-context ranking
+  (frequency x recency x (1-distance)); ResultMerger has no frequency/recency
+  semantics, so rerouting through it changes prompt-context ordering instead
+  of proving parity. Documented as known duplicate-ranking debt alongside
+  LanceStore.search_with_importance's own importance formula.
+- `search_with_importance`: RETAINED. Store-level candidate-fetch primitive
+  with live canonical consumers (KnowledgeIndex fetch_k, MemoryManager.query).
+- MemoryManager / get_memory_manager: RETAINED. MemoryManager is Brain's
+  storage engine (recall fallback, learn->store_fact, consolidate), the
+  WebUI /api/memory backend, agent_memory write path, no-brain fallback, and
+  migrations source. Removal is Phase G roadmap work, not this stage.
+
+Retired (each audit-proven zero production callers, removed ONE AT A TIME
+with targeted + full-suite verification between):
+
+1. `Brain.retrieve_memory_rows` flat compat adapter (brain.py) - superseded
+   by MemoryRetrievalSource reading Brain.recall directly; ROADMAP-phaseG
+   item 1.5 closed. Its two adapter tests removed with it.
+2. `MemoryManager.store_project_context` dead method (manager.py).
+
+New architecture guards in test_architecture.py:
+test_no_retired_retrieve_memory_rows_adapter,
+test_no_retired_store_project_context_method,
+test_composition_roots_default_langgraph_engine.
+
+Results: baseline 1778 passed -> after retirements+guards **1779 passed**
+(1776 after removing the 2 retired-adapter tests, +3 guards), 0 failures;
+parity suite 7/7; runtime workflow graph suite green; full parity matrix
+rerun at stage end still 0 differences.
+
 
 ---
 

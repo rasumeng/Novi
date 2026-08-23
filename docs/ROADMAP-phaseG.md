@@ -24,7 +24,7 @@ Brain.
 | 2 | `brain=None` fallback branches in runtime + WebUI | `runtime/runtime.py` `_remember`, `webui_server.py` agent_memory | Remove; the Brain becomes mandatory |
 | 3 | `get/set_memory_manager` process-global | `memory/manager.py`, `services/context.py` | Remove; `get_brain()` is the single accessor |
 | 4 | Flat `MemoryManager.query` legacy path | `manager.py` `query` | Delete; replaced by `Brain.recall` → resolver |
-| 5 | `Brain.retrieve_memory_rows` compat adapter | `brain/brain.py:182` | Delete once nothing consumes flat rows |
+| 5 | `Brain.retrieve_memory_rows` compat adapter | `brain/brain.py:182` | **DONE (post-cutover stage)** — deleted; zero production callers (MemoryRetrievalSource reads `Brain.recall` directly). Guard: `test_no_retired_retrieve_memory_rows_adapter` |
 | 6 | `memory_ops` raw-store reads | `tools/memory_ops.py` | Brain-only access |
 | 7 | Legacy `Engine` (parallel ReAct loop) | `runtime/engine.py` | Delete once jobs migrated to `CozmoRuntime` |
 

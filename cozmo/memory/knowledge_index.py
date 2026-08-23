@@ -198,6 +198,11 @@ class KnowledgeIndex:
                 # neighbors by durable id, never by filename/title. None for
                 # user-authored notes that were never Brain-synced.
                 "item_id": meta.get("id"),
+                # Lifecycle status mirror (post-M5 hardening): lets search
+                # drop superseded chunks. Rows indexed before this field
+                # existed simply lack the key and pass through until their
+                # next mtime-triggered re-index.
+                "status": meta.get("status"),
                 "tags": tags,
                 "type": "knowledge",
                 "chunk": i,
@@ -210,7 +215,9 @@ class KnowledgeIndex:
     def search(self, query: str, k: int = 5, rerank: bool = True) -> list[dict]:
         """Search knowledge base. Returns ranked results with metadata.
 
-        Pipeline: vector search → cross-encoder rerank (if enabled).
+        Pipeline: vector search → cross-encoder rerank (if enabled) →
+        superseded-status drop (post-M5 hardening; rows indexed before the
+        status mirror existed lack the key and pass through until re-index).
         """
         # Fetch more candidates for reranking
         fetch_k = k * 3 if (rerank and self._reranker) else k
@@ -229,7 +236,10 @@ class KnowledgeIndex:
                 for r in results:
                     r["score"] = round(max(0, r.get("rerank_score", 0) / max_s), 4)
 
-        return results[:k]
+        return [
+            r for r in results[:k]
+            if str(r.get("metadata", {}).get("status", "")).lower() != "superseded"
+        ]
 
     def search_by_tag(self, tag: str, k: int = 20) -> list[dict]:
         """Search knowledge base by tag."""

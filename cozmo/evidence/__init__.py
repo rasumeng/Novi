@@ -19,6 +19,7 @@ from .context import (
 from .extractor import FactExtractor
 from .processor import EvidenceProcessor
 from .ranking import SourceRanking
+from .rendering import render_evidence_context
 
 __all__ = [
     "CompressionResult",
@@ -34,4 +35,5 @@ __all__ = [
     "RankingConfig",
     "Source",
     "SourceRanking",
+    "render_evidence_context",
 ]

@@ -161,15 +161,6 @@ class MemoryManager:
         }
         self.store.add_texts([text], [meta])
 
-    def store_project_context(self, context: str):
-        meta = {
-            "timestamp": datetime.now().isoformat(),
-            "type": "project",
-            "frequency": 1,
-            "embed_model": self.store.embed_model,
-        }
-        self.store.add_texts([context], [meta])
-
     def store_fact(self, fact: str, tags: Optional[list[str]] = None):
         title = fact.split(".")[0][:80]
         meta = {

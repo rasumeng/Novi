@@ -154,13 +154,21 @@ class VectorStore:
         source_kind: Optional[str] = None,
         forms: Optional[tuple[KnowledgeForm, ...] | list[KnowledgeForm]] = None,
         tags: Optional[tuple[str, ...] | list[str]] = None,
+        include_superseded: bool = False,
     ) -> list[dict]:
-        """Vector search with column-predicate filters."""
+        """Vector search with column-predicate filters.
+
+        Superseded items are excluded by default (post-M5 hardening): history
+        is preserved in the store — read-path exclusion only, never a DELETE —
+        mirroring ``reasoning.tiering.tier_hits``. Pass
+        ``include_superseded=True`` for explicit history/audit reads.
+        """
         where = self._where_clause(
             scenario_id=scenario_id,
             source_kind=source_kind,
             forms=forms,
             tags=tags,
+            include_superseded=include_superseded,
         )
         query_vec = self._embed(text)
         try:
@@ -316,8 +324,13 @@ class VectorStore:
         source_kind: Optional[str] = None,
         forms: Optional[tuple[KnowledgeForm, ...] | list[KnowledgeForm]] = None,
         tags: Optional[tuple[str, ...] | list[str]] = None,
+        include_superseded: bool = False,
     ) -> str:
         clauses = []
+        if not include_superseded:
+            # Rows predating the status column may carry NULL — keep them
+            # eligible; only an explicit superseded value is excluded.
+            clauses.append("(status IS NULL OR status != 'superseded')")
         if scenario_id is not None:
             clauses.append(f"scenario_id = '{_esc(scenario_id)}'")
         if source_kind is not None:
