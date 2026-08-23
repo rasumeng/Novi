@@ -162,6 +162,35 @@ class RetrievalCoordinator:
 
         return None
 
+    # ── Direct-search accounting (Phase 8A) ──────────────────────────────
+
+    def gate_search(self, query: str) -> bool:
+        """Whether a DIRECT search path (not ToolExecutor-routed) may proceed.
+
+        The research graph calls the retrieval pipeline directly instead of
+        through ``ToolExecutor.execute``, so the Stage-1 intercept never sees
+        it. This gate applies the same two rules here — budget enforcement,
+        then duplicate detection — so every actual web search initiated by a
+        graph is metered by this coordinator (the single budget authority).
+        Returns True when the search may run.
+        """
+        if not self.budget.search_remaining:
+            return False
+        return self._find_duplicate(query) is None
+
+    def record_search(self, query: str, result: str) -> None:
+        """Account one completed direct search against the budget.
+
+        Mirrors :meth:`record` for search tools but callable without a tool
+        name/args envelope. Always increments ``searches_used``; only caches
+        non-empty results so duplicate detection has material to work with.
+        """
+        self.budget.searches_used += 1
+        normalized = self._normalize_query(query)
+        self._seen_queries.append(normalized)
+        if result:
+            self._search_cache[normalized] = result
+
     # ── Recording (called by runtime after tool execution) ────────────────
 
     def record(self, name: str, args: dict, result: str):

@@ -17,6 +17,25 @@ def set_allowed_root(root: str | Path):
     ALLOWED_ROOT = Path(root).resolve()
 
 
+def allowed_root() -> Path:
+    """Current workspace root for file/shell confinement (Phase 8C).
+
+    Single source of truth for every tool that must not escape the intended
+    workspace: file reads/writes, shell working directory. Read dynamically —
+    ``set_allowed_root`` may retarget it at runtime.
+    """
+    return ALLOWED_ROOT
+
+
+def resolve_in_workspace(path: str) -> Path | None:
+    """Resolve ``path`` inside the workspace root or return None.
+
+    Rejects absolute paths outside the root and any traversal ('..' escapes).
+    Shared by read AND write paths so confinement cannot drift between them.
+    """
+    return _safe_path(path)
+
+
 def knowledge_dir() -> Path:
     """Resolve the canonical knowledge base directory from configuration.
 

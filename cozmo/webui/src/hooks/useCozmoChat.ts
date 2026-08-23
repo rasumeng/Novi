@@ -259,6 +259,58 @@ export function useCozmoChat() {
     }
   }
 
+  // ── Phase 8G: agent activity phases ─────────────────────────────────
+  // The backend forwards small {"phase": ...} markers from the research and
+  // coding workflows. Labels describe WHAT the agent is doing — never which
+  // internal graph node executes.
+
+  const PHASE_LABELS: Record<string, string> = {
+    understanding: 'Understanding your question',
+    decomposed: 'Exploring the question from multiple angles',
+    searching: 'Searching for information',
+    evaluating: 'Evaluating evidence quality',
+    refining: 'Refining the search',
+    deduplicated: 'Merging duplicate sources',
+    synthesizing: 'Synthesizing findings',
+    validating: 'Validating citations',
+    coverage_incomplete: 'Search budget reached — some sub-questions remain unverified',
+    verifying: 'Verifying the changes',
+    verification_failed: 'Verification failed — analyzing what went wrong',
+    verification_unavailable: 'Nothing could be verified — no commands available',
+    retrying: 'Retrying with failure feedback',
+  }
+
+  const RETRY_REASON_LABELS: Record<string, string> = {
+    insufficient_evidence: 'Evidence was insufficient',
+    verification_failed: 'Verification failed',
+    empty: 'Previous attempt produced nothing',
+    max_steps: 'Previous attempt ran out of steps',
+  }
+
+  const phaseLabel = (ev: { phase?: string }): string =>
+    PHASE_LABELS[ev.phase ?? ''] ?? `Working: ${ev.phase ?? ''}`
+
+  const phaseDetail = (ev: {
+    phase?: string; sub_questions?: number; gaps?: number;
+    command?: string; exit_code?: number | null; new_sources?: number;
+  }): string | undefined => {
+    switch (ev.phase) {
+      case 'decomposed':
+        return ev.sub_questions ? `${ev.sub_questions} sub-questions` : undefined
+      case 'refining':
+        return ev.gaps ? `${ev.gaps} knowledge gap(s) to fill` : undefined
+      case 'deduplicated':
+        return 'no new sources — reusing what we have'
+      case 'verification_failed':
+        return [
+          ev.command ? `command: ${ev.command}` : null,
+          ev.exit_code != null ? `exit code ${ev.exit_code}` : null,
+        ].filter(Boolean).join(' · ') || undefined
+      default:
+        return undefined
+    }
+  }
+
   const pushStep = useCallback((step: {
     type: 'thinking' | 'tool_call'
     icon: string
@@ -320,6 +372,26 @@ export function useCozmoChat() {
             icon: 'Activity',
             label: ev.text,
             detail: ev.detail,
+            query: ev.query,
+            status: 'running',
+          })
+          break
+        case 'phase':
+          pushStep({
+            type: 'thinking',
+            icon: 'Activity',
+            label: phaseLabel(ev),
+            detail: phaseDetail(ev),
+            query: ev.query,
+            status: ev.phase === 'verification_failed' ? 'error' : 'running',
+          })
+          break
+        case 'retry':
+          pushStep({
+            type: 'thinking',
+            icon: 'RefreshCw',
+            label: `Retrying (attempt ${ev.attempt})`,
+            detail: RETRY_REASON_LABELS[ev.reason] ?? ev.reason,
             query: ev.query,
             status: 'running',
           })

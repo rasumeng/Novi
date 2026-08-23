@@ -291,7 +291,7 @@ class TestWebUITracePayload:
     def test_grounding_decision_not_serialized_to_webui(self):
         import os
         webui_path = os.path.join(os.path.dirname(__file__), "..", "cozmo", "webui_server.py")
-        with open(webui_path) as f:
+        with open(webui_path, encoding="utf-8") as f:
             content = f.read()
         for token in ("GroundingDecision", "EvidenceAnalysis", "evidence_summary", "debug_trace", "DebugTraceEvent"):
             assert token not in content, (
@@ -306,7 +306,7 @@ class TestTraceActionFrontendMapping:
         import os
         import re
         webui_path = os.path.join(os.path.dirname(__file__), "..", "cozmo", "webui_server.py")
-        with open(webui_path) as f:
+        with open(webui_path, encoding="utf-8") as f:
             content = f.read()
         assert '"action":' in content or "'action':" in content, (
             "webui trace handler must emit 'action' field"

@@ -6,7 +6,13 @@ execution. Replaced Evaluators remain pluggable through EvaluationDriver.
 """
 
 from .benchmark import BenchmarkCase, BenchmarkDataset
-from .drivers import AnalysisDriver, EvaluationDriver, RuntimeDriver
+from .drivers import (
+    AnalysisDriver,
+    CodingEvalDriver,
+    EvaluationDriver,
+    ResearchEvalDriver,
+    RuntimeDriver,
+)
 from .evidence_ab import (
     EvidenceABCompare,
     EvidenceABReport,
@@ -18,9 +24,11 @@ from .evidence_ab import (
 from .metrics import (
     AnswerMetrics,
     CaseResult,
+    CodingMetrics,
     MetricCollector,
     MetricSet,
     RetrievalMetrics,
+    ResearchMetrics,
     ToolMetrics,
 )
 from .regression import (
@@ -37,6 +45,8 @@ __all__ = [
     "BenchmarkCase",
     "BenchmarkDataset",
     "CaseResult",
+    "CodingEvalDriver",
+    "CodingMetrics",
     "EvaluationDriver",
     "EvaluationResult",
     "EvaluationRunner",
@@ -49,6 +59,8 @@ __all__ = [
     "RegressionDetector",
     "RegressionFinding",
     "RegressionReport",
+    "ResearchEvalDriver",
+    "ResearchMetrics",
     "RetrievalMetrics",
     "RuntimeDriver",
     "ToolMetrics",

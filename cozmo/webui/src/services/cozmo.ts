@@ -29,6 +29,13 @@ export type ServerEvent =
   | { type: 'permission_request'; tool: string; args: Record<string, unknown>; id: string }
   | { type: 'reasoning'; text: string }
   | { type: 'model'; text: string }
+  | { type: 'phase'; phase: string; attempt?: number; reason?: string;
+      query?: string; sub_questions?: number; gaps?: number;
+      classification?: string; command?: string; new_sources?: number;
+      exit_code?: number | null; citations_used?: boolean;
+      insufficient?: boolean }
+  | { type: 'retry'; phase: string; attempt: number; reason: string;
+      query?: string }
   | { type: 'agent_status'; text: string; detail?: string; query?: string }
   | { type: 'progress'; current: number; total: number; label: string }
   | { type: 'agent_state'; current_goal: string; status: string; tools_used: number; error?: string }

@@ -469,3 +469,53 @@ Evaluation baseline preserved exactly (relevant recall 1.0, query success
 ~21 ms -> ~7 ms mean per gate-failing query from the batched fetch.
 
 Suite: 43 M4/M4.1 tests green; 1557 -> 1566 full suite (+9), 0 failures.
+
+---
+
+## 2026-08-22 — Phase 8 Post-Implementation Remediation
+
+Read-only audit of the shipped Phase 8 (8A–8G) surfaced eight behavioral
+hypotheses. Each was verified against source and reproduced before any fix;
+only confirmed defects were changed. New regression coverage lives in
+`tests/test_phase8_remediation.py` (40 tests).
+
+Confirmed and fixed:
+- **A — refinement lost entities**: `refine_query` only padded an anchor when a
+  single gap existed, so two uncovered terms degraded "Tesla 2024 revenue" to
+  "revenue 2024". Refinement is now entity-first, derives anchors from the
+  ORIGINAL question, prefers timeframes when padding, hard-capped at
+  MAX_REFINED_TERMS=3.
+- **B — silent budget starvation**: 3 decomposed sub-questions with
+  max_search_attempts=2 left the third unsearched with no trace. The graph now
+  records `coverage_incomplete` + `unresearched_questions`, emits a
+  `coverage_incomplete` stream event, injects a bounded COVERAGE WARNING into
+  synthesis, and flags `validation_detail`.
+- **C — narrow insufficiency detector**: "I don't have reliable information",
+  "I am not certain", apostrophe variants etc. now match via normalized
+  deterministic phrase families; ordinary hedging still never counts.
+- **D — starved conflict pipeline**: collect_conflicts detected per-bundle, so
+  cross-source contradictions were structurally impossible. Detection now runs
+  once over combined extracted facts (≤40). ConflictDetector gained a
+  conservative same-template numeric rule (years excluded; skeletons must match
+  exactly).
+- **E — fake green verification**: zero executed verification commands reported
+  passed=True/verifications=0. Added structured statuses verified/failed/
+  unavailable/skipped; zero commands → unavailable, honest error record,
+  no repair.
+- **F — timeout misclassification**: timed_out was classified as an
+  implementation failure and triggered code repair. Timeout is now its own
+  class, terminal, no repair (slow suite/deadlock/infra ≠ code defect).
+- **G — tautological evaluation provenance**: drivers now disclose
+  driver_mode scripted|live and staged_repair; CodingMetrics gained
+  staged_repair_rate (CLI prints it); RegressionDetector compares research/
+  coding families.
+
+Not changed (verified acceptable / parallel work): decomposition gating (H),
+ToolExecutor permission/risk pipeline, workspace confinement, model boundary,
+persistence boundary. Incidental repairs: double-encoded box-drawing comments in
+webui_server.py/services/context.py restored to UTF-8, DEVLOG normalized to
+valid UTF-8, one merged line repaired in useCozmoChat.ts (+ honest labels for
+the new verification_unavailable / coverage_incomplete phases).
+
+Suite after remediation: pytest 1819 passed (was 1778), vitest 127 passed,
+tsc+build clean, evaluation CLI research/coding/analyze run clean.

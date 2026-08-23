@@ -157,6 +157,70 @@ def _cmd_evidence_compare(args) -> int:
     return 0 if comp.passed else 1
 
 
+def _print_research_summary(result) -> None:
+    m = result.metrics
+    r = m.research
+    print("=" * 60)
+    print(f"Research evaluation: {result.dataset_name}  (n={m.n})")
+    print(f"  citation resolvability:  {r.citation_resolvability:.3f}")
+    print(f"  citation coverage:       {r.citation_coverage:.3f}")
+    print(f"  insufficiency honesty:   {r.insufficiency_honesty:.3f}")
+    print(f"  conflict acknowledgment: {r.conflict_acknowledgment:.3f}")
+    print(f"  unnecessary search rate: {r.unnecessary_search_rate:.3f}")
+    print(f"  avg searches/manifest:   {r.avg_searches:.2f} / {r.avg_manifest_size:.2f}")
+    print(f"  latency:                 {m.latency:.0f}ms avg")
+    print("=" * 60)
+
+
+def _cmd_research(args) -> int:
+    from .benchmark import BenchmarkDataset
+    from .drivers import ResearchEvalDriver
+    from .runner import EvaluationRunner
+
+    dataset = BenchmarkDataset.from_json(args.dataset)
+    runner = EvaluationRunner(
+        driver=ResearchEvalDriver(max_search_attempts=args.max_searches))
+    result = runner.run(dataset, limit=args.limit)
+    _print_research_summary(result)
+    if args.save:
+        result.save(args.save)
+        print(f"Saved: {args.save}")
+    return 0
+
+
+def _print_coding_summary(result) -> None:
+    m = result.metrics
+    c = m.coding
+    print("=" * 60)
+    print(f"Coding evaluation: {result.dataset_name}  (n={m.n})")
+    print(f"  task completion:         {c.task_completion:.3f}")
+    print(f"  test pass rate:          {c.test_pass_rate:.3f}")
+    print(f"  regression rate:         {c.regression_rate:.3f}")
+    print(f"  avg repair attempts:     {c.avg_repair_attempts:.2f}")
+    print(f"  unnecessary edit rate:   {c.unnecessary_edit_rate:.3f}")
+    print(f"  tool failure rate:       {c.tool_failure_rate:.3f}")
+    print(f"  verification fail rate:  {c.verification_failure_rate:.3f}")
+    print(f"  staged repair rate:      {c.staged_repair_rate:.3f}"
+          "  (driver-supplied edits, not observed agent repair)")
+    print(f"  latency:                 {m.latency:.0f}ms avg")
+    print("=" * 60)
+
+
+def _cmd_coding(args) -> int:
+    from .benchmark import BenchmarkDataset
+    from .drivers import CodingEvalDriver
+    from .runner import EvaluationRunner
+
+    dataset = BenchmarkDataset.from_json(args.dataset)
+    runner = EvaluationRunner(driver=CodingEvalDriver())
+    result = runner.run(dataset, limit=args.limit)
+    _print_coding_summary(result)
+    if args.save:
+        result.save(args.save)
+        print(f"Saved: {args.save}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cozmo.evaluation", description="Cozmo Phase 8 evaluation tooling"
@@ -200,6 +264,23 @@ def main(argv: list[str] | None = None) -> int:
     p_evc.add_argument("baseline")
     p_evc.add_argument("candidate")
     p_evc.set_defaults(func=_cmd_evidence_compare)
+
+    p_research = sub.add_parser(
+        "research",
+        help="offline research-workflow evaluation (citations, conflicts, searches)")
+    p_research.add_argument("--dataset", default="tests/research_corpus.json")
+    p_research.add_argument("--limit", type=int, default=None)
+    p_research.add_argument("--max-searches", type=int, default=3)
+    p_research.add_argument("--save")
+    p_research.set_defaults(func=_cmd_research)
+
+    p_coding = sub.add_parser(
+        "coding",
+        help="offline coding verification evaluation (fixture repos + real pytest)")
+    p_coding.add_argument("--dataset", default="tests/coding_corpus.json")
+    p_coding.add_argument("--limit", type=int, default=None)
+    p_coding.add_argument("--save")
+    p_coding.set_defaults(func=_cmd_coding)
 
     args = parser.parse_args(argv)
     return args.func(args)

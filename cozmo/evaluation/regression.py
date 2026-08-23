@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from .metrics import MetricSet
 
 # Default thresholds (absolute delta; latency = relative delta).
+# Phase 8 remediation (audit G): research/coding metrics are part of the
+# comparison contract so `compare` can flag degradations there too.
 DEFAULT_THRESHOLDS = {
     "retrieval.grounding_accuracy": 0.05,
     "retrieval.precision": 0.05,
@@ -22,11 +24,22 @@ DEFAULT_THRESHOLDS = {
     "tools.success_rate": 0.05,
     "tools.efficiency": 0.05,
     "tools.recovery_rate": 0.02,
+    "research.citation_resolvability": 0.05,
+    "research.citation_coverage": 0.05,
+    "research.insufficiency_honesty": 0.05,
+    "research.conflict_acknowledgment": 0.05,
+    "coding.task_completion": 0.05,
+    "coding.test_pass_rate": 0.05,
+    "coding.regression_rate": 0.02,
+    "coding.verification_failure_rate": 0.02,
     "latency": 0.10,
 }
 
 # Metrics where a LOWER value is better.
-_LOWER_IS_BETTER = {"tools.recovery_rate", "latency"}
+_LOWER_IS_BETTER = {
+    "tools.recovery_rate", "latency",
+    "coding.regression_rate", "coding.verification_failure_rate",
+}
 
 # Latency regressions require an absolute increase above this floor (ms) in
 # addition to the relative threshold — otherwise sub-ms analysis-mode noise
@@ -158,6 +171,14 @@ def _metric_value(ms: MetricSet, metric: str) -> float | None:
         "tools.success_rate": ms.tools.success_rate,
         "tools.efficiency": ms.tools.efficiency,
         "tools.recovery_rate": ms.tools.recovery_rate,
+        "research.citation_resolvability": ms.research.citation_resolvability,
+        "research.citation_coverage": ms.research.citation_coverage,
+        "research.insufficiency_honesty": ms.research.insufficiency_honesty,
+        "research.conflict_acknowledgment": ms.research.conflict_acknowledgment,
+        "coding.task_completion": ms.coding.task_completion,
+        "coding.test_pass_rate": ms.coding.test_pass_rate,
+        "coding.regression_rate": ms.coding.regression_rate,
+        "coding.verification_failure_rate": ms.coding.verification_failure_rate,
         "latency": ms.latency,
     }
     return mapping.get(metric)

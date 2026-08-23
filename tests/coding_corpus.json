@@ -1,0 +1,46 @@
+[
+  {
+    "id": "COD-001",
+    "input": "Implement add(a, b) in app.py so the test suite passes.",
+    "expected": {
+      "intent": "coding"
+    },
+    "fixture": {
+      "files": {"app.py": "def add(a, b):\n    raise NotImplementedError\n"},
+      "test_file": "from app import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
+      "solution": {"app.py": "def add(a, b):\n    return a + b\n"},
+      "delay_solution": true,
+      "expect_pass": true
+    },
+    "tags": ["coding", "repair-loop"]
+  },
+  {
+    "id": "COD-002",
+    "input": "Fix app.py immediately; the solution is already known.",
+    "expected": {
+      "intent": "coding"
+    },
+    "fixture": {
+      "files": {"app.py": "def mul(a, b):\n    return 0\n"},
+      "test_file": "from app import mul\n\ndef test_mul():\n    assert mul(2, 3) == 6\n",
+      "solution": {"app.py": "def mul(a, b):\n    return a * b\n"},
+      "delay_solution": false,
+      "expect_pass": true
+    },
+    "tags": ["coding", "first-attempt-pass"]
+  },
+  {
+    "id": "COD-003",
+    "input": "Implement feature X (unsolvable fixture — repair budget must be honored).",
+    "expected": {
+      "intent": "coding"
+    },
+    "fixture": {
+      "files": {"app.py": "value = 1\n"},
+      "test_file": "from app import value\n\ndef test_value():\n    assert value == 999999\n",
+      "solution": {},
+      "expect_pass": false
+    },
+    "tags": ["coding", "retry-limit"]
+  }
+]

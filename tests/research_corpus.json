@@ -1,0 +1,42 @@
+[
+  {
+    "id": "RES-001",
+    "input": "What are the main tradeoffs between asyncio and threading for IO-bound services?",
+    "expected": {
+      "intent": "research",
+      "grounding": true,
+      "max_searches": 2
+    },
+    "tags": ["research", "citations"]
+  },
+  {
+    "id": "RES-002",
+    "input": "Compare REST and GraphQL for public APIs and explain versioning strategies.",
+    "expected": {
+      "intent": "research",
+      "grounding": true,
+      "max_searches": 3
+    },
+    "tags": ["research", "citations", "decomposition"]
+  },
+  {
+    "id": "RES-003",
+    "input": "What is the capital of France?",
+    "expected": {
+      "intent": "research",
+      "grounding": false,
+      "max_searches": 1
+    },
+    "tags": ["research", "insufficiency-honesty"]
+  },
+  {
+    "id": "RES-004",
+    "input": "Summarize the current state of fusion energy and note where sources disagree.",
+    "expected": {
+      "intent": "research",
+      "grounding": true,
+      "max_searches": 3
+    },
+    "tags": ["research", "conflicts"]
+  }
+]

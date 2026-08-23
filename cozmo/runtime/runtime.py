@@ -14,6 +14,7 @@ import json
 import base64
 import logging
 import re
+import sys
 import threading
 import time
 from datetime import datetime
@@ -57,40 +58,9 @@ log = logging.getLogger("cozmo.runtime")
 
 SKILLS_DIR = Path.home() / ".cozmo" / "skills"
 
-_TOOL_CATEGORIES: dict[str, str] = {
-    "read": "workspace",
-    "read_file": "workspace",
-    "write_file": "workspace",
-    "edit_file": "workspace",
-    "glob": "workspace",
-    "glob_search": "workspace",
-    "grep": "workspace",
-    "grep_search": "workspace",
-    "list_directory": "workspace",
-    "diagnostics": "workspace",
-    "sourcegraph": "workspace",
-    "bash": "python",
-    "run_command": "python",
-    "execute_python": "python",
-    "calculator": "python",
-    "web_search": "web",
-    "web_search_pipeline": "web",
-    "web_fetch": "web",
-    "fetch_url": "web",
-    "webfetch": "web",
-    "git_diff": "git",
-    "git_log": "git",
-    "read_knowledge": "memory",
-    "search_knowledge": "memory",
-    "write_knowledge": "memory",
-    "schedule_task": "memory",
-    "list_schedules": "memory",
-    "remove_schedule": "memory",
-    "screenshot": "workspace",
-    "analyze_image": "workspace",
-    "clipboard_read": "workspace",
-    "telegram_send": "other",
-}
+# Phase 8A: the tool-category table lives in ONE place —
+# ``tool_registry.TOOL_CATEGORIES``. The former duplicate copies here and in
+# tool_executor are gone; ToolExecutor.tool_category reads the single source.
 
 _SKILL_RE = re.compile(r"@skill\s+([a-z0-9][a-z0-9-]*)", re.IGNORECASE)
 
@@ -674,9 +644,17 @@ class CozmoRuntime:
                 # Phase 7 Stage 3C: LangGraph research workflow. The graph
                 # composes the existing retrieval/evidence pipeline into
                 # explicit search→evaluate→synthesize→validate transitions and
-                # receives the runnable Cozmo bound for THIS run. Plan/step
-                # lifecycle stays the runtime's contract.
+                # receives the runnable Cozmo bound for THIS run.
+                #
+                # Phase 8A honest step semantics: the whole graph execution is
+                # ONE logical plan step. Exactly one STEP_STARTED/STEP_COMPLETED
+                # (or STEP_FAILED) pair is emitted; remaining template steps are
+                # marked CANCELLED instead of phantom-completed, so
+                # Checkpoint.step reflects real progress.
                 from ..planner.models import PlanStatus, PlanStepStatus
+
+                exec_idx = self._graph_exec_step_index(ctx, plan_steps)
+                graph_step = plan_steps[exec_idx] if plan_steps else None
 
                 if plan_ref is not None:
                     plan_ref.status = PlanStatus.ACTIVE
@@ -686,25 +664,41 @@ class CozmoRuntime:
                                    step_count=remaining_steps)
                     yield ("plan.started", plan_ref.id,
                            "Research workflow (LangGraph)")
+                    if graph_step is not None:
+                        graph_step.status = PlanStepStatus.RUNNING
+                        self._emit_bus(EventType.STEP_STARTED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_id=graph_step.id,
+                                       index=exec_idx,
+                                       description="Research workflow")
+                        yield ("step.started", graph_step.id,
+                               "Research workflow")
 
                 state = self._research_graph_state(ctx, runnable, base_msgs, user_input)
                 result = self._research_graph.run(state)
+                for ev in result.get("stream_events") or []:
+                    yield ("phase", ev)
                 final = result.get("answer") or ""
-                stop_reason = "completed" if final.strip() else "empty"
+                stop_reason = result.get("completion_reason") or (
+                    "completed" if final.strip() else "empty")
 
                 if plan_ref is not None:
-                    for plan_step in plan_steps:
-                        plan_step.status = PlanStepStatus.COMPLETED
-                        plan_step.result = final
-                    plan_ref.status = PlanStatus.COMPLETED
-                    self._emit_bus(EventType.PLAN_COMPLETED,
-                                   task_id=ctx.execution_plan.task_id,
-                                   plan_id=plan_ref.id,
-                                   step_count=len(plan_steps))
-                    yield ("plan.completed", plan_ref.id,
-                           f"Completed {len(plan_steps)} step(s) (research workflow)")
+                    yield from self._finalize_graph_plan_step(
+                        ctx, plan_ref, plan_steps, exec_idx, graph_step,
+                        final=final, stop_reason=stop_reason,
+                        label="Research workflow")
+                    if stop_reason == "completed":
+                        plan_ref.status = PlanStatus.COMPLETED
+                        self._emit_bus(EventType.PLAN_COMPLETED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_count=1)
+                        yield ("plan.completed", plan_ref.id,
+                               "Completed research workflow")
 
-                yield ("token", final)
+                if final:
+                    yield ("token", final)
             elif self._coding_graph is not None and intent_str == "coding":
                 # Phase 7 Stage 3D: LangGraph coding workflow. The graph
                 # orchestrates implement→verify (bounded re-implement loop);
@@ -713,7 +707,13 @@ class CozmoRuntime:
                 # through ToolExecutor's permission/risk gate. The loop's
                 # stream events are captured and replayed here, so streaming
                 # and plan/step lifecycle stay the runtime's contract.
+                #
+                # Phase 8A honest step semantics: one logical plan step per
+                # graph execution (see research branch comment).
                 from ..planner.models import PlanStatus, PlanStepStatus
+
+                exec_idx = self._graph_exec_step_index(ctx, plan_steps)
+                graph_step = plan_steps[exec_idx] if plan_steps else None
 
                 if plan_ref is not None:
                     plan_ref.status = PlanStatus.ACTIVE
@@ -723,30 +723,46 @@ class CozmoRuntime:
                                    step_count=remaining_steps)
                     yield ("plan.started", plan_ref.id,
                            "Coding workflow (LangGraph)")
+                    if graph_step is not None:
+                        graph_step.status = PlanStepStatus.RUNNING
+                        self._emit_bus(EventType.STEP_STARTED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_id=graph_step.id,
+                                       index=exec_idx,
+                                       description="Coding workflow")
+                        yield ("step.started", graph_step.id,
+                               "Coding workflow")
 
                 state = self._coding_graph_state(
                     ctx, runnable, base_msgs, user_input, step_budget)
                 result = self._coding_graph.run(state)
+                for ev in result.get("stream_events") or []:
+                    yield ("phase", ev)
                 for ev in result.get("events") or []:
                     yield ev
                 final = result.get("answer") or ""
-                stop_reason = result.get("stop_reason") or (
-                    "completed" if final.strip() else "empty")
+                stop_reason = result.get("completion_reason") or (
+                    result.get("stop_reason") or (
+                        "completed" if final.strip() else "empty"))
+
+                if plan_ref is not None:
+                    yield from self._finalize_graph_plan_step(
+                        ctx, plan_ref, plan_steps, exec_idx, graph_step,
+                        final=final, stop_reason=stop_reason,
+                        label="Coding workflow")
+                    if stop_reason == "completed":
+                        plan_ref.status = PlanStatus.COMPLETED
+                        self._emit_bus(EventType.PLAN_COMPLETED,
+                                       task_id=ctx.execution_plan.task_id,
+                                       plan_id=plan_ref.id,
+                                       step_count=1)
+                        yield ("plan.completed", plan_ref.id,
+                               "Completed coding workflow")
+
                 if final.strip() and not any(
                         ev and ev[0] == "token" for ev in (result.get("events") or [])):
                     yield ("token", final)
-
-                if plan_ref is not None:
-                    for plan_step in plan_steps:
-                        plan_step.status = PlanStepStatus.COMPLETED
-                        plan_step.result = final
-                    plan_ref.status = PlanStatus.COMPLETED
-                    self._emit_bus(EventType.PLAN_COMPLETED,
-                                   task_id=ctx.execution_plan.task_id,
-                                   plan_id=plan_ref.id,
-                                   step_count=len(plan_steps))
-                    yield ("plan.completed", plan_ref.id,
-                           f"Completed {len(plan_steps)} step(s) (coding workflow)")
             elif plan_steps:
                 from ..planner.models import PlanStatus, PlanStepStatus
 
@@ -907,6 +923,80 @@ class CozmoRuntime:
             self.event_bus.emit(event_type, **data)
         except Exception:
             pass
+
+    @staticmethod
+    def _graph_exec_step_index(ctx, plan_steps: list) -> int:
+        """Index of the ONE plan step representing graph execution.
+
+        Honors ``resume_from`` (Checkpoint.step contract) but never exceeds
+        the last step.
+        """
+        if not plan_steps:
+            return 0
+        return min(ctx.resume_from or 0, len(plan_steps) - 1)
+
+    def _finalize_graph_plan_step(self, ctx, plan_ref, plan_steps, exec_idx,
+                                  graph_step, *, final: str, stop_reason: str,
+                                  label: str):
+        """Close out the single logical plan step a graph-backed run maps to.
+
+        Honest semantics (Phase 8A):
+          * completed  → exactly one STEP_COMPLETED; remaining template steps
+            are marked CANCELLED (the workflow subsumed them), never
+            phantom-completed. Caller emits the terminal PLAN_COMPLETED.
+          * stopped    → no terminal step/plan events at all — mirrors the
+            sequential path's user-stop behavior (plan stays ACTIVE; startup
+            recovery / ContinuationService own what happens next).
+          * otherwise  → STEP_FAILED + PLAN_FAILED, matching the sequential
+            path's per-step failure handling.
+        """
+        from ..planner.models import PlanStatus, PlanStepStatus
+
+        if graph_step is None or not plan_steps:
+            return
+        task_id = ctx.execution_plan.task_id
+        plan_id = plan_ref.id
+
+        if stop_reason == "stopped":
+            return
+
+        # Phase 8F partial-completion honesty: a step only counts as
+        # COMPLETED when the workflow's own terminal reason says so. A
+        # non-empty answer alongside environment_error / permission_denied /
+        # verification_failed is a FAILED step carrying partial output —
+        # never a phantom completion.
+        if stop_reason == "completed" and final.strip():
+            graph_step.status = PlanStepStatus.COMPLETED
+            graph_step.result = final[:2000]
+            self._emit_bus(EventType.STEP_COMPLETED,
+                           task_id=task_id, plan_id=plan_id,
+                           step_id=graph_step.id, index=exec_idx,
+                           result=final[:2000], tools=[])
+            yield ("step.completed", graph_step.id, final[:2000])
+            for i, s in enumerate(plan_steps):
+                if i == exec_idx:
+                    continue
+                if s.status in (PlanStepStatus.PENDING,
+                                PlanStepStatus.RUNNING,
+                                PlanStepStatus.IN_PROGRESS):
+                    s.status = PlanStepStatus.CANCELLED
+            return
+
+        # Empty answer / error / max_steps: honest failure, like the
+        # sequential path's failed step.
+        graph_step.status = PlanStepStatus.FAILED
+        error_text = f"{label} did not complete ({stop_reason})"
+        self._emit_bus(EventType.STEP_FAILED,
+                       task_id=task_id, plan_id=plan_id,
+                       step_id=graph_step.id, index=exec_idx,
+                       error=error_text)
+        yield ("step.failed", graph_step.id, error_text)
+        plan_ref.status = PlanStatus.FAILED
+        self._emit_bus(EventType.PLAN_FAILED,
+                       task_id=task_id, plan_id=plan_id,
+                       step_id=graph_step.id, error=error_text)
+        yield ("plan.failed", plan_id, error_text)
+
     def _research_graph_state(self, ctx, runnable, base_msgs, user_input):
         """Build the per-run state handed to the research graph.
 
@@ -934,29 +1024,72 @@ class CozmoRuntime:
             "model": runnable,
             "search": search,
             "coordinator": ctx.retrieval_coordinator,
+            # Phase 8A cancellation seam: the runtime's stop signal, probed by
+            # the graph at node boundaries. The control signal stays
+            # runtime-owned; graphs never decide to stop on their own.
+            "should_stop": self._stop_probe(),
         }
 
     def _coding_graph_state(self, ctx, runnable, base_msgs, user_input, step_budget):
         """Build the per-run state handed to the coding graph.
 
         The graph receives the ALREADY-resolved, ALREADY-bound runnable
-        (``state["model"]``) and a ``run_loop`` callable wrapping the runtime's
-        ReAct agent loop for one implement attempt. The callable consumes the
-        loop's stream into an event list the runtime replays, so tool
-        execution, permission gating, and streaming all stay with the
-        runtime/ToolExecutor boundaries.
+        (``state["model"]``), a ``run_loop`` callable wrapping the runtime's
+        ReAct agent loop for one implement attempt, and (Phase 8C) a
+        ``verify`` collaborator that routes verification commands through
+        ToolExecutor.execute() — the graph decides WHEN to verify, the
+        executor decides WHAT may run.
+
+        Repair attempts receive ``state["repair_context"]`` (bounded
+        verification failure feedback) appended to their prompt so attempt
+        N+1 never repeats attempt N blind.
         """
 
+        # Phase 8F cross-attempt dedup: mutating calls (write/edit) with
+        # byte-identical arguments are pointless on a repair attempt — the
+        # first attempt's result is already known. Reads and commands stay
+        # repeatable: their inputs/state legitimately change between attempts.
+        prior_sigs: set[str] = set()
+        _MUTATING_TOOLS = ("write_file", "edit_file")
+
         def run_loop(state):
+            nonlocal prior_sigs
             events = []
             final, reason, ok = "", "completed", True
+            msgs = list(base_msgs)
+            feedback = state.get("repair_context") or ""
+            if feedback:
+                msgs.append(SystemMessage(
+                    content="VERIFICATION FEEDBACK from your previous "
+                            f"attempt:\n{feedback}"))
             for chunk in self._run_agent_loop(
-                    ctx, runnable, "coding", step_budget, base_msgs,
-                    step=None, step_index_base=0):
+                    ctx, runnable, "coding", step_budget, msgs,
+                    step=None, step_index_base=0,
+                    seed_seen=prior_sigs):
                 events.append(chunk)
                 if chunk[0] == _LOOP_DONE:
                     final, reason, ok = chunk[1], chunk[2], chunk[3]
+            for ev in events:
+                if (isinstance(ev, tuple) and len(ev) > 2
+                        and ev[0] == "tool_call" and ev[1] in _MUTATING_TOOLS):
+                    try:
+                        prior_sigs.add(
+                            f"{ev[1]}:{json.dumps(ev[2], sort_keys=True, default=str)}")
+                    except Exception:
+                        pass
             return events, final, reason, ok
+
+        def verify(state):
+            from ..graphs.coding_intel import report_from_tool_result
+
+            reports = []
+            for command in self._verification_commands():
+                result = self.tool_executor.execute("run_command",
+                                                    {"command": command})
+                reports.append(report_from_tool_result(result, command=command))
+                if not reports[-1].passed:
+                    break  # first failure is enough context for repair
+            return reports
 
         return {
             "user_input": user_input,
@@ -966,7 +1099,46 @@ class CozmoRuntime:
             "plan_step_index": ctx.resume_from or 0,
             "model": runnable,
             "run_loop": run_loop,
+            "verify": verify,
+            # Phase 8A cancellation seam (see _research_graph_state).
+            "should_stop": self._stop_probe(),
         }
+
+    def _verification_commands(self) -> list[str]:
+        """Verification commands for coding runs (runtime-owned config read).
+
+        Explicit ``coding.verify_commands`` configuration wins. Otherwise a
+        conservative default: run pytest ONLY when this workspace actually
+        looks like a pytest project (tests dir or pytest config present) —
+        explaining code must never trigger a test suite, and non-python
+        workspaces stay untouched.
+        """
+        coding_cfg = self.cfg.get("coding", {}) or {}
+        configured = coding_cfg.get("verify_commands")
+        if isinstance(configured, list):
+            return [str(c) for c in configured if str(c).strip()][:4]
+        root = Path.cwd()
+        looks_like_pytest = any(
+            (root / name).exists()
+            for name in ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini")
+        ) or (root / "tests").is_dir()
+        if looks_like_pytest:
+            # Resolve THIS interpreter explicitly so verification runs against
+            # the same environment Cozmo runs in, not whichever `python` is
+            # first on PATH.
+            exe = sys.executable.replace("\\", "/")
+            if " " in exe:
+                exe = f'"{exe}"'
+            return [f"{exe} -m pytest -q"]
+        return []
+
+    def _stop_probe(self):
+        """Runtime-owned cancellation probe for graph node boundaries."""
+
+        def probe() -> bool:
+            return bool(self.stop_event and self.stop_event.is_set())
+
+        return probe
 
     def _bind_runnable(self, ctx, tools, temperature: float | None = None):
         """Single runtime binding seam.
@@ -988,7 +1160,8 @@ class CozmoRuntime:
         return mm.client_for_model(ctx.model_name, temperature=temp)
 
     def _run_agent_loop(self, ctx, runnable, intent_str, step_budget,
-                        base_msgs, step=None, step_index_base=0):
+                        base_msgs, step=None, step_index_base=0,
+                        seed_seen=None):
         """Run the ReAct loop for one plan step (or a whole unplanned run).
 
         Yields the runtime streaming events (token/reasoning/thinking/tool_*)
@@ -1000,6 +1173,12 @@ class CozmoRuntime:
         injected as a trailing system instruction so the model executes that
         specific step. ``step_index_base`` offsets StepTrace indexing so plan
         steps accumulate into one global trace.
+
+        ``seed_seen`` (Phase 8F): pre-populates the exact-call dedup set so a
+        repair attempt cannot repeat an identical mutating call (same tool +
+        same args) it already made in a previous attempt. Only callers that
+        ACCUMULATE the signatures from prior attempts pass this; fresh loops
+        are unaffected.
 
         Future checkpoint execution: the loop is index-addressed and
         idempotent per step. A future Job-driven executor (which already owns
@@ -1013,7 +1192,7 @@ class CozmoRuntime:
             msgs.append(SystemMessage(
                 content=f"CURRENT STEP ({step.id}): {step.description}"
             ))
-        seen_calls: set[str] = set()
+        seen_calls: set[str] = set(seed_seen or ())
         final = ""
         try:
             for outer_step in range(step_budget):

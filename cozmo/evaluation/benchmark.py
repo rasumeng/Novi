@@ -50,6 +50,13 @@ class BenchmarkCase:
     expected_evidence_memory: bool = False
     has_images: bool = False
     tags: list[str] = field(default_factory=list)
+    # Phase 8E research/coding evaluation extensions (additive, optional).
+    expected_max_searches: int = 0
+    """0 = unlimited; N = searches beyond this count are 'unnecessary'."""
+    fixture: dict | None = None
+    """Offline coding case: {"files": {path: content},
+    "test": "pytest body", "pass": bool}. The driver materializes it into a
+    temp workspace — fully offline and reproducible."""
 
     def to_dict(self) -> dict:
         expected: dict[str, Any] = {
@@ -84,6 +91,8 @@ class BenchmarkCase:
             expected_evidence_memory=bool(expected.get("evidence_memory", False)),
             has_images=bool(d.get("has_images", False)),
             tags=list(d.get("tags", []) or []),
+            expected_max_searches=int(expected.get("max_searches", 0) or 0),
+            fixture=d.get("fixture"),
         )
 
 

@@ -593,6 +593,18 @@ class Session:
             self._emit(payload)
         elif kind == "reasoning":
             self._emit({"type": "reasoning", "text": item[1]})
+        elif kind in ("phase", "retry"):
+            # Phase 8A additive graph activity markers. Payload is a small
+            # dict ({"phase": ..., ...}); forwarded verbatim so the existing
+            # WebUI switch simply ignores unknown types until 8G adds a
+            # consumer.
+            payload = {"type": kind}
+            data = item[1]
+            if isinstance(data, dict):
+                payload.update(data)
+            else:
+                payload["text"] = str(data)
+            self._emit(payload)
         elif kind == "trace":
             event = item[1]
             payload = event.to_dict()

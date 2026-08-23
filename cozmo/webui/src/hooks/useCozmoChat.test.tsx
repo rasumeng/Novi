@@ -227,6 +227,55 @@ describe('deep research mode', () => {
   })
 })
 
+describe('agent phase activity (Phase 8G)', () => {
+  it('maps research phase events to user-facing labels without graph topology', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('research something'))
+    const client = MockCozmoClient.latest()
+
+    act(() => client.emit({ type: 'phase', phase: 'searching' }))
+    act(() => client.emit({ type: 'phase', phase: 'evaluating' }))
+    act(() => client.emit({ type: 'phase', phase: 'refining', gaps: 2 }))
+    act(() => client.emit({ type: 'phase', phase: 'synthesizing' }))
+    act(() => client.emit({ type: 'phase', phase: 'validating',
+                            citations_used: true, insufficient: false }))
+
+    const labels = result.current.chat.inlineSteps.map(s => s.label)
+    expect(labels).toContain('Searching for information')
+    expect(labels).toContain('Evaluating evidence quality')
+    expect(labels).toContain('Refining the search')
+    expect(labels).toContain('Synthesizing findings')
+    expect(labels).toContain('Validating citations')
+
+    // No internal node names leak to the UI.
+    const joined = JSON.stringify(result.current.chat.inlineSteps)
+    expect(joined).not.toMatch(/node|graph|langgraph/i)
+  })
+
+  it('marks verification failure as an error step and retries as new steps', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('fix the bug'))
+    const client = MockCozmoClient.latest()
+
+    act(() => client.emit({ type: 'phase', phase: 'verifying' }))
+    act(() => client.emit({ type: 'phase', phase: 'verification_failed',
+                            command: 'pytest -q', exit_code: 2 }))
+    act(() => client.emit({ type: 'retry', phase: 'retry', attempt: 2,
+                            reason: 'verification_failed' }))
+
+    const steps = result.current.chat.inlineSteps
+    expect(steps.some(s => s.label === 'Verifying the changes')).toBe(true)
+    const failed = steps.find(s => s.status === 'error')
+    expect(failed?.label).toBe('Verification failed — analyzing what went wrong')
+    expect(failed?.detail).toContain('pytest -q')
+    expect(steps.some(s => s.label.includes('attempt 2'))).toBe(true)
+  })
+})
+
 describe('reasoning thought block', () => {
   it('accumulates reasoning events and attaches the trace to the assistant message on first token', async () => {
     const { result } = renderChatHook()

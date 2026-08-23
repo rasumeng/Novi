@@ -100,18 +100,41 @@ production composition roots both wire them (see §8).
 
 ## 5. ResearchGraph execution path
 
-Module: `cozmo/graphs/research_graph.py`. State: `ResearchState`
-(`cozmo/graphs/state.py`).
+Module: `cozmo/graphs/research_graph.py` (Phase 8B upgrade). State:
+`ResearchState` (`cozmo/graphs/state.py`). Deterministic helpers:
+`cozmo/graphs/research_intel.py`.
 
 ```
-START → understand → plan → search → evaluate ─┬─ sufficient, no gaps → synthesize
-                                               ├─ blocked (no search /
-                                               │  budget exhausted) → synthesize
-                                               └─ gaps → search (bounded by
-                                                          max_search_attempts)
+START → understand → plan → decompose → search → evaluate ─┬─ sufficient, no gaps → synthesize
+                                                           ├─ blocked (no search /
+                                                           │  budget exhausted) → synthesize
+                                                           └─ gaps / pending sub-questions → search
+                                                                             (bounded by max_search_attempts)
 synthesize → validate ─┬─ insufficient coverage → search (bounded)
                        └─ otherwise → END
 ```
+
+Phase 8B capabilities layered on the Phase 7 skeleton:
+
+* **decompose** — LLM-assisted, bounded sub-questions via a deterministic
+  JSON contract (`model.invoke` → parse → ≤1 retry → fallback to the original
+  question). Trivial questions skip the model call entirely.
+* **evaluate** — gaps are key terms NOT covered by evidence; uncovered terms
+  deterministically derive the next refined query. Covered/no-gap cases keep
+  the original query, so the coordinator's duplicate gate behaves exactly as
+  before refinement existed.
+* **accumulate** — `evidence_bundles` accumulate across attempts with strict
+  URL-identity dedup and hard bounds (≤4 bundles); state never overwrites
+  evidence between attempts.
+* **conflicts** — reuses the existing `EvidenceProcessor`/`ConflictDetector`
+  per bundle; output is descriptive and surfaced to the synthesis prompt.
+* **citation manifest** — built deterministically from ACTUAL retrieved
+  results (`[S1…]` ids); synthesis is prompted to cite it; validation
+  resolves citations against exactly this manifest (invented ids are
+  recorded, never trusted).
+* **grounding budget** — accumulated evidence is merged newest-first within a
+  character budget derived from the bound model's DESCRIPTIVE context length
+  (never influences selection; unknown ⇒ conservative default).
 
 Per-run collaborators injected by the runtime (`_research_graph_state`):
 
@@ -128,32 +151,62 @@ Loop-prevention invariants (all regression-tested):
 * A blocked search node forces `synthesize`; validation can then only END.
 * `run()` force-writes `max_search_attempts` into state — stale caller values
   cannot unbound the loop.
+* Refinement cannot launder near-duplicates past the coordinator: when no
+  genuinely uncovered term exists, the query is left untouched and the
+  duplicate gate blocks the retry as before.
 * The final answer is yielded once as `("token", final)` by the runtime.
 
 ## 6. CodingGraph execution path
 
-Module: `cozmo/graphs/coding_graph.py`. State: `CodingState`.
+Module: `cozmo/graphs/coding_graph.py` (Phase 8C upgrade). State:
+`CodingState`. Verification contracts: `cozmo/graphs/coding_intel.py`.
 
 ```
-START → understand → plan → implement → verify ─┬─ empty answer or max_steps
-                                                │  → implement (bounded by
-                                                │    max_attempts)
-                                                └─ completed → END
+START → understand → plan → implement → verify ─┬─ all passed ────────────→ END
+                                                ├─ skipped (no verifier /
+                                                │  no edits) ─────────────→ END (8A retry gate)
+                                                └─ any failure → analyze ─┬─ implementation failure
+                                                                          │   → implement (repair,
+                                                                          │     feedback-injected,
+                                                                          │     bounded by max_attempts)
+                                                                          └─ environment / permission
+                                                                              → END (honest terminal)
 ```
 
 * The `implement` node delegates each attempt to the runtime's existing ReAct
   agent loop via an injected `run_loop` callable
   `(state) -> (events, final, reason, ok)`. Every tool call inside that loop
   goes through ToolExecutor's permission/risk gate — the graph adds zero tool
-  authority.
+  authority. Repair attempts receive `state["repair_context"]` (bounded real
+  verification output) appended to their prompt by the runtime, so attempt
+  N+1 never repeats attempt N blind.
+* **verify** runs ONLY when the attempt actually edited files; it calls the
+  injected `verify` collaborator, which routes commands through
+  `ToolExecutor.execute("run_command", …)` — the workspace-pinned shell
+  runner attaches STRUCTURED results (exit_code / stdout_tail /
+  stderr_tail / duration_ms), and the executor treats the exit code as the
+  success authority. The graph never spawns processes.
+* **analyze** classifies failures: implementation → repair with bounded
+  feedback; environment (missing interpreter/test runner) or permission
+  denial → terminate honestly WITHOUT touching project code.
+* Cross-attempt dedup (8F): identical MUTATING calls (same tool + args) from
+  prior attempts are seeded into the loop's dedup gate; reads/commands stay
+  repeatable.
+* Terminal taxonomy: `completed | stopped | environment_error |
+  permission_denied | verification_failed | verification_timeout |
+  empty | error` — and `_finalize_
+  graph_plan_step` marks the logical step COMPLETED only on `completed`
+  (partial output under a failing reason is a FAILED step).
 * The loop's stream events are captured into `state["events"]` and replayed by
   the runtime, so token streaming, thinking events, and tool events reach the
   UI unchanged. A safety net yields `("token", answer)` if no token was
   streamed.
-* Sentinel/stream knowledge stays in the runtime; the graph knows only the
-  plain tuple contract.
 * Plan lifecycle (`plan.started/completed`) remains the runtime's contract;
   the graph never emits bus events.
+* Workspace confinement (8C): `write_file`/`edit_file` resolve through the
+  shared `file_ops.resolve_in_workspace` root check (absolute escapes and
+  traversal rejected); `run_command`/`execute_python` subprocesses run pinned
+  to the workspace root; destructive commands remain blocklisted.
 
 ## 7. General / non-graph execution path
 
@@ -246,3 +299,52 @@ Tool-to-LangChain wrapping happens in `ToolRegistry.as_lc_tools()`
 * CrewAI is absent by decision; LangGraph covers the composition need and a
   second orchestration abstraction would violate the dependency-minimization
   policy.
+
+## 14. Phase 8 evaluation harness (how to run, how to read)
+
+The single evaluation framework lives in `cozmo/evaluation`. Phase 8E extends
+it additively — there is no second harness anywhere in the repo.
+
+```bash
+# Offline orchestrator decision baseline (no model required)
+python -m cozmo.evaluation analyze   [--dataset tests/regression_corpus.json]
+
+# Research workflow: citations / conflicts / search discipline.
+# Deterministic offline driver by default (scripted synthesis + stub search);
+# pass nothing and it is reproducible byte-for-byte.
+python -m cozmo.evaluation research  [--dataset tests/research_corpus.json] [--save out.json]
+
+# Coding workflow: fixture repositories materialized into temp workspaces;
+# verification executes REAL pytest through ToolExecutor's workspace-pinned
+# shell runner. Offline; requires local pytest on sys.executable.
+python -m cozmo.evaluation coding    [--dataset tests/coding_corpus.json] [--save out.json]
+
+# Regression: compare two saved MetricSet snapshots.
+python -m cozmo.evaluation compare BASELINE.json CANDIDATE.json
+```
+
+**Metric families.** `MetricSet` now carries `retrieval`, `answer`, `tools`,
+`research`, `coding`, `latency`. Research metrics are judge-free:
+citation_resolvability (valid/total cited ids against the graph's own
+manifest), citation_coverage, insufficiency_honesty, conflict_acknowledgment,
+unnecessary_search_rate (searches beyond the case's `max_searches` budget).
+Coding metrics: task_completion (final verification verdict matches fixture
+expectation), test_pass_rate (passed verifications / total verifications),
+regression_rate (first attempt passed then failed later = repair churn),
+avg_repair_attempts, unnecessary_edit_rate (edits with zero failing
+verifications), tool_failure_rate, staged_repair_rate (driver-supplied
+fixture edits are DISCLOSED, never counted as observed agent repair;
+per-case records also carry driver_mode scripted|live).
+
+**Regression thresholds** (`cozmo/evaluation/regression.py`). Comparison is
+per-metric ABSOLUTE delta against `DEFAULT_THRESHOLDS` (0.05 for quality
+metrics, 0.02 for tools.recovery_rate); latency alone uses RELATIVE delta
+with a 50 ms absolute noise floor so identical runs never false-flag. Higher
+is better except `tools.recovery_rate`, `latency`, `coding.regression_rate`
+and `coding.verification_failure_rate`. Exit code: 0 = PASS, 1 = regression
+found. `research.*` / `coding.*` families ship WITH default thresholds (0.05
+quality metrics; 0.02 for the two lower-is-better coding rates).
+
+**LLM-as-judge** remains optional behind an explicit flag (`AnswerJudge`
+protocol on `MetricCollector`; `evidence --judge-model`) and is never used by
+the deterministic research/coding drivers.

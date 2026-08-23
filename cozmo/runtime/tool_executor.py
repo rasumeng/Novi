@@ -19,44 +19,9 @@ from typing import Callable
 from langchain_core.messages import AIMessage
 
 from .tool_risk import ToolRisk, get_tool_risk
-from .tool_registry import ToolRegistry
+from .tool_registry import ToolRegistry, tool_category
 
 log = logging.getLogger("cozmo.runtime")
-
-_TOOL_CATEGORIES: dict[str, str] = {
-    "read": "workspace",
-    "read_file": "workspace",
-    "write_file": "workspace",
-    "edit_file": "workspace",
-    "glob": "workspace",
-    "glob_search": "workspace",
-    "grep": "workspace",
-    "grep_search": "workspace",
-    "list_directory": "workspace",
-    "diagnostics": "workspace",
-    "sourcegraph": "workspace",
-    "bash": "python",
-    "run_command": "python",
-    "execute_python": "python",
-    "calculator": "python",
-    "web_search": "web",
-    "web_search_pipeline": "web",
-    "web_fetch": "web",
-    "fetch_url": "web",
-    "webfetch": "web",
-    "git_diff": "git",
-    "git_log": "git",
-    "read_knowledge": "memory",
-    "search_knowledge": "memory",
-    "write_knowledge": "memory",
-    "schedule_task": "memory",
-    "list_schedules": "memory",
-    "remove_schedule": "memory",
-    "screenshot": "workspace",
-    "analyze_image": "workspace",
-    "clipboard_read": "workspace",
-    "telegram_send": "other",
-}
 
 _TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -70,6 +35,24 @@ class ToolResult:
     error: str | None = None
     diff: dict | None = None
     latency_ms: float = 0.0
+    structured: dict | None = None
+    """Optional machine-readable payload attached by tools that produce
+    structured output (Phase 8C shell runner: exit_code / stdout_tail /
+    stderr_tail / duration_ms). Verification consumers MUST prefer this over
+    parsing ``output``; plain-text consumers ignore it entirely."""
+
+
+@dataclass
+class StructuredToolOutput:
+    """Return type for tools that carry both display text and structure.
+
+    ``text`` flows through sanitization/normalization exactly like a plain
+    string return (backward compatible); ``data`` rides along unmodified so
+    callers needing exact semantics (exit codes) never parse prose.
+    """
+
+    text: str
+    data: dict | None = None
 
 
 class ToolExecutor:
@@ -165,11 +148,11 @@ class ToolExecutor:
             return [{"name": name, "args": args, "id": name}]
         return []
 
-    # ── category (static lookup, used before execute in loop) ──────────
+    # ── category (delegates to the single registry source) ─────────────
 
     @staticmethod
     def tool_category(name: str) -> str:
-        return _TOOL_CATEGORIES.get(name, "other")
+        return tool_category(name)
 
     # ── unified execution pipeline ─────────────────────────────────────
 
@@ -201,6 +184,7 @@ class ToolExecutor:
         coord = coordinator
         error: str | None = None
         fallback_used: str | None = None
+        structured: dict | None = None
 
         # Stage 1: Coordinator intercept
         if coord is not None and coord.is_web_tool(name):
@@ -242,7 +226,12 @@ class ToolExecutor:
 
         # Stage 4: Tool execution
         try:
-            raw = str(info.fn(**args))
+            value = info.fn(**args)
+            if isinstance(value, StructuredToolOutput):
+                raw = value.text
+                structured = value.data
+            else:
+                raw = str(value)
         except TypeError as e:
             out = f"Error: bad arguments for {name}: {e}. Check the tool schema and retry."
             self.lesson_store.record(name, args, out)
@@ -261,6 +250,16 @@ class ToolExecutor:
         result = self._normalize_result(name, result)
 
         success = not result.startswith("Error:")
+
+        # Stage 6b: structured authority (Phase 8C). When a tool provides an
+        # exact machine contract, the exit code — not prose heuristics —
+        # decides success. Legacy string-only tools are unaffected.
+        success = not result.startswith("Error:")
+        if isinstance(structured, dict):
+            if structured.get("blocked") or structured.get("timed_out"):
+                success = False
+            elif isinstance(structured.get("exit_code"), int):
+                success = structured["exit_code"] == 0
 
         # Stage 7: Fallback chain
         if not success and name in self._tool_fallbacks:
@@ -309,6 +308,7 @@ class ToolExecutor:
             error=error,
             diff=diff,
             latency_ms=lat,
+            structured=structured,
         )
 
     # ── pipeline stages (private) ──────────────────────────────────────
