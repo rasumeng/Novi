@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cozmo.runtime.retrieval_coordinator import (
+from novi.runtime.retrieval_coordinator import (
     RetrievalBudget,
     RetrievalCoordinator,
 )

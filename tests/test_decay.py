@@ -9,10 +9,10 @@ full store history preserved after any decay.
 
 from datetime import datetime, timedelta
 
-from cozmo.brain.brain import Brain
-from cozmo.brain.reasoning import reflection
-from cozmo.brain.reasoning.tiering import tier_hits
-from cozmo.brain.types import KnowledgeForm, KnowledgeHit, KnowledgeItem, KnowledgeStatus
+from novi.brain.brain import Brain
+from novi.brain.reasoning import reflection
+from novi.brain.reasoning.tiering import tier_hits
+from novi.brain.types import KnowledgeForm, KnowledgeHit, KnowledgeItem, KnowledgeStatus
 
 
 def _dt(day, month=1):

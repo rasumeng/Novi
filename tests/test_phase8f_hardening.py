@@ -24,10 +24,10 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 
-from cozmo.graphs import CodingGraph, ResearchGraph
-from cozmo.runtime.event_bus import EventBus
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.graphs import CodingGraph, ResearchGraph
+from novi.runtime.event_bus import EventBus
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ class _StubModel:
 
 
 def _bundle(quality="sufficient", text="grounding evidence text for key"):
-    from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
+    from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
 
     try:
         q = RetrievalQuality(quality)
@@ -83,7 +83,7 @@ def _coding_state(**kw):
 
 
 def _make_plan(task_id="t8f", n=2):
-    from cozmo.planner.models import Plan, PlanStep
+    from novi.planner.models import Plan, PlanStep
 
     plan = Plan(id="p8f", task_id=task_id)
     plan.add_step(PlanStep(id="s0", plan_id=plan.id, description="work"))
@@ -93,7 +93,7 @@ def _make_plan(task_id="t8f", n=2):
 
 
 def _make_execution_plan(plan, analysis):
-    from cozmo.orchestrator.task_types import ExecutionPlan
+    from novi.orchestrator.task_types import ExecutionPlan
 
     return ExecutionPlan(
         task_id=plan.task_id, tools=[], model_spec={"model": "m1"},
@@ -115,7 +115,7 @@ class _M:
 def _run_coding_with_plan(stop_reason):
     """Drive the runtime coding branch with a scripted loop whose terminal
     reason is `stop_reason` and whose final text is non-empty."""
-    rt = CozmoRuntime(model_service=_M(), coding_graph=CodingGraph(),
+    rt = NoviRuntime(model_service=_M(), coding_graph=CodingGraph(),
                       cfg={"runtime": {"temperature": 0.2}})
 
     def fake_run_loop(state):
@@ -198,13 +198,13 @@ class _ToolCallModel:
 
 
 def _bare_runtime():
-    rt = CozmoRuntime(model_service=_M(), cfg={"runtime": {"temperature": 0.2}})
+    rt = NoviRuntime(model_service=_M(), cfg={"runtime": {"temperature": 0.2}})
     rt.retrieval_executor.execute_search = lambda q, trace=None: _bundle()
     return rt
 
 
 def _ctx_with_trace():
-    from cozmo.runtime.trace import ExecutionTrace
+    from novi.runtime.trace import ExecutionTrace
 
     ctx = ExecutionContext(user_input="edit")
     ctx.trace = ExecutionTrace()
@@ -214,7 +214,7 @@ def _ctx_with_trace():
 def _drive_loop(rt, ctx, model, budget=1, seed=None):
     """Phase 9C: drive the canonical executor with the same collaborator
     wiring every production site uses (the retired wrapper is gone)."""
-    from cozmo.runtime.react_attempt import run_react_attempt
+    from novi.runtime.react_attempt import run_react_attempt
 
     return run_react_attempt(
         ctx=ctx,
@@ -281,13 +281,13 @@ def test_run_loop_accumulates_signatures_across_attempts():
                "c2", "workspace")
         yield ("_LOOP_DONE", "out", "completed", True)
 
-    import cozmo.runtime.runtime as runtime_module
+    import novi.runtime.runtime as runtime_module
     original = runtime_module.run_react_attempt
     runtime_module.run_react_attempt = fake_executor
     try:
         fake_ctx = SimpleNamespace(analysis=None, retrieval_plan=None,
                                    resume_from=0)
-        builder = CozmoRuntime._coding_graph_state(rt, fake_ctx, None,
+        builder = NoviRuntime._coding_graph_state(rt, fake_ctx, None,
                                                    base_msgs, "fix", 3)
         list(builder["run_loop"]({}))
         list(builder["run_loop"]({}))
@@ -326,7 +326,7 @@ def test_completion_taxonomy_is_closed():
                "environment_error", "permission_denied", "verification_failed"}
 
     def verify_fail(state):
-        from cozmo.graphs.coding_intel import VerificationReport
+        from novi.graphs.coding_intel import VerificationReport
         return [VerificationReport(kind="test", exit_code=1,
                                    stdout_tail="fail", stderr_tail="",
                                    duration_ms=1.0, passed=False,

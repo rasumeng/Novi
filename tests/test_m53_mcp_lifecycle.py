@@ -25,10 +25,10 @@ import asyncio
 
 import pytest
 
-from cozmo.configuration.bootstrap import build_registry as _build_registry
-from cozmo.configuration.manager import Configuration
-from cozmo.runtime.providers import mcp as mcp_mod
-from cozmo.runtime.tool_registry import ToolRegistry
+from novi.configuration.bootstrap import build_registry as _build_registry
+from novi.configuration.manager import Configuration
+from novi.runtime.providers import mcp as mcp_mod
+from novi.runtime.tool_registry import ToolRegistry
 
 
 # ── fake MCP host ──────────────────────────────────────────────────────────
@@ -175,13 +175,13 @@ def test_shutdown_idempotent(mcp):
 
 def test_shutdown_stop_wired_to_webui_shutdown(monkeypatch):
     """MCPManager.stop() runs on the app shutdown path (lifespan)."""
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
-    from cozmo.webui_server import create_app
+    from novi.webui_server import create_app
 
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_tags",
+        "novi.configuration.discovery.query_ollama_tags",
         lambda url="", timeout=0.0: [],
     )
     app = create_app(cfg={"mcp": {"enabled": False, "servers": {}},
@@ -209,7 +209,7 @@ def test_shutdown_stop_wired_to_webui_shutdown(monkeypatch):
 
 def test_shutdown_safe_when_backend_never_built(monkeypatch):
     """Shutdown with no shared backend (or never-started subsystems) is a no-op."""
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
 
     ws._shared_backend = None
     try:

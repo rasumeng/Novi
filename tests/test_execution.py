@@ -1,7 +1,7 @@
-"""Integration tests for the execution layer: CozmoRuntime + ExecutionPlan.
+"""Integration tests for the execution layer: NoviRuntime + ExecutionPlan.
 
 The legacy ``runtime/engine.py`` (stateless ReAct loop) was removed in Phase 3;
-CozmoRuntime.run_stream is the sole execution loop. These tests cover the
+NoviRuntime.run_stream is the sole execution loop. These tests cover the
 runtime + ExecutionPlan contract that remains.
 """
 
@@ -13,15 +13,15 @@ import pytest
 class TestRuntimeExecutionPlan:
     @pytest.fixture
     def runtime(self):
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.runtime import NoviRuntime
 
         mm = MagicMock()
-        rt = CozmoRuntime(model_service=mm)
+        rt = NoviRuntime(model_service=mm)
         return rt
 
     def test_execution_plan_uses_plan_tools(self, runtime):
         """When execution_plan is provided, its tools are used."""
-        from cozmo.orchestrator.task_types import ExecutionPlan, Goal, IntentType
+        from novi.orchestrator.task_types import ExecutionPlan, Goal, IntentType
 
         plan = ExecutionPlan(
             goal=Goal(text="say hi", intent=IntentType.CONVERSATION),
@@ -32,10 +32,10 @@ class TestRuntimeExecutionPlan:
         )
 
         def _fake_classify(*a, **kw):
-            from cozmo.orchestrator.intent import IntentType
+            from novi.orchestrator.intent import IntentType
             return IntentType.CONVERSATION
 
-        with patch("cozmo.runtime.runtime.classify_intent", _fake_classify):
+        with patch("novi.runtime.runtime.classify_intent", _fake_classify):
             gen = runtime.run_stream("say hi", execution_plan=plan)
 
             events = []
@@ -51,7 +51,7 @@ class TestRuntimeExecutionPlan:
 
     def test_execution_plan_uses_plan_model(self, runtime):
         """When execution_plan is provided, plan's model_spec is used."""
-        from cozmo.orchestrator.task_types import ExecutionPlan, Goal, IntentType
+        from novi.orchestrator.task_types import ExecutionPlan, Goal, IntentType
 
         plan = ExecutionPlan(
             goal=Goal(text="write code", intent=IntentType.CODING),
@@ -62,10 +62,10 @@ class TestRuntimeExecutionPlan:
         )
 
         def _fake_classify(*a, **kw):
-            from cozmo.orchestrator.intent import IntentType
+            from novi.orchestrator.intent import IntentType
             return IntentType.CODING
 
-        with patch("cozmo.runtime.runtime.classify_intent", _fake_classify):
+        with patch("novi.runtime.runtime.classify_intent", _fake_classify):
             gen = runtime.run_stream("write a function", execution_plan=plan)
             # Consume the generator — it will try to bind the model "coder-model"
             # which will fail via the MagicMock, but that's expected

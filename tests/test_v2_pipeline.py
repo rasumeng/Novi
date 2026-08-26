@@ -13,9 +13,9 @@ import pytest
 
 @pytest.fixture
 def orchestrator():
-    from cozmo.orchestrator.orchestrator import Orchestrator
-    from cozmo.capabilities import CapabilityRegistry
-    from cozmo.capabilities.builtin import register_builtin_capabilities
+    from novi.orchestrator.orchestrator import Orchestrator
+    from novi.capabilities import CapabilityRegistry
+    from novi.capabilities.builtin import register_builtin_capabilities
     registry = CapabilityRegistry()
     register_builtin_capabilities(registry)
     return Orchestrator(capability_registry=registry)
@@ -23,15 +23,15 @@ def orchestrator():
 
 @pytest.fixture
 def job_manager():
-    from cozmo.jobs.manager import JobManager
+    from novi.jobs.manager import JobManager
     return JobManager()
 
 
 @pytest.fixture
 def backend():
     """Minimal backend dict simulating the shared backend."""
-    from cozmo.runtime.tool_registry import ToolRegistry
-    from cozmo.tools import TOOL_REGISTRY
+    from novi.runtime.tool_registry import ToolRegistry
+    from novi.tools import TOOL_REGISTRY
 
     mm = MagicMock()
     registry = ToolRegistry()
@@ -48,10 +48,10 @@ def backend():
 
 @pytest.fixture
 def runtime(backend):
-    from cozmo.runtime.runtime import CozmoRuntime
-    from cozmo.runtime.event_bus import EventBus
+    from novi.runtime.runtime import NoviRuntime
+    from novi.runtime.event_bus import EventBus
 
-    rt = CozmoRuntime(
+    rt = NoviRuntime(
         model_service=backend["model_service"],
         registry=backend["registry"],
         skills=backend["skills"],
@@ -107,7 +107,7 @@ class TestJobManager:
     def test_submit_pause_resume(self, job_manager):
         job = job_manager.submit(task_id="task-2")
         job_manager.start(job.id)
-        from cozmo.jobs.job import Checkpoint
+        from novi.jobs.job import Checkpoint
         cp = Checkpoint(job_id=job.id, step=3)
         assert job_manager.pause(job.id, cp) is True
         assert job.status.value == "paused"
@@ -232,15 +232,15 @@ class TestPipelineIntegration:
 class TestSession:
     @pytest.fixture
     def session(self):
-        from cozmo.webui_server import Session
-        from cozmo.runtime.event_bus import EventBus
+        from novi.webui_server import Session
+        from novi.runtime.event_bus import EventBus
 
         loop = MagicMock()
         loop.call_soon_threadsafe = lambda fn, *a: fn(*a) if callable(fn) else None
         # Build a full production backend is slow (memory, project index, MCP).
         # Session wiring is what's under test — use a real EventBus plus mocks.
         backend = (MagicMock(), MagicMock(), MagicMock(), EventBus())
-        with patch("cozmo.webui_server.build_runtime", return_value=backend):
+        with patch("novi.webui_server.build_runtime", return_value=backend):
             sess = Session(loop=loop)
         return sess
 
@@ -309,11 +309,26 @@ class TestSession:
         assert result is True
 
     def test_event_bus_bridging(self, session):
-        """EventBus events should be forwarded to the session event queue."""
+        """Bus forwarding carries only what the run stream does NOT.
+
+        The runtime/coordinator stream is authoritative for tool_call and
+        tool_result frames (react_attempt both yields tuples AND emits bus
+        events; bridging the bus copies duplicated every frame with an empty
+        id). The bridge now forwards the finalized ExecutionTrace summary --
+        and must NOT re-forward tool frames.
+        """
         session.event_bus.emit("tool_called", tool="read", args={"path": "/x"}, call_id="c1")
+        session.event_bus.emit(
+            "trace.completed",
+            trace={"model_selected": "m", "workload": "general",
+                   "total_latency_ms": 12.5},
+        )
         time.sleep(0.05)
         events = []
         while not session.events.empty():
             events.append(session.events.get_nowait())
         tool_calls = [e for e in events if e.get("type") == "tool_call"]
-        assert len(tool_calls) >= 1
+        assert len(tool_calls) == 0
+        summaries = [e for e in events if e.get("type") == "trace_complete"]
+        assert len(summaries) == 1
+        assert summaries[0]["trace"]["model_selected"] == "m"

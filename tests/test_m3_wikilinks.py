@@ -12,20 +12,20 @@ import yaml
 from pathlib import Path
 from unittest.mock import patch
 
-from cozmo.brain import Brain, EdgeKind, KnowledgeStatus, Turn
-from cozmo.brain.layers.knowledge import KnowledgeLayer
-from cozmo.brain.layers.scenarios import ScenarioLayer
-from cozmo.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
-from cozmo.brain.storage.markdown_store import MarkdownStore
-from cozmo.brain.storage.relationship_store import RelationshipStore
-from cozmo.brain.storage.scenario_store import ScenarioStore
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.brain.wikilinks import (
+from novi.brain import Brain, EdgeKind, KnowledgeStatus, Turn
+from novi.brain.layers.knowledge import KnowledgeLayer
+from novi.brain.layers.scenarios import ScenarioLayer
+from novi.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
+from novi.brain.storage.markdown_store import MarkdownStore
+from novi.brain.storage.relationship_store import RelationshipStore
+from novi.brain.storage.scenario_store import ScenarioStore
+from novi.brain.storage.vector_store import VectorStore
+from novi.brain.wikilinks import (
     ResolutionStatus,
     build_note_index,
     parse_wikilinks,
 )
-from cozmo.services.embedding import EmbeddingService
+from novi.services.embedding import EmbeddingService
 
 
 # ── fakes ────────────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ def test_unrelated_relationships_preserved_across_sync(tmp_path):
     _note(tmp_path / "kb", "a.md", "see [[B]]", type="atomic", title="A", id="kn-a")
     brain.sync_wikilinks()
     # A manually-authored supersedes provenance edge must remain untouched.
-    from cozmo.brain.types import Relationship
+    from novi.brain.types import Relationship
     rels.add_many([Relationship(source_id="kn-a", target_id="kn-b",
                                  kind=EdgeKind.SUPERSEDES)])
     report = brain.sync_wikilinks()

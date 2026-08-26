@@ -21,21 +21,21 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from cozmo.brain import (
+from novi.brain import (
     Brain,
     EdgeKind,
     KnowledgeItem,
     KnowledgeStatus,
     Turn,
 )
-from cozmo.brain.layers.knowledge import KnowledgeLayer
-from cozmo.brain.layers.scenarios import ScenarioLayer
-from cozmo.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
-from cozmo.brain.storage.markdown_store import MarkdownStore
-from cozmo.brain.storage.relationship_store import RelationshipStore
-from cozmo.brain.storage.scenario_store import ScenarioStore
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.services.embedding import EmbeddingService
+from novi.brain.layers.knowledge import KnowledgeLayer
+from novi.brain.layers.scenarios import ScenarioLayer
+from novi.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
+from novi.brain.storage.markdown_store import MarkdownStore
+from novi.brain.storage.relationship_store import RelationshipStore
+from novi.brain.storage.scenario_store import ScenarioStore
+from novi.brain.storage.vector_store import VectorStore
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):
@@ -131,7 +131,7 @@ def _build_brain(
 
 
 def _read_frontmatter(path):
-    from cozmo.memory.okf import parse_okf_file
+    from novi.memory.okf import parse_okf_file
 
     meta, body = parse_okf_file(path)
     return meta, body
@@ -167,7 +167,7 @@ def test_learn_creates_markdown(tmp_path):
 def test_learn_respects_configured_workspace(tmp_path):
     configured = tmp_path / "configured-kb"
     with patch(
-        "cozmo.brain.storage.markdown_store.get_configuration",
+        "novi.brain.storage.markdown_store.get_configuration",
         return_value=_StubConfig({"workspace": {"knowledge": str(configured)}}),
     ):
         md = MarkdownStore()  # no explicit dir → config decides

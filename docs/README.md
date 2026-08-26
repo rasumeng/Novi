@@ -1,6 +1,6 @@
-# Cozmo Documentation
+# Novi Documentation
 
-Navigation map for the Cozmo repository. If you are new here, read in this order:
+Navigation map for the Novi repository. If you are new here, read in this order:
 
 1. **`../README.md`** — product overview, quick start, feature list.
 2. **`../PLAN.md`** — the architecture evolution plan and phase roadmap.

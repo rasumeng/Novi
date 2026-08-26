@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from cozmo.tools import TOOL_REGISTRY
+from novi.tools import TOOL_REGISTRY
 
 
 class FakeResponse:
@@ -61,7 +61,7 @@ class _StubConfig:
 
 
 def _patch_config(cfg):
-    return patch("cozmo.configuration.bootstrap.get_configuration",
+    return patch("novi.configuration.bootstrap.get_configuration",
                  return_value=_StubConfig(cfg))
 
 
@@ -80,13 +80,13 @@ def _fake_caps(supports_vision):
 
 def test_analyze_image_uses_only_general_workload_model(tmp_path):
     """The HTTP call must carry the selected general model, verbatim."""
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
     with _patch_config(_config(general_model="qwen2.5vl:7b")), \
-         patch("cozmo.runtime.model_selector.model_capabilities",
+         patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(True)) as mc, \
          patch.object(desktop, "requests") as fake_requests:
         fake_requests.post.return_value = FakeResponse(200, {"message": {"content": "a desk"}})
@@ -102,7 +102,7 @@ def test_analyze_image_uses_only_general_workload_model(tmp_path):
 
 def test_analyze_image_ignores_legacy_models_vision(tmp_path):
     """A legacy ``models.vision`` entry must never influence the model used."""
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
@@ -111,7 +111,7 @@ def test_analyze_image_ignores_legacy_models_vision(tmp_path):
     cfg["models"] = {"vision": "llava:13b"}
 
     with _patch_config(cfg), \
-         patch("cozmo.runtime.model_selector.model_capabilities",
+         patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(True)), \
          patch.object(desktop, "requests") as fake_requests:
         fake_requests.post.return_value = FakeResponse(200, {"message": {"content": "ok"}})
@@ -127,7 +127,7 @@ def test_analyze_image_ignores_legacy_models_vision(tmp_path):
 
 def test_analyze_image_general_model_unset_raises_model_unavailable(tmp_path):
     """Unset general workload model → explicit model-unavailable error, no HTTP."""
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
@@ -143,13 +143,13 @@ def test_analyze_image_general_model_unset_raises_model_unavailable(tmp_path):
 
 def test_analyze_image_general_model_lacks_vision_returns_capability_error(tmp_path):
     """Selected model without vision capability → explicit capability error."""
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
     with _patch_config(_config(general_model="qwen3:8b")), \
-         patch("cozmo.runtime.model_selector.model_capabilities",
+         patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(False)), \
          patch.object(desktop, "requests") as fake_requests:
         result = desktop.analyze_image(str(img))
@@ -162,13 +162,13 @@ def test_analyze_image_general_model_lacks_vision_returns_capability_error(tmp_p
 
 def test_analyze_image_model_not_installed_surfaces_model_unavailable(tmp_path):
     """Ollama 404 (model not installed) → model-unavailable error."""
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
     with _patch_config(_config(general_model="qwen2.5vl:7b")), \
-         patch("cozmo.runtime.model_selector.model_capabilities",
+         patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(True)), \
          patch.object(desktop, "requests") as fake_requests:
         fake_requests.post.return_value = FakeResponse(404, {"error": "model not found"})
@@ -180,7 +180,7 @@ def test_analyze_image_model_not_installed_surfaces_model_unavailable(tmp_path):
 
 
 def test_analyze_image_missing_file_returns_error():
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     result = desktop.analyze_image("/nonexistent/x.png")
     assert "file not found" in result
@@ -190,7 +190,7 @@ def test_analyze_image_missing_file_returns_error():
 
 
 def test_screenshot_requires_desktop_enabled():
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     with _patch_config(_config(general_model="qwen2.5vl:7b")):
         cfg = _config(general_model="qwen2.5vl:7b")
@@ -201,7 +201,7 @@ def test_screenshot_requires_desktop_enabled():
 
 
 def test_clipboard_read_requires_desktop_enabled():
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     cfg = _config()
     cfg["desktop"] = {"enabled": False}
@@ -211,7 +211,7 @@ def test_clipboard_read_requires_desktop_enabled():
 
 
 def test_clipboard_read_returns_clipboard_text():
-    from cozmo.tools import desktop
+    from novi.tools import desktop
 
     with _patch_config(_config()), patch.object(desktop, "pyperclip") as fake_pc:
         fake_pc.paste.return_value = "copied text"

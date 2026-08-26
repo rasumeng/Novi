@@ -9,14 +9,14 @@ import hashlib
 
 import pytest
 
-from cozmo.memory.rebuild import _find_lancedb_dirs, rebuild
+from novi.memory.rebuild import _find_lancedb_dirs, rebuild
 
 
 @pytest.fixture
 def profile(tmp_path):
     base = tmp_path
     (base / "memory" / "lancedb").mkdir(parents=True)
-    (base / "memory" / "lancedb" / "cozmo_memories.lance").write_text("old")
+    (base / "memory" / "lancedb" / "novi_memories.lance").write_text("old")
     (base / "knowledge_index" / "lancedb").mkdir(parents=True)
     (base / "brain").mkdir(parents=True)
     (base / "brain" / "relationships.sqlite").write_text("keep-me")
@@ -30,8 +30,8 @@ def profile(tmp_path):
 @pytest.fixture(autouse=True)
 def _hermetic(monkeypatch):
     """Force the ollama backend + deterministic embeddings; no network."""
-    from cozmo.memory import rebuild as rebuild_mod
-    from cozmo.services.embedding_providers import OllamaEmbeddingProvider
+    from novi.memory import rebuild as rebuild_mod
+    from novi.services.embedding_providers import OllamaEmbeddingProvider
 
     class _StubConfig:
         def snapshot(self):

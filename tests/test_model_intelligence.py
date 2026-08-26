@@ -8,23 +8,23 @@ authoritative runtime capability check (no name inference).
 
 import pytest
 
-from cozmo.configuration.model_records import (
+from novi.configuration.model_records import (
     CapabilityEvidence,
     ModelIdentity,
     ModelRecord,
     ModelStatus,
 )
-from cozmo.configuration.model_seeds import SEED_MODEL_FACTS
-from cozmo.configuration.evidence import assemble_capability_evidence, capability_flags
-from cozmo.configuration.metadata_cache import ModelMetadataCache
-from cozmo.configuration.qualification import Qualification
-from cozmo.configuration.runtime_inventory import (
+from novi.configuration.model_seeds import SEED_MODEL_FACTS
+from novi.configuration.evidence import assemble_capability_evidence, capability_flags
+from novi.configuration.metadata_cache import ModelMetadataCache
+from novi.configuration.qualification import Qualification
+from novi.configuration.runtime_inventory import (
     OllamaRuntimeInventory,
     _capability_tokens_from_show,
     _context_length_from_show,
 )
-from cozmo.configuration.discovery import ModelDiscovery, invalidate_cache
-from cozmo.configuration.resolver import recommend, WORKLOADS
+from novi.configuration.discovery import ModelDiscovery, invalidate_cache
+from novi.configuration.resolver import recommend, WORKLOADS
 
 
 # ── ModelRecord: unknown stays unknown ────────────────────────────────────
@@ -63,7 +63,7 @@ def test_record_capability_names_deduplicates():
 
 
 def test_discoveredmodel_is_record_alias():
-    from cozmo.configuration.discovery import DiscoveredModel
+    from novi.configuration.discovery import DiscoveredModel
     m = DiscoveredModel(name="x", status=ModelStatus.INSTALLED, capability_flags={"chat": True})
     assert isinstance(m, ModelRecord)
     assert m.status == ModelStatus.INSTALLED
@@ -103,7 +103,7 @@ def test_capability_flags_view():
 
 def test_tags_record_parses_details(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.runtime_inventory.query_ollama_tags",
+        "novi.configuration.runtime_inventory.query_ollama_tags",
         lambda url="", timeout=0.0: [{
             "name": "qwen2.5:7b-instruct-q4_K_M",
             "size": 4687078595,
@@ -131,7 +131,7 @@ def test_tags_record_parses_details(monkeypatch):
 
 def test_tags_record_malformed_fields_are_none(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.runtime_inventory.query_ollama_tags",
+        "novi.configuration.runtime_inventory.query_ollama_tags",
         lambda url="", timeout=0.0: [{
             "name": "weird:model",
             "size": "not-an-int",
@@ -146,7 +146,7 @@ def test_tags_record_malformed_fields_are_none(monkeypatch):
 
 def test_tags_skips_missing_name_and_non_dicts(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.runtime_inventory.query_ollama_tags",
+        "novi.configuration.runtime_inventory.query_ollama_tags",
         lambda url="", timeout=0.0: [{"size": 1}, None, "nope", {"name": 42}, {"name": "ok"}],
     )
     records = OllamaRuntimeInventory().list_models()
@@ -155,7 +155,7 @@ def test_tags_skips_missing_name_and_non_dicts(monkeypatch):
 
 def test_tags_failure_returns_empty(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.runtime_inventory.query_ollama_tags",
+        "novi.configuration.runtime_inventory.query_ollama_tags",
         lambda url="", timeout=0.0: [],
     )
     assert OllamaRuntimeInventory().list_models() == []
@@ -187,7 +187,7 @@ def test_show_context_length_scans_model_info():
 
 def test_show_record_merges_detail(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.runtime_inventory.query_ollama_show",
+        "novi.configuration.runtime_inventory.query_ollama_show",
         lambda url, name, timeout=0.0: {
             "model_info": {"llama.context_length": 131072},
             "license": "Apache-2.0",
@@ -206,7 +206,7 @@ def test_show_record_merges_detail(monkeypatch):
 
 def test_show_unknown_model_returns_none(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.runtime_inventory.query_ollama_show",
+        "novi.configuration.runtime_inventory.query_ollama_show",
         lambda url, name, timeout=0.0: None,
     )
     assert OllamaRuntimeInventory().show_model("ghost:model") is None
@@ -225,11 +225,11 @@ def _fresh_cache():
 def test_discovery_enriches_and_caches_show(monkeypatch):
     tags = [{"name": "qwen3:8b", "size": 1}]
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_tags",
+        "novi.configuration.discovery.query_ollama_tags",
         lambda url="", timeout=0.0: tags)
     calls = []
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_show",
+        "novi.configuration.discovery.query_ollama_show",
         lambda url, name, timeout=0.0: (calls.append(name),
                                         {"capabilities": ["tools"],
                                          "model_info": {"llama.context_length": 131072}})[1])
@@ -246,17 +246,17 @@ def test_discovery_enriches_and_caches_show(monkeypatch):
 def test_discovery_daemon_down_serves_stale_cache(monkeypatch):
     # Prime the cache with a show payload for one model.
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_tags",
+        "novi.configuration.discovery.query_ollama_tags",
         lambda url="", timeout=0.0: [{"name": "llama3.1:8b", "size": 1}])
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_show",
+        "novi.configuration.discovery.query_ollama_show",
         lambda url, name, timeout=0.0: {"capabilities": ["tools"]})
     d = ModelDiscovery("http://localhost:11434")
     assert len(d.installed()) == 1
 
     # Daemon down: tags empty, but cached metadata is served, marked stale.
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_tags",
+        "novi.configuration.discovery.query_ollama_tags",
         lambda url="", timeout=0.0: [])
     records = d.installed()
     assert len(records) == 1
@@ -266,11 +266,11 @@ def test_discovery_daemon_down_serves_stale_cache(monkeypatch):
 
 def test_invalidate_clears_cache_after_install(monkeypatch):
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_tags",
+        "novi.configuration.discovery.query_ollama_tags",
         lambda url="", timeout=0.0: [{"name": "qwen3:8b", "size": 1}])
     calls = []
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_show",
+        "novi.configuration.discovery.query_ollama_show",
         lambda url, name, timeout=0.0: (calls.append(name),
                                         {"capabilities": ["tools"]})[1])
     ModelDiscovery("http://localhost:11434").installed()
@@ -306,7 +306,7 @@ def test_unknown_model_with_runtime_evidence_is_recommended():
 
 
 def test_name_inference_only_model_ranks_last():
-    from cozmo.configuration.model_records import CapabilityEvidence, ModelRecord
+    from novi.configuration.model_records import CapabilityEvidence, ModelRecord
     records = [
         ModelRecord(
             name="trusted-coder", status=ModelStatus.INSTALLED,
@@ -338,14 +338,14 @@ def test_recommend_never_picks_unknown_without_evidence():
 
 
 def test_model_capabilities_unknown_stays_unknown():
-    from cozmo.runtime.model_selector import model_capabilities
+    from novi.runtime.model_selector import model_capabilities
     caps = model_capabilities("some-llava-brand:7b")
     assert caps.supports_vision is False
     assert caps.capabilities == frozenset()
 
 
 def test_model_capabilities_seed_based():
-    from cozmo.runtime.model_selector import model_capabilities
+    from novi.runtime.model_selector import model_capabilities
     caps = model_capabilities("qwen2.5vl:7b")
     assert caps.supports_vision is True
     assert caps.supports_tools is True
@@ -353,11 +353,11 @@ def test_model_capabilities_seed_based():
 
 def test_model_capabilities_merges_measured_runtime_evidence():
     invalidate_cache()
-    from cozmo.configuration.discovery import _CACHE
+    from novi.configuration.discovery import _CACHE
     _CACHE.set("http://localhost:11434", "probe:model",
                {"capabilities": ["vision", "tools"]})
     try:
-        from cozmo.runtime.model_selector import model_capabilities
+        from novi.runtime.model_selector import model_capabilities
         caps = model_capabilities("probe:model")
         assert caps.supports_vision is True
         assert caps.supports_tools is True

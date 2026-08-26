@@ -23,14 +23,14 @@ import json
 
 import pytest
 
-from cozmo.evaluation import (
+from novi.evaluation import (
     BenchmarkCase,
     BenchmarkDataset,
     CodingEvalDriver,
     MetricCollector,
     ResearchEvalDriver,
 )
-from cozmo.evaluation.metrics import CaseResult
+from novi.evaluation.metrics import CaseResult
 
 
 # ── research metrics ──────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ def test_conflict_acknowledgment_defaults_true_without_conflicts():
 
 
 def test_metricset_json_round_trip_includes_new_families():
-    from cozmo.evaluation.metrics import MetricSet
+    from novi.evaluation.metrics import MetricSet
 
     ms = MetricSet()
     d = ms.to_dict()
@@ -108,8 +108,8 @@ def test_metricset_json_round_trip_includes_new_families():
 
 
 def test_regression_detector_accepts_new_families_additively():
-    from cozmo.evaluation import RegressionDetector
-    from cozmo.evaluation.metrics import (
+    from novi.evaluation import RegressionDetector
+    from novi.evaluation.metrics import (
         CodingMetrics, MetricSet, ResearchMetrics, RetrievalMetrics,
     )
 
@@ -207,7 +207,7 @@ def test_coding_driver_is_offline_reproducible():
 
 
 def test_cli_registers_research_and_coding_commands():
-    from cozmo.evaluation.__main__ import main
+    from novi.evaluation.__main__ import main
     import argparse
 
     parser = argparse.ArgumentParser()

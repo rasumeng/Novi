@@ -18,12 +18,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cozmo.runtime.evidence import RetrievalQuality
-from cozmo.runtime.retrieval import RetrievalExecutor
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.result_merger import MergeWeights, RankAdjustments, ResultMerger
-from cozmo.runtime.sources.base import MergedRetrievalResult, RetrievedItem, RetrievalResult
-from cozmo.runtime.unified_retrieval import CANONICAL_ORDER, SourceBinding, UnifiedRetriever
+from novi.runtime.evidence import RetrievalQuality
+from novi.runtime.retrieval import RetrievalExecutor
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.result_merger import MergeWeights, RankAdjustments, ResultMerger
+from novi.runtime.sources.base import MergedRetrievalResult, RetrievedItem, RetrievalResult
+from novi.runtime.unified_retrieval import CANONICAL_ORDER, SourceBinding, UnifiedRetriever
 
 BUDGET = ContextAllocation()
 
@@ -415,14 +415,14 @@ class TestExecutorIntegration:
     def test_single_source_keeps_legacy_path_byte_identical(self):
         idx = _FakeKnowledgeIndex(self._rows())
         exe = RetrievalExecutor(knowledge_source=__import__(
-            "cozmo.runtime.sources", fromlist=["KnowledgeRetrievalSource"]
+            "novi.runtime.sources", fromlist=["KnowledgeRetrievalSource"]
         ).KnowledgeRetrievalSource(idx))
         out = exe.retrieve_knowledge("python decorators")
         assert out.startswith("- **KB** (kb.md, score=0.90):")
         assert idx.calls == [("python decorators", 5)]
 
     def test_multi_source_uses_unified_merge(self):
-        from cozmo.runtime.sources import KnowledgeRetrievalSource
+        from novi.runtime.sources import KnowledgeRetrievalSource
 
         idx = _FakeKnowledgeIndex(self._rows())
         memory = MagicMock()
@@ -442,7 +442,7 @@ class TestExecutorIntegration:
 
     def test_multi_source_cross_source_duplicate_deduplicated(self):
         """Same fact via memory + knowledge renders once (unified dedup)."""
-        from cozmo.runtime.sources import KnowledgeRetrievalSource
+        from novi.runtime.sources import KnowledgeRetrievalSource
 
         idx = _FakeKnowledgeIndex([{
             "id": "kb.md::0",
@@ -465,7 +465,7 @@ class TestExecutorIntegration:
         assert out.count("user prefers python") == 1
 
     def test_no_brain_no_memory_legacy_fallback_preserved(self):
-        from cozmo.runtime.sources import KnowledgeRetrievalSource
+        from novi.runtime.sources import KnowledgeRetrievalSource
 
         idx = _FakeKnowledgeIndex([])
         exe = RetrievalExecutor(knowledge_source=KnowledgeRetrievalSource(idx))
@@ -473,7 +473,7 @@ class TestExecutorIntegration:
         assert idx.calls == [("anything", 5)], "single-source legacy path"
 
     def test_knowledge_failure_returns_empty_string(self):
-        from cozmo.runtime.sources import KnowledgeRetrievalSource
+        from novi.runtime.sources import KnowledgeRetrievalSource
 
         class Broken:
             def search(self, query, k=5, rerank=True):
@@ -492,8 +492,8 @@ class TestArchitectureGuards:
         "RelationshipStore", "MarkdownStore", "MemoryManager",
     )
     _UNIFIED_MODULES = (
-        Path("cozmo/runtime/unified_retrieval.py"),
-        Path("cozmo/runtime/result_merger.py"),
+        Path("novi/runtime/unified_retrieval.py"),
+        Path("novi/runtime/result_merger.py"),
     )
 
     @pytest.mark.parametrize("rel", _UNIFIED_MODULES)

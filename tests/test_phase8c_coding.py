@@ -25,9 +25,9 @@ import inspect
 
 import pytest
 
-from cozmo.graphs import CodingGraph
-from cozmo.graphs import coding_intel as ci
-from cozmo.graphs.coding_intel import VerificationReport
+from novi.graphs import CodingGraph
+from novi.graphs import coding_intel as ci
+from novi.graphs.coding_intel import VerificationReport
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -337,10 +337,10 @@ def test_metrics_track_attempts_and_edit_size():
 def test_graph_never_imports_subprocess_or_direct_execution():
     """AST guard extension: the coding/research graphs may not touch process
     execution primitives — ToolExecutor is the sole execution gate."""
-    import cozmo.graphs.coding_graph as cg
-    import cozmo.graphs.research_graph as rg
-    import cozmo.graphs.coding_intel as cint
-    import cozmo.graphs.research_intel as rint
+    import novi.graphs.coding_graph as cg
+    import novi.graphs.research_graph as rg
+    import novi.graphs.coding_intel as cint
+    import novi.graphs.research_intel as rint
 
     forbidden_modules = ("subprocess", "os.system", "pty", "multiprocessing")
     forbidden_calls = {"system", "popen", "Popen", "run", "check_output"}
@@ -370,13 +370,13 @@ def test_verification_flows_through_tool_executor_pipeline():
     import tempfile
     from pathlib import Path
 
-    from cozmo.runtime.tool_executor import ToolExecutor
-    from cozmo.runtime.tool_registry import ToolRegistry
-    from cozmo.tools import TOOL_REGISTRY
-    from cozmo.tools.file_ops import set_allowed_root
+    from novi.runtime.tool_executor import ToolExecutor
+    from novi.runtime.tool_registry import ToolRegistry
+    from novi.tools import TOOL_REGISTRY
+    from novi.tools.file_ops import set_allowed_root
 
     class _Allow:
-        def resolve(self, name, args, agent="cozmo"):
+        def resolve(self, name, args, agent="novi"):
             return "allow"
 
     class _Lessons:
@@ -411,7 +411,7 @@ def test_verification_flows_through_tool_executor_pipeline():
 
 @pytest.fixture()
 def workspace(tmp_path):
-    from cozmo.tools.file_ops import set_allowed_root
+    from novi.tools.file_ops import set_allowed_root
 
     old = None
     set_allowed_root(tmp_path)
@@ -423,7 +423,7 @@ def workspace(tmp_path):
 
 
 def test_write_file_confined_to_workspace(workspace):
-    from cozmo.tools import TOOL_REGISTRY
+    from novi.tools import TOOL_REGISTRY
 
     ok = TOOL_REGISTRY["write_file"](path="src/new.py", content="x = 1\n")
     assert "Written" in ok
@@ -439,7 +439,7 @@ def test_write_file_confined_to_workspace(workspace):
 
 
 def test_edit_file_confined_to_workspace(workspace):
-    from cozmo.tools import TOOL_REGISTRY
+    from novi.tools import TOOL_REGISTRY
 
     TOOL_REGISTRY["write_file"](path="mod.py", content="value = 1\n")
     ok = TOOL_REGISTRY["edit_file"](path="mod.py", old_text="value = 1",
@@ -452,7 +452,7 @@ def test_edit_file_confined_to_workspace(workspace):
 
 
 def test_run_command_pinned_to_workspace(workspace):
-    from cozmo.tools.code_ops import _run_command_structured
+    from novi.tools.code_ops import _run_command_structured
 
     out = _run_command_structured('python -c "import os; print(os.getcwd())"')
     assert out.data["exit_code"] == 0
@@ -461,7 +461,7 @@ def test_run_command_pinned_to_workspace(workspace):
 
 
 def test_run_command_destructive_remains_gated(workspace):
-    from cozmo.tools.code_ops import _run_command_structured
+    from novi.tools.code_ops import _run_command_structured
 
     out = _run_command_structured("rm -rf something")
     assert out.data["blocked"] is True
@@ -469,7 +469,7 @@ def test_run_command_destructive_remains_gated(workspace):
 
 
 def test_run_command_missing_executable_is_environment(workspace):
-    from cozmo.tools.code_ops import _run_command_structured
+    from novi.tools.code_ops import _run_command_structured
 
     out = _run_command_structured("definitely_not_a_real_exe_9x7 --version")
     assert out.data["exit_code"] is None
@@ -501,13 +501,13 @@ def _make_project(root, test_body):
 
 def _verify_workspace_commands(commands, workdir):
     """Run verification exactly the way the runtime collaborator does."""
-    from cozmo.runtime.tool_executor import ToolExecutor
-    from cozmo.runtime.tool_registry import ToolRegistry
-    from cozmo.tools import TOOL_REGISTRY
-    from cozmo.tools.file_ops import set_allowed_root
+    from novi.runtime.tool_executor import ToolExecutor
+    from novi.runtime.tool_registry import ToolRegistry
+    from novi.tools import TOOL_REGISTRY
+    from novi.tools.file_ops import set_allowed_root
 
     class _Allow:
-        def resolve(self, name, args, agent="cozmo"):
+        def resolve(self, name, args, agent="novi"):
             return "allow"
 
     class _Lessons:

@@ -1,7 +1,7 @@
 """WebUI boot smoke test.
 
-Regression for the ``set_brain`` integration bug: ``cozmo.services.context``
-imports ``set_brain`` from ``cozmo.brain`` (which must export it), then
+Regression for the ``set_brain`` integration bug: ``novi.services.context``
+imports ``set_brain`` from ``novi.brain`` (which must export it), then
 ``WebUIBackend`` drives the full composition root through ``warmup()`` and
 registers the active Brain that tools/WebUI later read back via ``get_brain()``.
 
@@ -13,8 +13,8 @@ import hashlib
 
 import pytest
 
-from cozmo.brain import get_brain
-from cozmo.services.context import CozmoContext
+from novi.brain import get_brain
+from novi.services.context import NoviContext
 
 
 @pytest.fixture
@@ -59,17 +59,17 @@ def _isolate_user_home(tmp_path, monkeypatch):
     # Point the configuration framework at a nonexistent file so
     # get_configuration() builds defaults (ollama embedding backend) instead
     # of the real user config.
-    import cozmo.configuration.bootstrap as boot
+    import novi.configuration.bootstrap as boot
 
-    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".cozmo" / "config.toml")
+    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".novi" / "config.toml")
     monkeypatch.setattr(boot, "_configuration", None)
 
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
     """Stub Ollama embedding calls + model discovery for hermetic boots."""
-    from cozmo.models.service import ModelService
-    from cozmo.services.embedding_providers import OllamaEmbeddingProvider
+    from novi.models.service import ModelService
+    from novi.services.embedding_providers import OllamaEmbeddingProvider
 
     def fake_embed(self, text: str) -> list[float]:
         digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -83,7 +83,7 @@ def _no_network(monkeypatch):
 
 
 def test_webui_boot_creates_brain(cfg):
-    from cozmo.webui import WebUIBackend
+    from novi.webui import WebUIBackend
 
     backend = WebUIBackend(cfg)
     built = backend.build_backend()
@@ -100,7 +100,7 @@ def test_webui_boot_creates_brain(cfg):
 
 
 def test_context_warmup_registers_brain(cfg):
-    ctx = CozmoContext(cfg)
+    ctx = NoviContext(cfg)
     ctx.warmup()
     assert get_brain() is not None
     assert get_brain() is ctx.brain

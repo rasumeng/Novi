@@ -1,4 +1,4 @@
-# Cozmo — Knowledge / Memory / Context / RAG / LangGraph Architecture Contract
+# Novi — Knowledge / Memory / Context / RAG / LangGraph Architecture Contract
 
 **Status:** Locked architecture direction. Reconciles the architecture audit (baseline) with the final decisions. **No production code changed.**
 **Rule for implementers:** each future stage must compile, pass existing tests, preserve behavior unless intentionally changed, add regression tests, and keep backwards compatibility during migration. Do not delete legacy until its replacement is verified.
@@ -25,7 +25,7 @@ Contract rule: WebUI/CLI/Telegram/schedule/queue conversation ids map onto Brain
 
 | Aspect | Contract |
 |---|---|
-| **Owner** | `CozmoRuntime` (session) |
+| **Owner** | `NoviRuntime` (session) |
 | **Persistence** | None (in-memory `self.history` list, capped by `runtime.max_history`; `_compact()` LLM summary in `self._summary`) |
 | **Derived/Canonical** | **Ephemeral execution state.** Never a durable memory |
 | **Read path** | Prompt assembly within the run only |
@@ -45,8 +45,8 @@ Contract rule: WebUI/CLI/Telegram/schedule/queue conversation ids map onto Brain
 
 | Aspect | Contract |
 |---|---|
-| **Owner** | Cozmo knowledge writer (single canonical writer: `Brain.learn` path + knowledge-index writer) |
-| **Persistence** | Files under configured `workspace.knowledge` (currently `D:\Projects\Cozmo\knowledge`, default `~/.cozmo/knowledge`), OKF format: YAML frontmatter (`type`, `title`, `tags`, `timestamp`) + body, WikiLinks (`[[Title]]`, `[[Title|alias]]`), relative paths, tags |
+| **Owner** | Novi knowledge writer (single canonical writer: `Brain.learn` path + knowledge-index writer) |
+| **Persistence** | Files under configured `workspace.knowledge` (currently `D:\Projects\Novi\knowledge`, default `~/.novi/knowledge`), OKF format: YAML frontmatter (`type`, `title`, `tags`, `timestamp`) + body, WikiLinks (`[[Title]]`, `[[Title|alias]]`), relative paths, tags |
 | **Derived/Canonical** | **Canonical human-readable knowledge substrate.** Must preserve enough semantic information to reconstruct durable knowledge. LanceDB index is derived from it |
 | **Read path** | User/Obsidian/Markdown tooling; `KnowledgeIndex` scan; `read_knowledge` tool |
 | **Write path** | `write_knowledge` tool, `Brain.learn` markdown mirror, user edits in place |
@@ -70,18 +70,18 @@ Bidirectional contract with Markdown WikiLinks: WikiLinks ↔ RelationshipStore 
 | Aspect | Contract |
 |---|---|
 | **Owner** | `EmbeddingService`/`RerankerService` facades (provider registry: Ollama default, sentence-transformers alternative) |
-| **Persistence** | Inside LanceDB rows (derived data, stored with canonical items); also raw vectors in `cozmo_memories`/`knowledge_index`/`project_index` tables |
+| **Persistence** | Inside LanceDB rows (derived data, stored with canonical items); also raw vectors in `novi_memories`/`knowledge_index`/`project_index` tables |
 | **Derived/Canonical** | **Always derived.** Never the only durable representation. Must be rebuildable from Markdown + Brain state |
 | **Read path** | `VectorStore.query`, `KnowledgeIndex.search`, `ProjectIndex.query`, `LanceStore` hybrid search |
 | **Write path** | Index writers on ingest/learn/consolidate; `memory/rebuild.py` on embedding-backend change |
 
-Critical invariant (locked): if LanceDB is deleted or embeddings change, Cozmo rebuilds all retrieval indexes from durable Markdown + Brain state.
+Critical invariant (locked): if LanceDB is deleted or embeddings change, Novi rebuilds all retrieval indexes from durable Markdown + Brain state.
 
 ### A.7 Project files
 
 | Aspect | Contract |
 |---|---|
-| **Owner** | `ProjectIndex` (per-project LanceDB index, `~/.cozmo/project_index/<project-sha1>/`, table `project_index`) |
+| **Owner** | `ProjectIndex` (per-project LanceDB index, `~/.novi/project_index/<project-sha1>/`, table `project_index`) |
 | **Persistence** | Derived index only (embeddings of parsed file content). Files themselves live in the user's project tree — never copied into the index |
 | **Derived/Canonical** | **Derived.** Project files are the canonical content |
 | **Read path** | `ProjectRetrievalSource` (retrieval-time), `ProjectIndex.query` |
@@ -93,7 +93,7 @@ Critical invariant (locked): if LanceDB is deleted or embeddings change, Cozmo r
 
 | Aspect | Contract |
 |---|---|
-| **Owner** | `JobStore`/`JobManager` (`~/.cozmo/jobs/*.json`), `TaskStore` (orchestrator), `TimelineStore` (JSONL `~/.cozmo/timeline/timeline.jsonl`) |
+| **Owner** | `JobStore`/`JobManager` (`~/.novi/jobs/*.json`), `TaskStore` (orchestrator), `TimelineStore` (JSONL `~/.novi/timeline/timeline.jsonl`) |
 | **Persistence** | JSON checkpoints; SQLite/task JSON; bounded JSONL timeline |
 | **Derived/Canonical** | **Derived/canonical execution records.** Not knowledge; resumability + observability |
 | **Read path** | Continuation resolver, timeline REST, job UI |
@@ -104,7 +104,7 @@ Critical invariant (locked): if LanceDB is deleted or embeddings change, Cozmo r
 | Aspect | Contract |
 |---|---|
 | **Owner** | WebUI server layer (presentation) |
-| **Persistence** | `~/.cozmo/chats/<conv_id>.md` + `index.json` (Markdown, UI-owned) |
+| **Persistence** | `~/.novi/chats/<conv_id>.md` + `index.json` (Markdown, UI-owned) |
 | **Derived/Canonical** | **View/export/rendering layer — NOT a competing memory store.** Must not hold knowledge the Brain does not hold |
 | **Read path** | `/api/conversations`, chat tab, `import_from_chat`, timeline deep-links |
 | **Write path** | `saveConversation` → `PUT /api/conversations` → `.md` + `index.json` |
@@ -144,7 +144,7 @@ Explicit behavior for each state-change event.
 
 ### B.5 Embedding model changes
 1. Config `embedding.backend`/`embedding.model`/`dimension` changes.
-2. `memory/rebuild.py` drops/rebuilds **all derived vector stores**: `cozmo_memories`, `knowledge_index`, `knowledge_items`, `project_index`.
+2. `memory/rebuild.py` drops/rebuilds **all derived vector stores**: `novi_memories`, `knowledge_index`, `knowledge_items`, `project_index`.
 3. Re-embed from durable sources: Markdown (knowledge files), Brain state (knowledge_items rows carry their content text), project files.
 4. Non-vector durable state (SQLite conversations/relationships/scenarios, markdown) is untouched.
 5. Invariant holds: no durable knowledge depends on the old vectors.
@@ -200,7 +200,7 @@ Imported ──────┘
        │
        ▼
    Embeddings / Indexes   (derived, rebuildable)
-     LanceDB: knowledge_items · knowledge_index · project_index · cozmo_memories
+     LanceDB: knowledge_items · knowledge_index · project_index · novi_memories
        │
        ▼
    Retrieval   (LayeredRetrievalResolver + RetrievalExecutor + ResultMerger)
@@ -277,7 +277,7 @@ END
 | Embeddings | `EmbeddingService`/`RerankerService` | — |
 | Markdown ↔ Brain sync | canonical knowledge writer | — |
 
-**Do not rewrite working components merely to make them "LangChain/LangGraph-native."** Use LangGraph where it provides real architectural value (workflow orchestration), and keep Cozmo's internal interfaces Cozmo's own. No LangChain-specific memory abstractions.
+**Do not rewrite working components merely to make them "LangChain/LangGraph-native."** Use LangGraph where it provides real architectural value (workflow orchestration), and keep Novi's internal interfaces Novi's own. No LangChain-specific memory abstractions.
 
 ---
 
@@ -332,7 +332,7 @@ Ordered dependency graph (with reasons). The locked sequence is confirmed agains
 Deliberately NOT doing:
 
 1. **No dedicated graph database** — RelationshipStore + WikiLinks are sufficient to establish the graph model.
-2. **No Obsidian runtime dependency** — Cozmo creates an Obsidian-compatible knowledge base (Markdown, YAML frontmatter, relative paths, WikiLinks, tags), not an Obsidian-dependent application.
+2. **No Obsidian runtime dependency** — Novi creates an Obsidian-compatible knowledge base (Markdown, YAML frontmatter, relative paths, WikiLinks, tags), not an Obsidian-dependent application.
 3. **No vendor-specific memory architecture** — no LangChain memory abstractions, no cloud memory, local-first.
 4. **No wholesale LangChain rewrite** — keep LangChain narrowly (ChatOllama, ChatOpenAI, message types, StructuredTool, tool binding, model interop).
 5. **No model fallback** — strict `ModelService.resolve`, `ModelUnavailableError` propagation, no silent substitution. Locked hard boundary.
@@ -348,5 +348,5 @@ Deliberately NOT doing:
 
 - **Already aligned with decisions:** Brain layered storage + append-only supersession + provenance edges (§3, §11 sound); `LayeredRetrievalResolver` sufficiency gate (§6 preserved); strict model selection (§10 locked); `KnowledgeIndex` chunking model for `ProjectIndex` (§7); EventBus → timeline/overview bridge (§A.8).
 - **Requires work before LangGraph:** unified conversation store (A.1/A.9), markdown mirror + single writer (A.4/B.1), WikiLinks (A.5/§3), unified retrieval merge (§6), project chunking (A.7), evidence wiring (§7).
-- **Provenance classes (§5 of decisions) map onto existing primitives:** `source_kind` (explicit/extraction; extend to user-authored/observed/imported/inferred/generated/external), `confidence`, `status` (candidate/corroborated/verified/superseded), `sources` (provenance), `importance`. A user-stated fact must not share trust semantics with a Cozmo inference — encoded via source_kind + confidence + status today; extended as needed during step 3.
+- **Provenance classes (§5 of decisions) map onto existing primitives:** `source_kind` (explicit/extraction; extend to user-authored/observed/imported/inferred/generated/external), `confidence`, `status` (candidate/corroborated/verified/superseded), `sources` (provenance), `importance`. A user-stated fact must not share trust semantics with a Novi inference — encoded via source_kind + confidence + status today; extended as needed during step 3.
 - **Tests to add with each stage:** markdown↔brain reconciliation, rebuild-from-durable after LanceDB deletion, wikilink resolution + dangling tolerance, conversation canonical identity join, unified merge parity with legacy ranking, LangGraph dual-path parity, legacy-removal architecture tests (no storage imports above `brain/storage/`, no flat write path, no `brain=None` fallback).

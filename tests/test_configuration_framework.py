@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from cozmo.configuration.bootstrap import DEFAULT_CONFIG
-from cozmo.configuration.manager import Configuration, ValidationError
-from cozmo.configuration.registry import (
+from novi.configuration.bootstrap import DEFAULT_CONFIG
+from novi.configuration.manager import Configuration, ValidationError
+from novi.configuration.registry import (
     ConfigRegistry,
     DuplicateSettingError,
     UnknownSettingError,
 )
-from cozmo.configuration.schema import Category, Setting, SettingType
-from cozmo.configuration.migration import migrate
+from novi.configuration.schema import Category, Setting, SettingType
+from novi.configuration.migration import migrate
 
 
 def mk(id, owner="runtime", typ=None, category=Category.DEVELOPER,

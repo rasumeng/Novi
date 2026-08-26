@@ -7,8 +7,8 @@ through `Brain.observe()` when a brain is present. The legacy
 `_remember` only appends to the in-memory history.
 """
 
-from cozmo.brain.types import Turn
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.brain.types import Turn
+from novi.runtime.runtime import NoviRuntime
 
 
 class RecordingBrain:
@@ -31,7 +31,7 @@ class StubMemory:
 
 
 def make_runtime(memory, brain):
-    rt = object.__new__(CozmoRuntime)
+    rt = object.__new__(NoviRuntime)
     rt.history = []
     rt.max_history = 10
     rt._summary = ""

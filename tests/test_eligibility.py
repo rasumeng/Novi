@@ -8,20 +8,20 @@ matching, UNKNOWN propagation, and separation of concerns.
 
 import pytest
 
-from cozmo.configuration.catalog import ModelFact
-from cozmo.configuration.discovery import ModelStatus
-from cozmo.configuration.eligibility import (
+from novi.configuration.catalog import ModelFact
+from novi.configuration.discovery import ModelStatus
+from novi.configuration.eligibility import (
     CapabilityMatch,
     HardwareFit,
     evaluate_eligibility,
 )
-from cozmo.configuration.hardware import (
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
     HardwareProfile,
 )
-from cozmo.configuration.qualification import Qualification
+from novi.configuration.qualification import Qualification
 
 
 # ── Hardware fixtures ─────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ def test_evaluate_installed_models():
 
 
 def test_recommendation_engine_no_best_for_hardware_when_unknown():
-    from cozmo.configuration.catalog import ModelRecommendationEngine
+    from novi.configuration.catalog import ModelRecommendationEngine
     engine = ModelRecommendationEngine(hardware=HW_KNOWN)
     rec = engine.for_model("gemma4:e4b", "installed")
     assert "Best for your hardware" not in rec["reasons"]

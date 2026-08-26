@@ -24,22 +24,22 @@ import inspect
 
 import pytest
 
-from cozmo.brain import Brain, QueryContext
-from cozmo.brain.layers.knowledge import KnowledgeLayer
-from cozmo.brain.layers.scenarios import ScenarioLayer
-from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
-from cozmo.brain.storage.relationship_store import RelationshipStore
-from cozmo.brain.storage.scenario_store import ScenarioStore
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.brain.types import (
+from novi.brain import Brain, QueryContext
+from novi.brain.layers.knowledge import KnowledgeLayer
+from novi.brain.layers.scenarios import ScenarioLayer
+from novi.brain.reasoning.resolver import LayeredRetrievalResolver
+from novi.brain.storage.relationship_store import RelationshipStore
+from novi.brain.storage.scenario_store import ScenarioStore
+from novi.brain.storage.vector_store import VectorStore
+from novi.brain.types import (
     EdgeKind,
     KnowledgeForm,
     KnowledgeItem,
     KnowledgeStatus,
     Relationship,
 )
-from cozmo.memory.knowledge_index import KnowledgeIndex
-from cozmo.services.embedding import EmbeddingService
+from novi.memory.knowledge_index import KnowledgeIndex
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):

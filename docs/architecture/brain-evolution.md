@@ -1,8 +1,8 @@
-# The Evolution of the Cozmo Brain — A Technical History
+# The Evolution of the Novi Brain — A Technical History
 
 **Status:** Durable reference. Written at Brain V1 finalization (2026-08-05).
 **Purpose:** Explain **why** every major architectural decision was made, so a new
-contributor understands the reasoning behind the current `cozmo/brain/` code —
+contributor understands the reasoning behind the current `novi/brain/` code —
 not just what it does today.
 **Reading order companion:** `docs/architecture/brain-architecture.md` (design),
 `docs/architecture/phaseF-design.md` (cognitive layer design).
@@ -14,9 +14,9 @@ led from a flat memory table to a layered, append-only cognitive foundation.
 
 ## 1. The Beginning: Legacy `MemoryManager`
 
-The original Cozmo (v0.1) used ChromaDB-backed memory with auto-summarization.
+The original Novi (v0.1) used ChromaDB-backed memory with auto-summarization.
 By the time the retrieval work reached Phase 9, memory lived behind one class,
-`MemoryManager` (`cozmo/memory/manager.py`), on a single LanceDB table.
+`MemoryManager` (`novi/memory/manager.py`), on a single LanceDB table.
 
 ### 1.1 The shape
 
@@ -68,12 +68,12 @@ This migration predates the Brain and is the substrate the Brain is built on.
 - The move to LanceDB gave **typed schemas**, **SQL predicate filtering**,
   **column-level filters** (rather than JSON-substring matching), and a cleaner
   upgrade path to hybrid (vector + scalar) queries.
-- Remnant artifacts (`chroma.sqlite3` in `.cozmo/project_index`) lingered and
+- Remnant artifacts (`chroma.sqlite3` in `.novi/project_index`) lingered and
   were flagged for cleanup in the audits.
 
 **Lesson carried forward:** storage must support *structured filtering*, not
 string matching. That insight — "metadata is not a database" — is the direct
-ancestor of the typed-column design in `cozmo/brain/storage/vector_store.py`.
+ancestor of the typed-column design in `novi/brain/storage/vector_store.py`.
 
 ---
 
@@ -89,7 +89,7 @@ Metadata was a `json.dumps` string. Structured queries used fragile SQL like
 `metadata LIKE '%"type": "preference"%'` — slow, order-dependent, and easy to
 break.
 
-Brain Phase D (`cozmo/brain/storage/vector_store.py`) replaced this with **typed
+Brain Phase D (`novi/brain/storage/vector_store.py`) replaced this with **typed
 top-level columns**: `knowledge_id`, `scenario_id`, `source_kind`, `timestamp`,
 `status`, `confidence`, `tags`, `last_seen_at`. Filters became real predicates;
 provenance-constraining columns (scenario, conversation) became first-class.
@@ -103,7 +103,7 @@ provenance-constraining columns (scenario, conversation) became first-class.
 3. **Readability.** A row now *says* what it is; the schema is the documentation.
 
 The migration was a one-time, offline re-embed into the new schema
-(`cozmo/brain/storage/migrations.py`) — deliberately a manual utility rather than
+(`novi/brain/storage/migrations.py`) — deliberately a manual utility rather than
 a live adapter, because runtime migration of an internal schema is a deployment
 problem, not a runtime feature.
 
@@ -114,7 +114,7 @@ problem, not a runtime feature.
 The most important conceptual turn happened in `docs/architecture/brain-architecture.md`:
 
 > This document deliberately avoids the word *memory*. The design question is
-> not "where do we store memories?" but **"how does Cozmo organize what it
+> not "where do we store memories?" but **"how does Novi organize what it
 > knows?"**
 
 That single reframing moved the architecture from **storage-centric** to
@@ -130,7 +130,7 @@ That single reframing moved the architecture from **storage-centric** to
 - Raw conversations are never the primary retrieval mechanism again.
 
 The tension this resolves: a "memory model" wants a storage shape; a "knowledge
-model" wants a meaning shape. Cozmo chose meaning.
+model" wants a meaning shape. Novi chose meaning.
 
 ---
 
@@ -139,14 +139,14 @@ model" wants a meaning shape. Cozmo chose meaning.
 The layered design draws on the family of "agent memory" architectures
 popularized by Tencent's **Agent Memory** research (a.k.a. COG-DB / the
 hybrid-memory line of work — conversational + knowledge + relationship +
-reflection layers). Below is an explicit ledger of what Cozmo took and what it
+reflection layers). Below is an explicit ledger of what Novi took and what it
 deliberately changed.
 
 ### 5.1 Adopted
 
-| Concept | How Cozmo embodies it |
+| Concept | How Novi embodies it |
 |---|---|
-| **Layered memory** (Conversation / Knowledge / Scenario / Reflection) | The five-layer `cozmo/brain/` model plus a bounded Reflection coordinator (`reasoning/reflection.py`). |
+| **Layered memory** (Conversation / Knowledge / Scenario / Reflection) | The five-layer `novi/brain/` model plus a bounded Reflection coordinator (`reasoning/reflection.py`). |
 | **Reflection as a real cognitive pass** | `Brain.reflect()` — a bounded, trigger-gated consolidation + promotion pass, not a storage artifact. |
 | **Knowledge, not raw transcripts, as the durable unit** | Extraction turns conversations into atomic `KnowledgeItem`s (Phase C); the conversation layer is the *source*, not the primary store. |
 | **Consolidation / deduplication across the corpus** | `KnowledgeLayer.store_extracted` corroborates repeats instead of inserting siblings (Phase F). |
@@ -156,21 +156,21 @@ deliberately changed.
 
 ### 5.2 Adopted but changed
 
-| Tencent idea | Cozmo change | Why |
+| Tencent idea | Novi change | Why |
 |---|---|---|
-| **Full property-graph / graph reasoning** | **Bounded edges only** (`derived_from`, `observed_in`, `supersedes`, `conflicts_with`, `references`, `contains`) | General graph traversal is overkill and adds a shop-worth of complexity for the single task Cozmo needs: *provenance* and *supersession*. Non-goal in `brain-architecture.md` §"Non-goals". |
+| **Full property-graph / graph reasoning** | **Bounded edges only** (`derived_from`, `observed_in`, `supersedes`, `conflicts_with`, `references`, `contains`) | General graph traversal is overkill and adds a shop-worth of complexity for the single task Novi needs: *provenance* and *supersession*. Non-goal in `brain-architecture.md` §"Non-goals". |
 | **Events as an event-sourcing substrate** | **Notification model** — events are best-effort post-persistence broadcasts, never the source of truth | A dead consumer must never break a write. State is written transactionally at the source; events *notify*. |
-| **Cloud-based / shared knowledge** | **Local-first only** (SQLite + LanceDB + local models) | Cozmo is a privacy-first local platform. Tencent's design assumed a server. |
+| **Cloud-based / shared knowledge** | **Local-first only** (SQLite + LanceDB + local models) | Novi is a privacy-first local platform. Tencent's design assumed a server. |
 
 ### 5.3 Rejected outright
 
 | Tencent idea | Why rejected |
 |---|---|
-| **AGI-adjacent autonomy** | Cozmo explicitly declares "No AGI": no self-improvement loops, no meta-learning, no autonomous goal-setting, no background daemon. In the Phase F constraints. |
-| **Learned / adaptive relevance ranking** | Cozmo uses a static lexicographic tiering function. A learned ranker is deferred as future research. |
+| **AGI-adjacent autonomy** | Novi explicitly declares "No AGI": no self-improvement loops, no meta-learning, no autonomous goal-setting, no background daemon. In the Phase F constraints. |
+| **Learned / adaptive relevance ranking** | Novi uses a static lexicographic tiering function. A learned ranker is deferred as future research. |
 | **Recency-as-primary-importance** | Rejected explicitly — recency is a *tiebreaker*, never a co-equal multiplier (Phase F §5). |
 
-The thesis: Cozmo adopted Tencent's **layered structure and the idea that a
+The thesis: Novi adopted Tencent's **layered structure and the idea that a
 memory must reflect** but rejected the **graph generality, event-sourcing
 strictness, and autonomy** in favor of a bounded, local, deterministic, append-only
 design.
@@ -208,7 +208,7 @@ design.
 - **Relationship Layer** — bounded typed edges (`relationship_store`). Provenance
   (`derived_from`, `observed_in`) and change (`supersedes`, `conflicts_with`).
 - **Identity Layer** — not a store; a *derived* accumulation of verified,
-  identity-tagged knowledge (`preference` / `goal` / `skill`). "What Cozmo knows
+  identity-tagged knowledge (`preference` / `goal` / `skill`). "What Novi knows
   about the user."
 
 ### 6.2 The reasoning tier
@@ -310,7 +310,7 @@ Hence no daemon, no unbounded scan, no background "thinking".
 
 ### 8.4 Personal-context projection
 
-`Brain.project_context()` / `projection.project()` answers "what does Cozmo know
+`Brain.project_context()` / `projection.project()` answers "what does Novi know
 about me": a **derived, read-only** grouping of identity-tagged items by category
 (preference/goal/skill/project/event/relationship), ranked by the §tiering
 hierarchy. It is never cached, never stored, and **never invents an attribute** —
@@ -403,7 +403,7 @@ Storage (implementation detail)
 - **Bounded reasoning**: fixed budget, deterministic triggers, serialized through
   the Brain.
 
-The Brain V1 is the durable cognitive foundation Cozmo needed: it stores raw
+The Brain V1 is the durable cognitive foundation Novi needed: it stores raw
 experience, extracts durable knowledge, keeps a full history, reasons about what
 matters, and lets a user audit and correct it — while staying local,
 deterministic, and genuinely maintainable.

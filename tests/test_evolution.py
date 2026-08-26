@@ -9,9 +9,9 @@ the "emit after durable write" invariant for ``knowledge.promoted``.
 
 import pytest
 
-from cozmo.brain.brain import Brain
-from cozmo.brain.events import KNOWLEDGE_PROMOTED
-from cozmo.brain.types import (
+from novi.brain.brain import Brain
+from novi.brain.events import KNOWLEDGE_PROMOTED
+from novi.brain.types import (
     EdgeKind,
     KnowledgeForm,
     KnowledgeItem,

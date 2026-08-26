@@ -22,11 +22,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from cozmo.jobs.job import Checkpoint, Job, JobStatus
-from cozmo.jobs.manager import JobManager
-from cozmo.orchestrator import Orchestrator
-from cozmo.orchestrator.intent import IntentDetector
-from cozmo.orchestrator.task_types import (
+from novi.jobs.job import Checkpoint, Job, JobStatus
+from novi.jobs.manager import JobManager
+from novi.orchestrator import Orchestrator
+from novi.orchestrator.intent import IntentDetector
+from novi.orchestrator.task_types import (
     ExecutionPlan,
     ExecutionStrategy,
     Goal,
@@ -34,10 +34,10 @@ from cozmo.orchestrator.task_types import (
     Task,
     TaskStatus,
 )
-from cozmo.orchestrator.task_store import TaskStore
-from cozmo.planner.models import Plan, PlanStep
-from cozmo.services.continuation import ContinuationService
-from cozmo.services.job_lifecycle import JobLifecycle
+from novi.orchestrator.task_store import TaskStore
+from novi.planner.models import Plan, PlanStep
+from novi.services.continuation import ContinuationService
+from novi.services.job_lifecycle import JobLifecycle
 
 
 # ---- harness doubles (mirror test_execution_coordinator) ---------------------
@@ -128,7 +128,7 @@ class _HarnessRuntime:
 
 class _FakeCtx:
     """Composition-root double: mirrors what ``build_application_execution``
-    needs from CozmoContext and subscribes the same projections production
+    needs from NoviContext and subscribes the same projections production
     does (TaskLifecycleProjection + optional JobLifecycle)."""
 
     def __init__(self, task_store, job_manager, *, job_lifecycle=None,
@@ -143,7 +143,7 @@ class _FakeCtx:
             lambda bus: _HarnessRuntime(bus=bus))
 
     def create_runtime(self, **kw):
-        from cozmo.orchestrator.projection import TaskLifecycleProjection
+        from novi.orchestrator.projection import TaskLifecycleProjection
 
         bus = kw.get("event_bus")
         rt = self._runtime_factory(bus)
@@ -164,9 +164,9 @@ def task_store(tmp_path):
 
 @pytest.fixture
 def job_store(tmp_path, monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
-    from cozmo.jobs.persistence import JobStore
+    from novi.jobs.persistence import JobStore
     return JobStore()
 
 
@@ -223,7 +223,7 @@ def _wait_until(predicate, timeout=10.0):
 # ---- 5E-2A CLI -> Coordinator ------------------------------------------------
 
 def test_cli_session_routes_fresh_run_through_coordinator(task_store, job_manager):
-    from cozmo.cli import CliSessionAdapter
+    from novi.cli import CliSessionAdapter
 
     ctx = _FakeCtx(task_store, job_manager)
     session = CliSessionAdapter(ctx, session_id="abc")
@@ -234,7 +234,7 @@ def test_cli_session_routes_fresh_run_through_coordinator(task_store, job_manage
 
 
 def test_cli_session_continuation_reopens_new_attempt(task_store, job_store):
-    from cozmo.cli import CliSessionAdapter
+    from novi.cli import CliSessionAdapter
 
     _seed_continuation(task_store, job_store)
     jm = JobManager(store=job_store)
@@ -259,7 +259,7 @@ def test_cli_session_continuation_reopens_new_attempt(task_store, job_store):
 
 
 def test_cli_render_surfaces_tokens_errors_and_candidates():
-    from cozmo.cli import _render_run
+    from novi.cli import _render_run
 
     class _TokenCoord:
         def run_stream(self, runtime, text, conversation_id=None):
@@ -289,7 +289,7 @@ def test_cli_render_surfaces_tokens_errors_and_candidates():
 # ---- 5E-2B Telegram -> Coordinator -------------------------------------------
 
 def test_telegram_sync_routes_fresh_run_through_coordinator(task_store, job_manager):
-    from cozmo.services.telegram import _handle_sync
+    from novi.services.telegram import _handle_sync
 
     ctx = _FakeCtx(task_store, job_manager)
     out = _handle_sync(ctx, "12345", "build the widget")
@@ -298,7 +298,7 @@ def test_telegram_sync_routes_fresh_run_through_coordinator(task_store, job_mana
 
 
 def test_telegram_handler_runs_off_event_loop(task_store, job_manager):
-    from cozmo.services.telegram import build_telegram_handler
+    from novi.services.telegram import build_telegram_handler
 
     ctx = _FakeCtx(task_store, job_manager)
     handler = build_telegram_handler(ctx)
@@ -311,7 +311,7 @@ def test_telegram_handler_runs_off_event_loop(task_store, job_manager):
 
 
 def test_telegram_continuation_uses_coordinator_path(task_store, job_store):
-    from cozmo.services.telegram import _handle_sync
+    from novi.services.telegram import _handle_sync
 
     _seed_continuation(task_store, job_store)
     jm = JobManager(store=job_store)
@@ -403,8 +403,8 @@ def _installed_fake_tg_sdk(monkeypatch):
 
 
 def _tg_bot(ctx, monkeypatch, *, allowed=()):
-    from cozmo.services.telegram import build_telegram_handler
-    from cozmo.telegram_bot import TelegramBot
+    from novi.services.telegram import build_telegram_handler
+    from novi.telegram_bot import TelegramBot
 
     sdk = _installed_fake_tg_sdk(monkeypatch)
     handler = build_telegram_handler(ctx)
@@ -413,7 +413,7 @@ def _tg_bot(ctx, monkeypatch, *, allowed=()):
 
 def test_telegram_allowed_chat_executes_full_chain(task_store, job_store, monkeypatch):
     """E-3.2: an allowed chat flows bot → coordinator → Task/Plan/Job/History."""
-    from cozmo.jobs.manager import JobManager
+    from novi.jobs.manager import JobManager
 
     jm = JobManager(store=job_store)
     ctx = _FakeCtx(task_store, jm)
@@ -429,7 +429,7 @@ def test_telegram_allowed_chat_executes_full_chain(task_store, job_store, monkey
 def test_telegram_denied_chat_rejected_without_execution(
         task_store, job_store, monkeypatch):
     """E-3.2: a non-allowed chat is denied before any Task/Job is created."""
-    from cozmo.jobs.manager import JobManager
+    from novi.jobs.manager import JobManager
 
     jm = JobManager(store=job_store)
     ctx = _FakeCtx(task_store, jm)
@@ -447,9 +447,9 @@ def test_telegram_denied_chat_rejected_without_execution(
 
 def test_task_queue_worker_routes_through_coordinator(task_store, job_manager,
                                                       tmp_path, monkeypatch):
-    import cozmo.task_queue as tq
-    from cozmo.services.background import run_background
-    from cozmo.task_queue import TaskQueue, TaskStatus
+    import novi.task_queue as tq
+    from novi.services.background import run_background
+    from novi.task_queue import TaskQueue, TaskStatus
 
     monkeypatch.setattr(tq, "TASKS_DIR", tmp_path / "tasks")
     ctx = _FakeCtx(task_store, job_manager)
@@ -458,7 +458,7 @@ def test_task_queue_worker_routes_through_coordinator(task_store, job_manager,
     def runner(task):
         result = run_background(ctx, task.prompt,
                                 conversation_id=f"queue:{task.id}")
-        task.cozmo_task_id = result.task_id
+        task.novi_task_id = result.task_id
         return result.answer
 
     task = queue.add("queue it", "build the widget")
@@ -467,16 +467,16 @@ def test_task_queue_worker_routes_through_coordinator(task_store, job_manager,
 
     assert task.status is TaskStatus.COMPLETED
     assert "build it" in task.result
-    assert task.cozmo_task_id
-    resolved = task_store.get(task.cozmo_task_id)
+    assert task.novi_task_id
+    resolved = task_store.get(task.novi_task_id)
     assert resolved is not None
     assert resolved.execution_history.count() == 1
     _assert_fresh_invariants(task_store, job_manager, f"queue:{task.id}")
 
 
 def test_task_queue_worker_failure_marks_failed(tmp_path, monkeypatch):
-    import cozmo.task_queue as tq
-    from cozmo.task_queue import TaskQueue, TaskStatus
+    import novi.task_queue as tq
+    from novi.task_queue import TaskQueue, TaskStatus
 
     monkeypatch.setattr(tq, "TASKS_DIR", tmp_path / "tasks")
     queue = TaskQueue()
@@ -494,7 +494,7 @@ def test_task_queue_worker_failure_marks_failed(tmp_path, monkeypatch):
 # ---- 5E-2D Background run -> Coordinator -------------------------------------
 
 def test_background_run_creates_full_chain(task_store, job_store):
-    from cozmo.services.background import run_background
+    from novi.services.background import run_background
 
     jm = JobManager(store=job_store)
     lifecycle = JobLifecycle(jm, task_store=task_store)
@@ -517,7 +517,7 @@ def test_background_run_creates_full_chain(task_store, job_store):
 
 
 def test_background_run_stop_check_finalises_job(task_store, job_manager):
-    from cozmo.services.background import run_background
+    from novi.services.background import run_background
 
     ctx = _FakeCtx(task_store, job_manager)
     result = run_background(ctx, "build the widget", conversation_id="bg:stop",
@@ -530,7 +530,7 @@ def test_background_run_stop_check_finalises_job(task_store, job_manager):
 
 
 def test_background_on_event_streams_items(task_store, job_manager):
-    from cozmo.services.background import run_background
+    from novi.services.background import run_background
 
     ctx = _FakeCtx(task_store, job_manager)
     kinds = []
@@ -543,8 +543,8 @@ def test_background_on_event_streams_items(task_store, job_manager):
 
 def test_background_job_metadata_identifies_source(task_store, job_store):
     """E-3.4: background attempts are tagged with their source/run metadata."""
-    from cozmo.jobs.manager import JobManager
-    from cozmo.services.background import run_background
+    from novi.jobs.manager import JobManager
+    from novi.services.background import run_background
 
     jm = JobManager(store=job_store)
     ctx = _FakeCtx(task_store, jm)
@@ -562,9 +562,9 @@ def test_background_job_metadata_identifies_source(task_store, job_store):
 
 def test_scheduler_trigger_reaches_coordinator_chain(task_store, job_manager,
                                                      tmp_path, monkeypatch):
-    import cozmo.scheduler as sched_mod
-    from cozmo.scheduler import ScheduledRun
-    from cozmo.services.background import run_background
+    import novi.scheduler as sched_mod
+    from novi.scheduler import ScheduledRun
+    from novi.services.background import run_background
 
     monkeypatch.setattr(sched_mod, "SCHEDULES_PATH", tmp_path / "schedules.json")
     ctx = _FakeCtx(task_store, job_manager)
@@ -581,10 +581,10 @@ def test_scheduler_trigger_reaches_coordinator_chain(task_store, job_manager,
 def test_scheduler_job_metadata_identifies_schedule(task_store, job_store,
                                                      tmp_path, monkeypatch):
     """E-3.5: scheduled attempts carry schedule identity; no fake task id."""
-    import cozmo.scheduler as sched_mod
-    from cozmo.jobs.manager import JobManager
-    from cozmo.scheduler import ScheduledRun
-    from cozmo.services.background import run_background
+    import novi.scheduler as sched_mod
+    from novi.jobs.manager import JobManager
+    from novi.scheduler import ScheduledRun
+    from novi.services.background import run_background
 
     monkeypatch.setattr(sched_mod, "SCHEDULES_PATH", tmp_path / "schedules.json")
     jm = JobManager(store=job_store)
@@ -607,7 +607,7 @@ def test_scheduler_job_metadata_identifies_schedule(task_store, job_store,
 
 
 def test_context_scheduled_trigger_routes_to_background(monkeypatch):
-    from cozmo.services.context import CozmoContext
+    from novi.services.context import NoviContext
 
     recorded = {}
 
@@ -616,8 +616,8 @@ def test_context_scheduled_trigger_routes_to_background(monkeypatch):
         recorded["kw"] = kw
         return SimpleNamespace(task_id="t1", job_id="j1")
 
-    monkeypatch.setattr("cozmo.services.background.run_background", fake_run_background)
-    ctx = CozmoContext(cfg={"ollama": {"url": "http://x"}})
+    monkeypatch.setattr("novi.services.background.run_background", fake_run_background)
+    ctx = NoviContext(cfg={"ollama": {"url": "http://x"}})
     ctx._scheduled_trigger(SimpleNamespace(id="s9", goal="g"))
     assert recorded["goal"] == "g"
     assert recorded["kw"]["conversation_id"] == "schedule:s9"
@@ -640,26 +640,26 @@ def test_each_surface_creates_exactly_one_job_and_history(surface, task_store,
 
     if surface == "webui":
         # WebUI Session.start_run IS this exact coordinator seam (reference).
-        from cozmo.services.execution import build_application_execution
+        from novi.services.execution import build_application_execution
         runtime, coordinator, _ = build_application_execution(ctx)
         conv = "webui:reference"
         list(coordinator.run_stream(runtime, text, conversation_id=conv))
     elif surface == "cli":
-        from cozmo.cli import CliSessionAdapter
+        from novi.cli import CliSessionAdapter
         conv = "cli:px"
         CliSessionAdapter(ctx, session_id="px").run(text)
     elif surface == "telegram":
-        from cozmo.services.telegram import _handle_sync
+        from novi.services.telegram import _handle_sync
         conv = "telegram:9"
         _handle_sync(ctx, "9", text)
     elif surface == "background":
-        from cozmo.services.background import run_background
+        from novi.services.background import run_background
         conv = "bg:z"
         run_background(ctx, text, conversation_id=conv)
     elif surface == "taskqueue":
-        import cozmo.task_queue as tq
-        from cozmo.services.background import run_background
-        from cozmo.task_queue import TaskQueue, TaskStatus
+        import novi.task_queue as tq
+        from novi.services.background import run_background
+        from novi.task_queue import TaskQueue, TaskStatus
 
         monkeypatch.setattr(tq, "TASKS_DIR", tmp_path / "tasks")
         queue = TaskQueue()
@@ -667,7 +667,7 @@ def test_each_surface_creates_exactly_one_job_and_history(surface, task_store,
         def runner(task):
             result = run_background(ctx, task.prompt,
                                     conversation_id=f"queue:{task.id}")
-            task.cozmo_task_id = result.task_id
+            task.novi_task_id = result.task_id
             return result.answer
 
         task = queue.add("d", text)
@@ -675,9 +675,9 @@ def test_each_surface_creates_exactly_one_job_and_history(surface, task_store,
         _wait_until(lambda: task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED))
         conv = f"queue:{task.id}"
     else:
-        import cozmo.scheduler as sched_mod
-        from cozmo.scheduler import ScheduledRun
-        from cozmo.services.background import run_background
+        import novi.scheduler as sched_mod
+        from novi.scheduler import ScheduledRun
+        from novi.services.background import run_background
 
         monkeypatch.setattr(sched_mod, "SCHEDULES_PATH", tmp_path / "schedules.json")
         sched = sched_mod.Scheduler()
@@ -692,7 +692,7 @@ def test_each_surface_creates_exactly_one_job_and_history(surface, task_store,
 
 
 def test_conversation_identity_isolation(task_store, job_manager):
-    from cozmo.services.telegram import _handle_sync
+    from novi.services.telegram import _handle_sync
 
     ctx = _FakeCtx(task_store, job_manager)
     _handle_sync(ctx, "111", "one")
@@ -707,10 +707,10 @@ def test_conversation_identity_isolation(task_store, job_manager):
 
 def test_no_orphan_fake_task_jobs_across_surfaces(task_store, job_store,
                                                   tmp_path, monkeypatch):
-    import cozmo.task_queue as tq
-    from cozmo.services.background import run_background
-    from cozmo.services.telegram import _handle_sync
-    from cozmo.task_queue import TaskQueue, TaskStatus
+    import novi.task_queue as tq
+    from novi.services.background import run_background
+    from novi.services.telegram import _handle_sync
+    from novi.task_queue import TaskQueue, TaskStatus
 
     jm = JobManager(store=job_store)
     lifecycle = JobLifecycle(jm, task_store=task_store)
@@ -725,7 +725,7 @@ def test_no_orphan_fake_task_jobs_across_surfaces(task_store, job_store,
     def runner(task):
         result = run_background(ctx, task.prompt,
                                 conversation_id=f"queue:{task.id}")
-        task.cozmo_task_id = result.task_id
+        task.novi_task_id = result.task_id
         return result.answer
 
     task = queue.add("d", "queue task")
@@ -742,9 +742,9 @@ def test_surface_adapters_stay_thin_adapters():
     import ast
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent / "cozmo"
-    forbidden = ("cozmo.runtime", "cozmo.jobs", "cozmo.orchestrator",
-                 "ExecutionCoordinator", "CozmoRuntime")
+    root = Path(__file__).resolve().parent.parent / "novi"
+    forbidden = ("novi.runtime", "novi.jobs", "novi.orchestrator",
+                 "ExecutionCoordinator", "NoviRuntime")
     for rel in ("telegram_bot.py", "task_queue.py"):
         src = (root / rel).read_text("utf-8")
         tree = ast.parse(src)
@@ -762,15 +762,15 @@ def test_surface_adapters_stay_thin_adapters():
 def test_scheduler_has_single_construction_point():
     """Phase 5E audit guard: exactly one scheduler instance per application.
 
-    The application scheduler is the ``CozmoContext`` singleton
-    (``cozmo/services/context.py``). The WebUI reuses that instance via
+    The application scheduler is the ``NoviContext`` singleton
+    (``novi/services/context.py``). The WebUI reuses that instance via
     ``ctx.scheduler`` — never a second polling Scheduler — so scheduled
     triggers all dispatch through the same coordinator path.
     """
     import ast
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent / "cozmo"
+    root = Path(__file__).resolve().parent.parent / "novi"
     constructors = {}
     for py in root.rglob("*.py"):
         if "__pycache__" in py.parts or "node_modules" in py.parts:
@@ -806,12 +806,12 @@ def test_surfaces_do_not_own_model_selection():
     import ast
     from pathlib import Path
 
-    root = Path(__file__).resolve().parent.parent / "cozmo"
+    root = Path(__file__).resolve().parent.parent / "novi"
     forbidden_attrs = {"force_model", "model_preset", "model_presets",
                        "performance_profile", "perf_profile", "model_router",
                        "model_catalog"}
-    forbidden_imports = ("cozmo.models", "cozmo.configuration.catalog",
-                         "cozmo.configuration.resolver", "cozmo.runtime.model_selector")
+    forbidden_imports = ("novi.models", "novi.configuration.catalog",
+                         "novi.configuration.resolver", "novi.runtime.model_selector")
     surfaces = ("cli.py", "services/telegram.py", "services/background.py",
                 "task_queue.py", "scheduler.py", "telegram_bot.py")
     for rel in surfaces:

@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from cozmo.configuration.discovery import DiscoveredModel
+from novi.configuration.discovery import DiscoveredModel
 
 
 @pytest.fixture(autouse=True)
@@ -28,8 +28,8 @@ def _isolated_home_and_config(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("HOMEDRIVE", str(tmp_path))
     monkeypatch.setenv("HOMEPATH", "")
-    import cozmo.configuration.bootstrap as boot
-    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".cozmo" / "config.toml")
+    import novi.configuration.bootstrap as boot
+    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".novi" / "config.toml")
     monkeypatch.setattr(boot, "_configuration", None)
 
 
@@ -37,17 +37,17 @@ def _make_app(monkeypatch, installed_names):
     from fastapi.testclient import TestClient
 
     holder = {"names": list(installed_names)}
-    from cozmo.configuration.discovery import ModelDiscovery
+    from novi.configuration.discovery import ModelDiscovery
     monkeypatch.setattr(
         ModelDiscovery, "installed",
         lambda self: [DiscoveredModel(name=n) for n in holder["names"]],
     )
-    from cozmo.webui_server import create_app
+    from novi.webui_server import create_app
     return TestClient(create_app(cfg={})), holder
 
 
 def _config():
-    from cozmo.configuration.bootstrap import get_configuration
+    from novi.configuration.bootstrap import get_configuration
     return get_configuration()
 
 
@@ -115,9 +115,9 @@ def test_discovery_hardware_payload_surfaces_gpu_and_confidence(monkeypatch):
 
 
 def test_discovery_hardware_unknown_vram_stays_unknown(monkeypatch):
-    import cozmo.configuration.catalog as catalog
-    from cozmo.configuration.catalog import ModelRecommendationEngine
-    from cozmo.configuration.hardware import (
+    import novi.configuration.catalog as catalog
+    from novi.configuration.catalog import ModelRecommendationEngine
+    from novi.configuration.hardware import (
         DetectionConfidence,
         GpuConfidence,
         GpuInfo,
@@ -185,7 +185,7 @@ def test_selection_get_and_post(monkeypatch):
     assert _workload_models()["code"] == "qwen2.5-coder:7b"
 
     # survives reload
-    import cozmo.configuration.bootstrap as boot
+    import novi.configuration.bootstrap as boot
     monkeypatch.setattr(boot, "_configuration", None)
     got2 = client.get("/api/configuration/models/selection").json()
     assert got2["workloads"]["general"] == "llama3.1:8b"
@@ -221,7 +221,7 @@ def test_recommend_is_advisory_unless_applied(monkeypatch):
 
 
 def test_install_completion_refreshes_recommendations_not_selection(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
     monkeypatch.setattr(
         ModelInstaller, "pull",
         lambda self, name, on_progress=None: (
@@ -251,7 +251,7 @@ def test_install_completion_refreshes_recommendations_not_selection(monkeypatch)
 
 def test_recommend_endpoint_never_installs(monkeypatch):
     from fastapi.testclient import TestClient
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
     calls = []
     monkeypatch.setattr(ModelInstaller, "pull",
                         lambda self, name, on_progress=None: calls.append(name))
@@ -361,12 +361,12 @@ def test_selection_never_introduces_retired_keys(monkeypatch):
 
 
 def _patch_delete(monkeypatch, ok: bool):
-    import cozmo.configuration.install as install
+    import novi.configuration.install as install
     monkeypatch.setattr(install, "delete_model", lambda name, url: ok)
 
 
 def test_delete_calls_ollama_delete_and_reports_success(monkeypatch):
-    import cozmo.configuration.install as install
+    import novi.configuration.install as install
     calls = []
     monkeypatch.setattr(install, "delete_model",
                         lambda name, url: calls.append((name, url)) or True)
@@ -378,9 +378,9 @@ def test_delete_calls_ollama_delete_and_reports_success(monkeypatch):
 
 
 def test_delete_triggers_discovery_refresh(monkeypatch):
-    import cozmo.configuration.discovery as discovery
-    import cozmo.configuration.install as install
-    import cozmo.configuration.resolver as resolver
+    import novi.configuration.discovery as discovery
+    import novi.configuration.install as install
+    import novi.configuration.resolver as resolver
     monkeypatch.setattr(install, "delete_model", lambda name, url: True)
     invalidated = []
     monkeypatch.setattr(discovery, "invalidate_cache",
@@ -449,7 +449,7 @@ def test_delete_failure_leaves_configuration_untouched(monkeypatch):
 
 
 def test_delete_rejects_empty_or_missing_name(monkeypatch):
-    import cozmo.configuration.install as install
+    import novi.configuration.install as install
     calls = []
     monkeypatch.setattr(install, "delete_model",
                         lambda name, url: calls.append(name) or True)

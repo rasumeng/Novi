@@ -3,10 +3,10 @@
 from pathlib import Path
 from os import fspath
 
-from cozmo.brain.storage.migrations import migrate
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.memory.lancedb_store import LanceStore
-from cozmo.services.embedding import EmbeddingService
+from novi.brain.storage.migrations import migrate
+from novi.brain.storage.vector_store import VectorStore
+from novi.memory.lancedb_store import LanceStore
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):
@@ -35,7 +35,7 @@ def _seed_flat(persist_dir, rows):
 
     store = LanceStore(
         uri=str(Path(persist_dir) / "lancedb"),
-        table_name="cozmo_knowledge",
+        table_name="novi_knowledge",
         embed_func=f,
         embed_dim=embed.dimension,
         embed_model="fake-embed",

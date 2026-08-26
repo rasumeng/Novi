@@ -13,9 +13,9 @@ from uuid import uuid4
 
 import pytest
 
-from cozmo.memory.knowledge_index import KnowledgeIndex, _chunk_with_overlap
-from cozmo.memory.manager import MemoryManager
-from cozmo.services.embedding import EmbeddingService
+from novi.memory.knowledge_index import KnowledgeIndex, _chunk_with_overlap
+from novi.memory.manager import MemoryManager
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):

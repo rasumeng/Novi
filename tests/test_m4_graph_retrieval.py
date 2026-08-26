@@ -16,15 +16,15 @@ from __future__ import annotations
 
 import pytest
 
-from cozmo.brain import Brain, EdgeKind, QueryContext, Relationship
-from cozmo.brain.layers.knowledge import KnowledgeLayer
-from cozmo.brain.layers.scenarios import ScenarioLayer
-from cozmo.brain.reasoning.expansion import ExpansionConfig
-from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
-from cozmo.brain.storage.relationship_store import RelationshipStore
-from cozmo.brain.storage.scenario_store import ScenarioStore
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.brain.types import (
+from novi.brain import Brain, EdgeKind, QueryContext, Relationship
+from novi.brain.layers.knowledge import KnowledgeLayer
+from novi.brain.layers.scenarios import ScenarioLayer
+from novi.brain.reasoning.expansion import ExpansionConfig
+from novi.brain.reasoning.resolver import LayeredRetrievalResolver
+from novi.brain.storage.relationship_store import RelationshipStore
+from novi.brain.storage.scenario_store import ScenarioStore
+from novi.brain.storage.vector_store import VectorStore
+from novi.brain.types import (
     KnowledgeForm,
     KnowledgeHit,
     KnowledgeItem,
@@ -32,10 +32,10 @@ from cozmo.brain.types import (
     Scenario,
     ScenarioStatus,
 )
-from cozmo.runtime.evidence import RetrievalQuality
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.sources import KnowledgeRetrievalSource
-from cozmo.services.embedding import EmbeddingService
+from novi.runtime.evidence import RetrievalQuality
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.sources import KnowledgeRetrievalSource
+from novi.services.embedding import EmbeddingService
 
 
 # â”€â”€ shared fakes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -681,7 +681,7 @@ def test_source_text_level_dedup_for_unreindexed_rows(tmp_path):
         }
     ]
     # link a â†’ b manually; b's durable row has identical content
-    from cozmo.brain.types import Relationship as Rel
+    from novi.brain.types import Relationship as Rel
 
     rels.add(Rel(source_id=a, target_id=b, kind=EdgeKind.REFERENCES))
 
@@ -769,7 +769,7 @@ def test_source_failure_passthrough_unchanged(tmp_path):
 
 
 def test_vector_store_get_many_batch_lookup(tmp_path):
-    from cozmo.brain.storage.vector_store import VectorStore
+    from novi.brain.storage.vector_store import VectorStore
 
     store = VectorStore(persist_dir=tmp_path / "v", embed_model=FakeEmbed())
     store.add_many(
@@ -898,7 +898,7 @@ def test_source_carries_no_affinity_key_without_scenario_context(tmp_path):
 
 def test_batched_fetch_matches_single_get_results(tmp_path):
     """Parity guard: get_many must return what per-id get() would have."""
-    from cozmo.brain.storage.vector_store import VectorStore
+    from novi.brain.storage.vector_store import VectorStore
 
     store = VectorStore(persist_dir=tmp_path / "v", embed_model=FakeEmbed())
     store.add_many(

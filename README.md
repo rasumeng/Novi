@@ -1,13 +1,13 @@
-# Cozmo — Open-Source Local AI Agent Platform
+# Novi — Open-Source Local AI Agent Platform
 
-Cozmo is a privacy-first, fully local AI agent platform designed to autonomously understand requests, select appropriate tools, route tasks to specialized models, and execute multi-step workflows without requiring cloud AI services.
+Novi is a privacy-first, fully local AI agent platform designed to autonomously understand requests, select appropriate tools, route tasks to specialized models, and execute multi-step workflows without requiring cloud AI services.
 
-Unlike traditional chat assistants that rely on manual mode selection, Cozmo uses an intelligent orchestration layer that analyzes every request, determines the required capabilities, and dynamically coordinates models, tools, memory, and retrieval systems.
+Unlike traditional chat assistants that rely on manual mode selection, Novi uses an intelligent orchestration layer that analyzes every request, determines the required capabilities, and dynamically coordinates models, tools, memory, and retrieval systems.
 
-Built with Python, FastAPI, React, Ollama, and modern LLM engineering practices, Cozmo explores the future of personal AI assistants through agent orchestration, retrieval grounding, local inference, and extensible tool execution.
+Built with Python, FastAPI, React, Ollama, and modern LLM engineering practices, Novi explores the future of personal AI assistants through agent orchestration, retrieval grounding, local inference, and extensible tool execution.
 
 ```bash
-cozmo webui
+novi webui
 ```
 
 ---
@@ -16,7 +16,7 @@ cozmo webui
 
 Modern AI assistants often depend on external APIs, require users to select specific modes, and provide limited transparency into how responses are generated.
 
-Cozmo takes a different approach:
+Novi takes a different approach:
 
 * **One intelligent assistant** — every interaction is treated as a task, with the system deciding how to respond.
 * **Local-first architecture** — AI inference, memory, and data processing can run entirely on user hardware.
@@ -106,7 +106,7 @@ Developed a complete AI application stack:
                        Execution Plan
                               |
                               v
-                       Cozmo Runtime
+                       Novi Runtime
                               |
         +---------------------+----------------------+
         |                     |                      |
@@ -121,7 +121,7 @@ Developed a complete AI application stack:
 
 # Core Components
 
-## Runtime (`cozmo/runtime/`)
+## Runtime (`novi/runtime/`)
 
 The execution engine responsible for coordinating AI workflows.
 
@@ -137,7 +137,7 @@ Features:
 
 Key components:
 
-* `CozmoRuntime`
+* `NoviRuntime`
 * `RetrievalCoordinator`
 * `EvidenceCollector`
 * `ExecutionTrace`
@@ -146,7 +146,7 @@ Key components:
 
 ---
 
-## Orchestrator (`cozmo/orchestrator/`)
+## Orchestrator (`novi/orchestrator/`)
 
 The decision-making layer responsible for understanding tasks.
 
@@ -182,7 +182,7 @@ Evaluates task difficulty to optimize:
 
 ---
 
-## Memory (`cozmo/memory/`)
+## Memory (`novi/memory/`)
 
 Persistent memory architecture powered by LanceDB.
 
@@ -197,7 +197,7 @@ Capabilities:
 
 ---
 
-## Providers (`cozmo/providers/`)
+## Providers (`novi/providers/`)
 
 Provider abstraction layer supporting:
 
@@ -215,7 +215,7 @@ Features:
 
 ## Tools & Capabilities
 
-Cozmo includes 20+ built-in tools:
+Novi includes 20+ built-in tools:
 
 | Category      | Examples                                       |
 | ------------- | ---------------------------------------------- |
@@ -278,7 +278,7 @@ Cozmo includes 20+ built-in tools:
 
 # Web Interface
 
-Cozmo includes a React-based WebUI providing:
+Novi includes a React-based WebUI providing:
 
 * Streaming conversations
 * Agent execution traces
@@ -291,7 +291,7 @@ Cozmo includes a React-based WebUI providing:
 Launch:
 
 ```bash
-cozmo webui
+novi webui
 ```
 
 ---
@@ -307,15 +307,15 @@ cozmo webui
 ## Installation
 
 ```bash
-git clone https://github.com/rasumeng/cozmo.git
+git clone https://github.com/rasumeng/novi.git
 
-cd cozmo
+cd novi
 
 pip install -e .
 
-cozmo init
+novi init
 
-cozmo webui
+novi webui
 ```
 
 ---
@@ -325,7 +325,7 @@ cozmo webui
 Configuration is managed through:
 
 ```
-~/.cozmo/config.toml
+~/.novi/config.toml
 ```
 
 Example:
@@ -345,7 +345,7 @@ url = "http://localhost:11434"
 
 # Testing
 
-Cozmo includes automated tests covering:
+Novi includes automated tests covering:
 
 * Agent orchestration
 * Retrieval pipelines

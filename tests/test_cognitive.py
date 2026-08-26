@@ -17,16 +17,16 @@ import pytest
 class TestMemoryContextAssembly:
     @pytest.fixture
     def runtime(self):
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.runtime import NoviRuntime
 
-        rt = CozmoRuntime(model_service=MagicMock())
+        rt = NoviRuntime(model_service=MagicMock())
         return rt
 
     def _ctx(self, user_input="hello", needs_memory=True, intent="conversation"):
         import types
-        from cozmo.runtime.execution_context import ExecutionContext
-        from cozmo.runtime.retrieval_policy import RetrievalPlan, SourceType
-        from cozmo.runtime.trace import ExecutionTrace
+        from novi.runtime.execution_context import ExecutionContext
+        from novi.runtime.retrieval_policy import RetrievalPlan, SourceType
+        from novi.runtime.trace import ExecutionTrace
 
         plan = RetrievalPlan()
         if needs_memory:
@@ -59,14 +59,14 @@ class TestMemoryContextAssembly:
 
     def test_query_memory_returns_formatted(self, runtime):
         """With memory manager, executor populates formatted sections."""
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.runtime import NoviRuntime
 
         mock_memory = MagicMock()
         mock_memory.query.return_value = [
             {"text": "User likes Python", "distance": 0.2,
              "metadata": {"type": "preference", "frequency": 3, "timestamp": ""}},
         ]
-        rt = CozmoRuntime(model_service=MagicMock(), memory=mock_memory)
+        rt = NoviRuntime(model_service=MagicMock(), memory=mock_memory)
         ctx = self._ctx()
         list(rt.retrieval_executor.execute(ctx, "hello"))
         assert "Preference" in ctx.memory_context or "preference" in ctx.memory_context
@@ -76,8 +76,8 @@ class TestMemoryContextAssembly:
         """Memories are ranked by frequency x recency x distance."""
         from datetime import datetime, timedelta
 
-        from cozmo.runtime.retrieval import RetrievalExecutor
-        from cozmo.runtime.sources import RetrievedItem
+        from novi.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.sources import RetrievedItem
 
         older = (datetime.now() - timedelta(hours=100)).isoformat()
         newer = datetime.now().isoformat()
@@ -96,10 +96,10 @@ class TestMemoryContextAssembly:
 
     def test_memory_filtered_by_intent(self, runtime):
         """Executor filters memory by types matching intent."""
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.runtime import NoviRuntime
 
         mock_memory = MagicMock()
-        rt = CozmoRuntime(model_service=MagicMock(), memory=mock_memory)
+        rt = NoviRuntime(model_service=MagicMock(), memory=mock_memory)
         ctx = self._ctx(user_input="refactor main.py", intent="coding")
         list(rt.retrieval_executor.execute(ctx, "refactor main.py"))
         call_kwargs = mock_memory.query.call_args[1]
@@ -121,7 +121,7 @@ class TestModelSelectorStrictContract:
     @pytest.fixture
     def selector(self):
         import types
-        from cozmo.runtime.model_selector import ModelSelector
+        from novi.runtime.model_selector import ModelSelector
 
         workloads = {
             "general": "qwen3:8b",
@@ -144,8 +144,8 @@ class TestModelSelectorStrictContract:
 
     def test_unset_workload_raises(self):
         import types
-        from cozmo.models import ModelUnavailableError
-        from cozmo.runtime.model_selector import ModelSelector
+        from novi.models import ModelUnavailableError
+        from novi.runtime.model_selector import ModelSelector
 
         svc = types.SimpleNamespace(resolve=lambda w: ("test-provider", ""))
         sel = ModelSelector(svc)
@@ -158,8 +158,8 @@ class TestModelSelectorStrictContract:
 
     def test_missing_configured_model_raises(self):
         import types
-        from cozmo.models import ModelUnavailableError
-        from cozmo.runtime.model_selector import ModelSelector
+        from novi.models import ModelUnavailableError
+        from novi.runtime.model_selector import ModelSelector
 
         def resolve(w):
             raise ModelUnavailableError("general", "gemma4:12b", ["qwen3:8b"])
@@ -175,7 +175,7 @@ class TestModelSelectorStrictContract:
 class TestLessonStore:
     @pytest.fixture
     def store(self, tmp_path):
-        from cozmo.runtime.lessons import LessonStore
+        from novi.runtime.lessons import LessonStore
         return LessonStore(persist_dir=str(tmp_path))
 
     def test_record_success(self, store):
@@ -229,7 +229,7 @@ class TestLessonStore:
 
     def test_persistence(self, tmp_path):
         """Lessons persist to disk and reload on init."""
-        from cozmo.runtime.lessons import LessonStore
+        from novi.runtime.lessons import LessonStore
         s1 = LessonStore(persist_dir=str(tmp_path))
         s1.record("web_search", {"query": "news"}, "results")
         s2 = LessonStore(persist_dir=str(tmp_path))
@@ -244,35 +244,35 @@ class TestSchedulerIntegration:
     @pytest.fixture
     def isolated_scheduler(self, tmp_path):
         """Return Scheduler with isolated persistence path."""
-        import cozmo.scheduler
-        orig_path = cozmo.scheduler.SCHEDULES_PATH
+        import novi.scheduler
+        orig_path = novi.scheduler.SCHEDULES_PATH
         fake = tmp_path / "schedules.json"
         fake.write_text('{"schedules": []}', "utf-8")
-        cozmo.scheduler.SCHEDULES_PATH = fake
+        novi.scheduler.SCHEDULES_PATH = fake
         yield
-        cozmo.scheduler.SCHEDULES_PATH = orig_path
+        novi.scheduler.SCHEDULES_PATH = orig_path
 
     def test_job_created_for_background_run(self):
         """Scheduler trigger creates a job via JobManager."""
-        from cozmo.jobs.manager import JobManager
+        from novi.jobs.manager import JobManager
 
         jm = JobManager()
-        with patch("cozmo.webui_server._start_background_run") as mock_run:
-            from cozmo.webui_server import _start_background_run as real_start
+        with patch("novi.webui_server._start_background_run") as mock_run:
+            from novi.webui_server import _start_background_run as real_start
             real_start("test goal", {"test": True}, job_manager=jm)
             runs = jm.list_by_task("test goal")
             assert len(runs) == 0
 
     def test_scheduler_init(self, isolated_scheduler):
         """Scheduler can be initialized with a job manager reference."""
-        from cozmo.scheduler import Scheduler
+        from novi.scheduler import Scheduler
         s = Scheduler()
         assert s is not None
         assert s.list() == []
 
     def test_schedule_add_and_list(self, isolated_scheduler):
         """Schedules persist and can be listed."""
-        from cozmo.scheduler import Scheduler
+        from novi.scheduler import Scheduler
         s = Scheduler()
         s.add("test goal", "test description", interval_minutes=10)
         items = s.list()
@@ -281,7 +281,7 @@ class TestSchedulerIntegration:
 
     def test_schedule_remove(self, isolated_scheduler):
         """Schedules can be removed."""
-        from cozmo.scheduler import Scheduler
+        from novi.scheduler import Scheduler
         s = Scheduler()
         item = s.add("test goal")
         assert s.remove(item.id) is True

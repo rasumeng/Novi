@@ -41,7 +41,7 @@ def _ensure_store_path(root: Path):
     """Mount the shared store directory from the pytest-side temp dir."""
     from pathlib import Path
 
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
 
     jobs_dir = Path(root) / "jobs"
     jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ def _ensure_store_path(root: Path):
 
 
 def _make_plan(task):
-    from cozmo.planner.models import Plan, PlanStep
+    from novi.planner.models import Plan, PlanStep
 
     plan = Plan(id="plan-r", task_id=task.id)
     for i, desc in enumerate(["a", "b", "c"]):
@@ -99,11 +99,11 @@ class _FakeModel:
 def phase_a(root: Path) -> None:
     _ensure_store_path(root)
 
-    from cozmo.jobs.job import JobStatus
-    from cozmo.jobs.manager import JobManager
-    from cozmo.jobs.persistence import JobStore
-    from cozmo.orchestrator.task_store import TaskStore
-    from cozmo.orchestrator.task_types import Goal, IntentType, Task
+    from novi.jobs.job import JobStatus
+    from novi.jobs.manager import JobManager
+    from novi.jobs.persistence import JobStore
+    from novi.orchestrator.task_store import TaskStore
+    from novi.orchestrator.task_types import Goal, IntentType, Task
 
     task_store = TaskStore(persist_dir=root / "tasks")
     job_store = JobStore()
@@ -124,7 +124,7 @@ def phase_a(root: Path) -> None:
     # Step 0 completed, then the process "crashes": the Job stays RUNNING on
     # disk with a durable checkpoint. Checkpoint.step == 1 == completed count
     # == the 0-based index of Step 1.
-    from cozmo.jobs.job import Checkpoint
+    from novi.jobs.job import Checkpoint
 
     manager.checkpoint(job.id, Checkpoint(
         job_id=job.id,
@@ -158,23 +158,23 @@ class _ContIntent:
     """Forces CONTINUATION so the coordinator takes the resume path."""
 
     def detect(self, user_input, history=None, has_images=False):
-        from cozmo.orchestrator.task_types import IntentType
+        from novi.orchestrator.task_types import IntentType
 
         return (IntentType.CONTINUATION, 1.0)
 
 
 def _recovery_assertions(root: Path) -> dict:
-    from cozmo.jobs.job import Checkpoint, JobStatus
-    from cozmo.jobs.manager import JobManager
-    from cozmo.jobs.persistence import JobStore
-    from cozmo.orchestrator import Orchestrator
-    from cozmo.orchestrator.task_store import TaskStore
-    from cozmo.runtime.event_bus import EventBus
-    from cozmo.runtime.event_bus import EventType
-    from cozmo.services.continuation import ContinuationService
-    from cozmo.services.execution import ExecutionCoordinator
-    from cozmo.services.job_lifecycle import JobLifecycle
-    from cozmo.services.recovery import INTERRUPT_EVENT, recover_interrupted_jobs
+    from novi.jobs.job import Checkpoint, JobStatus
+    from novi.jobs.manager import JobManager
+    from novi.jobs.persistence import JobStore
+    from novi.orchestrator import Orchestrator
+    from novi.orchestrator.task_store import TaskStore
+    from novi.runtime.event_bus import EventBus
+    from novi.runtime.event_bus import EventType
+    from novi.services.continuation import ContinuationService
+    from novi.services.execution import ExecutionCoordinator
+    from novi.services.job_lifecycle import JobLifecycle
+    from novi.services.recovery import INTERRUPT_EVENT, recover_interrupted_jobs
 
     task_store = TaskStore(persist_dir=root / "tasks")
     job_store = JobStore()
@@ -244,14 +244,14 @@ def _recovery_assertions(root: Path) -> dict:
     manager = JobManager(store=job_store)
 
     # 4. Resume execution through the production coordinator seam with a real
-    #    CozmoRuntime (deterministic model double — no Ollama needed). The
+    #    NoviRuntime (deterministic model double — no Ollama needed). The
     #    coordinator EXPLICITLY reopens the interrupted Job into a NEW attempt.
     lifecycle = JobLifecycle(manager, task_store=task_store).subscribe(bus)
     fake = _FakeModel(["b-result", "c-result"])       # Steps 1 and 2 only
 
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime(model_service=fake, event_bus=bus)
+    runtime = NoviRuntime(model_service=fake, event_bus=bus)
     coordinator = ExecutionCoordinator(
         orchestrator=Orchestrator(intent_detector=_ContIntent(),
                                   task_store=task_store),

@@ -1,11 +1,11 @@
-# Cozmo Brain — Architecture Review & Redesign Blueprint
+# Novi Brain — Architecture Review & Redesign Blueprint
 
 **Status:** Design proposal (no code changed). Revised after architecture review — adds the
 Reasoning layer, the form-axis knowledge model, first-class relationships, and a cognition-styled
 Brain API.
 
 **Framing:** This document deliberately avoids the word *memory*. The design question is not
-*"where do we store memories?"* but **"how does Cozmo organize what it knows?"**
+*"where do we store memories?"* but **"how does Novi organize what it knows?"**
 
 That shift changes the architecture from **storage-centric** to **knowledge-centric**. Storage
 becomes an implementation detail of individual layers, not the organizing principle.
@@ -20,36 +20,36 @@ becomes an implementation detail of individual layers, not the organizing princi
 
 | Component | File | Purpose | Public API | Dependencies | Coupling |
 |---|---|---|---|---|---|
-| `LanceStore` | `cozmo/memory/lancedb_store.py` | Low-level LanceDB vector store. Flat schema `(id, text, metadata:str, vector)`. Hybrid search + importance scoring. | `add_texts`, `similarity_search`, `hybrid_search`, `search_with_importance`, `increment_frequency`, `count`, `list_all`, `delete`, `query_sql` | lancedb, pyarrow, embed_func | Storage engine for all three indexes. No domain concept. |
-| `MemoryManager` | `cozmo/memory/manager.py` | **Flat** long-term store. Short-term turn buffer → LLM summary → keyword classification → LanceStore. | `add_interaction`, `query`, `store_preference`, `store_project_context`, `store_fact`, `consolidate`, `list_all`, `count`, `delete`, `query_sql` | `LanceStore`, `EmbeddingService`, LLM (`router_llm`), config | God-object: buffers + summarizes + classifies + embeds + stores + ranks + dedups. |
-| `KnowledgeIndex` | `cozmo/memory/knowledge_index.py` | Indexes `knowledge/*.md` (OKF frontmatter) into its own LanceDB table. Overlapping chunking, deterministic ids, cross-encoder rerank. | `index_all`, `index_file`, `search`, `search_by_tag`, `count`, `get_paths` | `LanceStore`, `EmbeddingService`, `RerankerService` | Separate table, separate metadata convention. |
-| `ProjectIndex` | `cozmo/code_indexer.py` | Indexes project files (whole file = one row) into `project_index` table. | `index_all`, `query` | `LanceStore`, `EmbeddingService` | Whole-file rows (no chunking), no re-index guard, no mtime tracking. |
-| `EmbeddingService` | `cozmo/services/embedding.py` | Shared sentence-transformer wrapper. | `encode`, `model_name`, `dimension`, `clear` | sentence-transformers | Well-factored. |
-| `RerankerService` | `cozmo/services/embedding.py` | Shared cross-encoder wrapper. | `rerank`, `model_name`, `clear` | sentence-transformers | Well-factored. |
-| `CozmoContext` | `cozmo/services/context.py` | Composition root. Lazily wires all services; holds globals via side effects. | `memory`, `embedding_service`, `init_knowledge_index`, `create_runtime`, `warmup` | everything | Sets process-global managers. |
-| `RetrievalExecutor` | `cozmo/runtime/retrieval.py` | Single retrieval entry point. Executes plans, web/knowledge search, sets up coordinator, builds memory/project prompt context, recovery. | `execute`, `execute_search`, `recommend_*`, `commit_recovery`, `retrieve_knowledge` | sources, policy, coordinator, budget | Still hand-rolls per-strategy branches; re-ranks memory again. |
-| Source adapters | `cozmo/runtime/sources/*.py` | `RetrievalSource` protocol wrappers: `Memory`, `Knowledge`, `Project`, `Web`, `File`(stub). | `retrieve(query, budget) -> RetrievalResult` | underlying stores | Clean adapters; thin over existing APIs. |
-| `RetrievalPolicy` | `cozmo/runtime/retrieval_policy.py` | Pure decision: sources + strategy + allocation. | `resolve(...) -> RetrievalPlan` | `SourceSelector`, `ContextAllocation` | Clean, pure. |
-| `SourceSelector` | `cozmo/runtime/source_selector.py` | Pure pluggable strategy layer. | `select(...) -> SourceSelection` | none | Clean, pure. |
-| `ResultMerger` | `cozmo/runtime/result_merger.py` | Deterministic cross-source rank + dedup. | `merge(results, query, allocation) -> MergedRetrievalResult` | none | Clean, pure. |
-| `RetrievalCoordinator` | `cozmo/runtime/retrieval_coordinator.py` | Web budget + duplicate-query cache during tool loop. | `intercept`, `record`, `seed_cache` | none | Web-only; knowledge/memory tools not coordinated. |
-| `CozmoRuntime` | `cozmo/runtime/runtime.py` | Agentic loop. `_remember` writes to memory; `_compact` summarizes in-memory history. | `run_stream`, `run`, `reset` | everything | Writes memory directly via `memory.add_interaction`. |
-| `LessonStore` | `cozmo/runtime/lessons.py` | Tool-success/failure lessons, persisted to `lessons.json`, injected into prompts. | `record`, `get_context`, `count`, `list_all`, `clear` | none | Second, unrelated memory system. |
-| `FactExtractor` | `cozmo/evidence/extractor.py` | Deterministic sentence-split fact extraction with heuristic/LLM confidence. | `extract(text, query)`, `merge_facts` | none | Currently **web-evidence only**. |
-| `EvidenceProcessor` | `cozmo/evidence/processor.py` | Post-collection refinement: rank → facts → conflicts → confidence → compress. | `process(bundle) -> EvidenceContext` | extractor, conflicts, confidence, compressor | Consumes `EvidenceBundle` (web) only. |
-| WebUI conversation store | `cozmo/webui_server.py` | Markdown chats + `index.json` under `~/.cozmo/chats`. | REST `/api/conversations` | none | UI-owned; runtime unaware of it. |
+| `LanceStore` | `novi/memory/lancedb_store.py` | Low-level LanceDB vector store. Flat schema `(id, text, metadata:str, vector)`. Hybrid search + importance scoring. | `add_texts`, `similarity_search`, `hybrid_search`, `search_with_importance`, `increment_frequency`, `count`, `list_all`, `delete`, `query_sql` | lancedb, pyarrow, embed_func | Storage engine for all three indexes. No domain concept. |
+| `MemoryManager` | `novi/memory/manager.py` | **Flat** long-term store. Short-term turn buffer → LLM summary → keyword classification → LanceStore. | `add_interaction`, `query`, `store_preference`, `store_project_context`, `store_fact`, `consolidate`, `list_all`, `count`, `delete`, `query_sql` | `LanceStore`, `EmbeddingService`, LLM (`router_llm`), config | God-object: buffers + summarizes + classifies + embeds + stores + ranks + dedups. |
+| `KnowledgeIndex` | `novi/memory/knowledge_index.py` | Indexes `knowledge/*.md` (OKF frontmatter) into its own LanceDB table. Overlapping chunking, deterministic ids, cross-encoder rerank. | `index_all`, `index_file`, `search`, `search_by_tag`, `count`, `get_paths` | `LanceStore`, `EmbeddingService`, `RerankerService` | Separate table, separate metadata convention. |
+| `ProjectIndex` | `novi/code_indexer.py` | Indexes project files (whole file = one row) into `project_index` table. | `index_all`, `query` | `LanceStore`, `EmbeddingService` | Whole-file rows (no chunking), no re-index guard, no mtime tracking. |
+| `EmbeddingService` | `novi/services/embedding.py` | Shared sentence-transformer wrapper. | `encode`, `model_name`, `dimension`, `clear` | sentence-transformers | Well-factored. |
+| `RerankerService` | `novi/services/embedding.py` | Shared cross-encoder wrapper. | `rerank`, `model_name`, `clear` | sentence-transformers | Well-factored. |
+| `NoviContext` | `novi/services/context.py` | Composition root. Lazily wires all services; holds globals via side effects. | `memory`, `embedding_service`, `init_knowledge_index`, `create_runtime`, `warmup` | everything | Sets process-global managers. |
+| `RetrievalExecutor` | `novi/runtime/retrieval.py` | Single retrieval entry point. Executes plans, web/knowledge search, sets up coordinator, builds memory/project prompt context, recovery. | `execute`, `execute_search`, `recommend_*`, `commit_recovery`, `retrieve_knowledge` | sources, policy, coordinator, budget | Still hand-rolls per-strategy branches; re-ranks memory again. |
+| Source adapters | `novi/runtime/sources/*.py` | `RetrievalSource` protocol wrappers: `Memory`, `Knowledge`, `Project`, `Web`, `File`(stub). | `retrieve(query, budget) -> RetrievalResult` | underlying stores | Clean adapters; thin over existing APIs. |
+| `RetrievalPolicy` | `novi/runtime/retrieval_policy.py` | Pure decision: sources + strategy + allocation. | `resolve(...) -> RetrievalPlan` | `SourceSelector`, `ContextAllocation` | Clean, pure. |
+| `SourceSelector` | `novi/runtime/source_selector.py` | Pure pluggable strategy layer. | `select(...) -> SourceSelection` | none | Clean, pure. |
+| `ResultMerger` | `novi/runtime/result_merger.py` | Deterministic cross-source rank + dedup. | `merge(results, query, allocation) -> MergedRetrievalResult` | none | Clean, pure. |
+| `RetrievalCoordinator` | `novi/runtime/retrieval_coordinator.py` | Web budget + duplicate-query cache during tool loop. | `intercept`, `record`, `seed_cache` | none | Web-only; knowledge/memory tools not coordinated. |
+| `NoviRuntime` | `novi/runtime/runtime.py` | Agentic loop. `_remember` writes to memory; `_compact` summarizes in-memory history. | `run_stream`, `run`, `reset` | everything | Writes memory directly via `memory.add_interaction`. |
+| `LessonStore` | `novi/runtime/lessons.py` | Tool-success/failure lessons, persisted to `lessons.json`, injected into prompts. | `record`, `get_context`, `count`, `list_all`, `clear` | none | Second, unrelated memory system. |
+| `FactExtractor` | `novi/evidence/extractor.py` | Deterministic sentence-split fact extraction with heuristic/LLM confidence. | `extract(text, query)`, `merge_facts` | none | Currently **web-evidence only**. |
+| `EvidenceProcessor` | `novi/evidence/processor.py` | Post-collection refinement: rank → facts → conflicts → confidence → compress. | `process(bundle) -> EvidenceContext` | extractor, conflicts, confidence, compressor | Consumes `EvidenceBundle` (web) only. |
+| WebUI conversation store | `novi/webui_server.py` | Markdown chats + `index.json` under `~/.novi/chats`. | REST `/api/conversations` | none | UI-owned; runtime unaware of it. |
 
 ### 1.2 Storage layout on disk
 
 ```
-~/.cozmo/
-  memory/            → LanceStore table "cozmo_memories"      (MemoryManager)
+~/.novi/
+  memory/            → LanceStore table "novi_memories"      (MemoryManager)
   knowledge_index/   → LanceStore table "knowledge_index"     (KnowledgeIndex)
   lessons/           → lessons.json                            (LessonStore)
   chats/             → <conv_id>.md + index.json              (WebUI conversations)
   projects/          → (WebUI project imports)
   skills/  agent_state/  attachments/  tasks/
-<project>/.cozmo/
+<project>/.novi/
   project_index/     → LanceStore table "project_index"       (ProjectIndex)
 ```
 
@@ -57,13 +57,13 @@ becomes an implementation detail of individual layers, not the organizing princi
 
 ```
 user turn + assistant reply
-  → CozmoRuntime._remember            runtime.py:851
+  → NoviRuntime._remember            runtime.py:851
       → history list (in-memory, capped)
       → _compact()                    LLM summary of trimmed history (in-memory)
       → MemoryManager.add_interaction runtime.py:103
           → short_term buffer (≤10 pairs)
           → every 5 turns: LLM summary → _classify (keyword) → LanceStore
-  → WebUI additionally: raw markdown conversation → ~/.cozmo/chats
+  → WebUI additionally: raw markdown conversation → ~/.novi/chats
   → Tool results during loop → LessonStore.record → lessons.json
 ```
 
@@ -144,7 +144,7 @@ slow, format-order-dependent. `MemoryManager.query` even builds `type_filter` th
 
 ### P8. Process-global singletons
 `_memory_manager` / `_global_knowledge_index` are module globals. WebUI shares one memory backend
-across all sessions via `CozmoContext`. Tests must patch globals. `get_knowledge_index()` is read
+across all sessions via `NoviContext`. Tests must patch globals. `get_knowledge_index()` is read
 at runtime construction time (`runtime.py:240`).
 
 ### P9. No Scenario or Project layer in the Brain
@@ -181,9 +181,9 @@ Knowledge/Scenario concept (tool expertise) that escaped into the runtime.
 - `FileRetrievalSource` stub (never selected)
 - `MemoryManager.query` unused `type_filter`
 - Unused `MEMORY_TYPES` dict (`manager.py:54`)
-- `Engine` (`runtime/engine.py`) — legacy parallel ReAct loop coexisting with `CozmoRuntime`;
+- `Engine` (`runtime/engine.py`) — legacy parallel ReAct loop coexisting with `NoviRuntime`;
   referenced only by jobs + tests
-- `chroma.sqlite3` legacy artifacts in `.cozmo/project_index`
+- `chroma.sqlite3` legacy artifacts in `.novi/project_index`
 
 ### P16. `_remember` is unconditional and lossy
 Every exchange is buffered; only summaries persist. Tool outputs (often the actual knowledge
@@ -332,7 +332,7 @@ change is a `supersedes` edge, never an overwrite. Verified atomic knowledge tag
 ### 3.6 Package structure
 
 ```
-cozmo/brain/
+novi/brain/
   brain.py            # facade: observe / recall / learn / resolve / reflect
   types.py            # knowledge model + relationship + context object types
   events.py           # domain events (ConversationObserved, KnowledgeExtracted, ...)
@@ -458,17 +458,17 @@ separate commit.
 
 ### Phase A — Knowledge model + cognition facade (no behavior change)
 
-- Add `cozmo/brain/types.py`: `KnowledgeItem`, `Scenario`, `Project`, `IdentityEntry`,
+- Add `novi/brain/types.py`: `KnowledgeItem`, `Scenario`, `Project`, `IdentityEntry`,
   `ConversationRecord`, `Relationship`.
-- Add `cozmo/brain/brain.py`: facade exposing `observe/recall/learn/resolve/reflect`, each
+- Add `novi/brain/brain.py`: facade exposing `observe/recall/learn/resolve/reflect`, each
   delegating to today's components behind the scenes.
-- Add `cozmo/brain/storage/base.py` protocols.
+- Add `novi/brain/storage/base.py` protocols.
 - Existing `MemoryManager`, `KnowledgeIndex`, `ProjectIndex` unchanged; the facade wraps them.
 - Acceptance: all 594 tests still pass; existing imports untouched.
 
 ### Phase B — ConversationStore (new capability, additive)
 
-- `cozmo/brain/storage/conversation_store.py` (SQLite) — raw turns + tool outputs.
+- `novi/brain/storage/conversation_store.py` (SQLite) — raw turns + tool outputs.
 - `Brain.observe` appends to it **in addition to** `MemoryManager.add_interaction` (no
   replacement yet); emits `ConversationObserved`.
 - Runtime `_remember` routes through `Brain.observe` instead of calling `MemoryManager` directly.
@@ -476,9 +476,9 @@ separate commit.
 
 ### Phase C — Extraction + Scenario layer replaces MemoryManager internals
 
-- `cozmo/brain/reasoning/extraction.py`: move `cozmo/evidence/extractor.py` here, now
+- `novi/brain/reasoning/extraction.py`: move `novi/evidence/extractor.py` here, now
   chat-capable; add `Summarizer` + `LayerClassifier`.
-- `cozmo/brain/layers/scenarios.py` + scenario storage (rich scenario object, lifecycle).
+- `novi/brain/layers/scenarios.py` + scenario storage (rich scenario object, lifecycle).
 - The `MemoryManager._summarize_and_store` path is replaced by extraction: turns →
   `KnowledgeItem`s → scenario links. Writes now go to knowledge + scenarios.
 - `MemoryManager.query` API preserved: facade re-serves it as knowledge(scenario) + scenario
@@ -488,7 +488,7 @@ separate commit.
 
 ### Phase D — Relationships + typed vector schema
 
-- `cozmo/brain/storage/vector_store.py`: promoted typed columns (`knowledge_id`, `scenario_id`,
+- `novi/brain/storage/vector_store.py`: promoted typed columns (`knowledge_id`, `scenario_id`,
   `source_kind`, `timestamp`); metadata no longer the filter medium.
 - `Relationship` edge table (SQLite); provenance written as `derived_from` edges.
 - Replace `metadata LIKE` filters with column predicates and edge joins.
@@ -497,7 +497,7 @@ separate commit.
 
 ### Phase E — Layered retrieval via the resolver
 
-- `cozmo/brain/reasoning/resolver.py`: project → scenario → knowledge → conversation traversal.
+- `novi/brain/reasoning/resolver.py`: project → scenario → knowledge → conversation traversal.
 - New source adapters `ScenarioRetrievalSource` / `IdentityRetrievalSource`;
   `KnowledgeRetrievalSource` re-pointed at the knowledge layer.
 - `SourceSelector` / `SourceType` extended with `SCENARIO`, `IDENTITY`; resolution order follows
@@ -509,7 +509,7 @@ separate commit.
 
 ### Phase F — Identity promotion + unified knowledge writer
 
-- `cozmo/brain/reasoning/promotion.py` + `verification.py`: candidate → corroborated → verified,
+- `novi/brain/reasoning/promotion.py` + `verification.py`: candidate → corroborated → verified,
   supersede-with-history. Identity seeded from existing `preference` memories (as candidates).
 - Explicit-confirmation detection ("remember that I...") promotes instantly.
 - `Brain.learn` unifies `write_knowledge` + `LessonStore` — single knowledge writer, no stale
@@ -519,7 +519,7 @@ separate commit.
 ### Phase G — Legacy removal + hardening
 
 - Delete flat `MemoryManager` internals, old `knowledge_index` globals, `search_with_importance`,
-  `Engine` (if jobs migrated to `CozmoRuntime`), unused `MEMORY_TYPES`, dead `type_filter`.
+  `Engine` (if jobs migrated to `NoviRuntime`), unused `MEMORY_TYPES`, dead `type_filter`.
 - New architecture-regression tests (mirroring `test_architecture.py`): no storage imports above
   `brain/storage/`, no JSON-metadata filters, no `metadata LIKE`, no reasoning-layer I/O.
 - Acceptance: full suite green; architecture tests enforce the boundaries going forward.

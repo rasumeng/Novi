@@ -3,14 +3,14 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cozmo"
+name = "novi"
 version = "0.2.0"
 description = "Fully local AI agent powered by Ollama — specialist model routing, ChromaDB memory, WebUI, and tools"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Cozmo Contributors"},
+    {name = "Novi Contributors"},
 ]
 keywords = ["ai", "agent", "ollama", "local", "llm", "cli"]
 classifiers = [
@@ -48,19 +48,19 @@ dependencies = [
 telegram = ["python-telegram-bot>=21.0"]
 
 [project.urls]
-Homepage = "https://github.com/rasumeng/cozmo"
-Repository = "https://github.com/rasumeng/cozmo"
-"Bug Tracker" = "https://github.com/rasumeng/cozmo/issues"
+Homepage = "https://github.com/rasumeng/novi"
+Repository = "https://github.com/rasumeng/novi"
+"Bug Tracker" = "https://github.com/rasumeng/novi/issues"
 
 [tool.setuptools.packages.find]
-include = ["cozmo*"]
+include = ["novi*"]
 
 [tool.setuptools.package-data]
-cozmo = [
+novi = [
     "webui/dist/*",
     "webui/dist/**/*",
     "default_skills/**/*",
 ]
 
 [project.scripts]
-cozmo = "cozmo.cli:main"
+novi = "novi.cli:main"

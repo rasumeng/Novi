@@ -18,21 +18,21 @@ Covered here:
   6. no auto-resume — recovery produces zero model/tool execution
   7. job.interrupted flows through the established timeline projection
   8. interrupted work is discoverable by ContinuationService at Checkpoint.step
-  9. the CozmoContext composition hook delegates to the same recovery
+  9. the NoviContext composition hook delegates to the same recovery
 """
 
 import pytest
 
-from cozmo.jobs.job import Checkpoint, Job, JobStatus
-from cozmo.jobs.persistence import JobStore
-from cozmo.orchestrator.task_store import TaskStore
-from cozmo.orchestrator.task_types import Task
-from cozmo.planner.models import Plan, PlanStep
-from cozmo.runtime.event_bus import EventBus
-from cozmo.services.continuation import ContinuationService
-from cozmo.services.recovery import INTERRUPT_EVENT, recover_interrupted_jobs
-from cozmo.timeline import JOB_INTERRUPTED, TimelineService
-from cozmo.timeline.timeline_store import TimelineStore
+from novi.jobs.job import Checkpoint, Job, JobStatus
+from novi.jobs.persistence import JobStore
+from novi.orchestrator.task_store import TaskStore
+from novi.orchestrator.task_types import Task
+from novi.planner.models import Plan, PlanStep
+from novi.runtime.event_bus import EventBus
+from novi.services.continuation import ContinuationService
+from novi.services.recovery import INTERRUPT_EVENT, recover_interrupted_jobs
+from novi.timeline import JOB_INTERRUPTED, TimelineService
+from novi.timeline.timeline_store import TimelineStore
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -62,7 +62,7 @@ def task_store(tmp_path):
 
 @pytest.fixture
 def job_store(tmp_path, monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
     return JobStore()
 
@@ -173,7 +173,7 @@ def test_startup_recovery_is_idempotent(task_store, job_store):
     assert set(job_store.list_ids()) == {"job-task-1"}
 
     # No duplicate checkpoint files were written by the second run.
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     cps = list((persistence.JOBS_DIR).glob("*.checkpoint.json"))
     from pathlib import Path
     assert len(list(Path(persistence.JOBS_DIR).glob("*.json"))) == 1
@@ -185,7 +185,7 @@ def test_startup_recovery_never_auto_resumes(task_store, job_store, monkeypatch)
     """Startup marks INTERRUPTED but executes nothing: submit + runtime = 0."""
     calls = {"submit": 0, "runtime_ctor": 0}
 
-    from cozmo.jobs.manager import JobManager
+    from novi.jobs.manager import JobManager
     orig_submit = JobManager.submit
 
     def spy_submit(self, *a, **k):
@@ -194,13 +194,13 @@ def test_startup_recovery_never_auto_resumes(task_store, job_store, monkeypatch)
 
     monkeypatch.setattr(JobManager, "submit", spy_submit)
 
-    import cozmo.runtime.runtime as runtime_mod
+    import novi.runtime.runtime as runtime_mod
 
     def boom(*a, **k):
         calls["runtime_ctor"] += 1
         raise AssertionError("startup recovery must never execute")
 
-    monkeypatch.setattr(runtime_mod, "CozmoRuntime", boom)
+    monkeypatch.setattr(runtime_mod, "NoviRuntime", boom)
 
     _seed(task_store, job_store, JobStatus.RUNNING)
     marked = recover_interrupted_jobs(job_store)
@@ -260,18 +260,18 @@ def test_interrupted_work_discoverable_by_continuation(task_store, job_store):
     assert rec.next_step == rec.checkpoint.step == 2
 
 
-# ── 9. CozmoContext composition hook ────────────────────────────────────────
+# ── 9. NoviContext composition hook ────────────────────────────────────────
 
 def test_context_recover_jobs_delegates_to_composition_hook(tmp_path,
                                                             monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
-    from cozmo.jobs.persistence import JobStore
+    from novi.jobs.persistence import JobStore
     store = JobStore()
     store.save(_job("job-ctx", "task-ctx", JobStatus.RUNNING, cp_step=1))
 
-    from cozmo.services.context import CozmoContext
-    ctx = CozmoContext(cfg={"ollama": {"url": "http://x"}})
+    from novi.services.context import NoviContext
+    ctx = NoviContext(cfg={"ollama": {"url": "http://x"}})
     bus = EventBus()
     marked = ctx.recover_jobs(bus=bus)
 

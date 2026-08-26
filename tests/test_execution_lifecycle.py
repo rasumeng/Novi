@@ -13,12 +13,12 @@ Covers:
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from cozmo.orchestrator.task_types import ExecutionPlan, Goal, IntentType, Task, TaskStatus
-from cozmo.planner import PlannerEngine
-from cozmo.planner.models import PlanStatus, PlanStepStatus
-from cozmo.runtime.event_bus import EventBus
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.orchestrator.task_types import ExecutionPlan, Goal, IntentType, Task, TaskStatus
+from novi.planner import PlannerEngine
+from novi.planner.models import PlanStatus, PlanStepStatus
+from novi.runtime.event_bus import EventBus
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
 
 
 # ── Fake model service ───────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ def run_plan(plan, task, chunks, max_steps=6):
     bus = EventBus()
     events = []
     bus.on_any(lambda ev: events.append(ev))
-    runtime = CozmoRuntime(model_service=fake, event_bus=bus)
+    runtime = NoviRuntime(model_service=fake, event_bus=bus)
     ctx = ExecutionContext(user_input="do the thing", execution_plan=exec_plan)
     kinds = [item[0] for item in runtime.run_stream(context=ctx)]
     return kinds, ctx, fake, bus, events, plan
@@ -198,7 +198,7 @@ class _FakeTaskStore:
 
 
 def _projection():
-    from cozmo.orchestrator.projection import TaskLifecycleProjection
+    from novi.orchestrator.projection import TaskLifecycleProjection
 
     store = _FakeTaskStore()
     plan, task = make_plan("task-6", 2, IntentType.CODING)
@@ -241,7 +241,7 @@ def test_task_projection_failure():
 
 def test_unplanned_single_loop_still_works():
     fake = FakeModel(["plain answer"])
-    runtime = CozmoRuntime(model_service=fake, event_bus=EventBus())
+    runtime = NoviRuntime(model_service=fake, event_bus=EventBus())
     ctx = ExecutionContext(user_input="hello")
     kinds = [item[0] for item in runtime.run_stream(context=ctx)]
     assert "token" in kinds
@@ -250,6 +250,6 @@ def test_unplanned_single_loop_still_works():
 
 def test_unplanned_run_returns_text():
     fake = FakeModel(["the final answer"])
-    runtime = CozmoRuntime(model_service=fake, event_bus=EventBus())
+    runtime = NoviRuntime(model_service=fake, event_bus=EventBus())
     result = runtime.run("do a thing")
     assert "final answer" in result

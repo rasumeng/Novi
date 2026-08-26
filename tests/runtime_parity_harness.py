@@ -17,11 +17,11 @@ from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage
 
-from cozmo.models import ModelUnavailableError
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.evidence import EvidenceBundle
-from cozmo.runtime.runtime import CozmoRuntime
-from cozmo.graphs import RuntimeWorkflowGraph
+from novi.models import ModelUnavailableError
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.evidence import EvidenceBundle
+from novi.runtime.runtime import NoviRuntime
+from novi.graphs import RuntimeWorkflowGraph
 
 
 # ── scripted collaborators ───────────────────────────────────────────────────
@@ -164,7 +164,7 @@ def run_workload(workload: str, *, engine: str, turns=None, tools=None,
     brain = FakeBrain()
     fx_tools = FakeToolExecutor(tool_results, fail=tool_fail)
 
-    rt = CozmoRuntime(
+    rt = NoviRuntime(
         model_service=service,
         brain=brain,
         runtime_graph=RuntimeWorkflowGraph(max_steps=6),

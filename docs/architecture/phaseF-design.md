@@ -2,7 +2,7 @@
 
 **Status:** Design (implemented in Brain V1, 2026-08). Companion to `docs/architecture/brain-architecture.md` and `docs/archive/phaseC-blueprint.md`.
 
-**Constraint:** This is a *cognitive completion* pass, not a storage redesign, not AGI research, not a new abstraction layer. Every proposal is anchored to the architecture that already exists (`cozmo/brain/`), and deferred work is listed explicitly.
+**Constraint:** This is a *cognitive completion* pass, not a storage redesign, not AGI research, not a new abstraction layer. Every proposal is anchored to the architecture that already exists (`novi/brain/`), and deferred work is listed explicitly.
 
 ---
 
@@ -10,9 +10,9 @@
 
 ### 1.1 Purpose
 
-Close the loop between "store and retrieve" and "understand what matters and how knowledge should evolve." Today Cozmo observes conversations, extracts atomic claims, groups them into scenarios, and retrieves them through a layered resolver. What is missing is the *cognitive layer* that turns those raw claims into a durable, self-maintaining model of the user: what remains true, what changed, what is important, and what should fade.
+Close the loop between "store and retrieve" and "understand what matters and how knowledge should evolve." Today Novi observes conversations, extracts atomic claims, groups them into scenarios, and retrieves them through a layered resolver. What is missing is the *cognitive layer* that turns those raw claims into a durable, self-maintaining model of the user: what remains true, what changed, what is important, and what should fade.
 
-The end state is not generality. It is a **reliable personal assistant**: Cozmo knows the user's stable preferences, tracks active work, surfaces the right knowledge for a question, and quietly updates itself over months of use without manual curation.
+The end state is not generality. It is a **reliable personal assistant**: Novi knows the user's stable preferences, tracks active work, surfaces the right knowledge for a question, and quietly updates itself over months of use without manual curation.
 
 ### 1.2 Scope — IN
 
@@ -48,7 +48,7 @@ The north star: **"A local AI assistant that understands the user, remembers imp
 
 ## 3. Cognitive Boundaries
 
-Cozmo must distinguish **observed facts** from **strongly supported conclusions** from **speculative assumptions**, and must not silently manufacture memories from weak inference.
+Novi must distinguish **observed facts** from **strongly supported conclusions** from **speculative assumptions**, and must not silently manufacture memories from weak inference.
 
 ### 3.1 Evidence grading
 
@@ -64,10 +64,10 @@ Every candidate item is classified against an evidence grade at extraction/conso
 
 - **Explicit beats inferred.** A directly stated preference (an explicit-confirmation match, `verification.is_confirm`) outranks any inferred one.
 - **One mention ≠ fact.** A single utterance ("I was up late last night") is a `CANDIDATE`, not a durable preference ("Robert prefers working late"). It only becomes durable through repetition or explicit restatement.
-- **No silent synthesis.** The projection's rollups ("Cozmo — local AI assistant") are derived grouping of *stated* items, never fabricated attributes. The projection never invents a claim Cozmo was not told.
+- **No silent synthesis.** The projection's rollups ("Novi — local AI assistant") are derived grouping of *stated* items, never fabricated attributes. The projection never invents a claim Novi was not told.
 - **Uncertainty is visible.** Each item carries a `status` + `confidence`; consumers and the trust surface can tell fact from assumption at a glance.
 
-### 3.3 What Cozmo should and should not infer
+### 3.3 What Novi should and should not infer
 
 - **May infer:** sustained patterns from repeated, explicit evidence (preference, tool usage, project focus).
 - **Must not infer:** moods, personality, health, finances, relationships, or "working late" style habits from isolated mentions.
@@ -97,7 +97,7 @@ A personal assistant must remember correctly *and* responsibly. Trust rests on t
 
 Provide a **memory inspection surface** (a tool/subcommand backed by the read path, no new store):
 
-- List what Cozmo remembers, grouped by category (projection output).
+- List what Novi remembers, grouped by category (projection output).
 - Show each item's `status`, `confidence`, `last_seen_at`, and source conversation.
 - Show supersession/conflict history (edge endpoints).
 - Reveal which items were **inferred** vs **explicit** vs **decayed**.
@@ -165,7 +165,7 @@ The mechanism already exists (`promotion.decide` + `verification.corroboration`)
 
 ### 6.3 Bounded reflection coordinator (new, thin)
 
-A small pure module, `cozmo/brain/reasoning/reflection.py`, guards `Brain.reflect()`:
+A small pure module, `novi/brain/reasoning/reflection.py`, guards `Brain.reflect()`:
 
 - **Budget:** process at most `N` candidate items per pass (default ~200). Deterministic ordering (oldest `last_seen_at` first). Protects against unbounded LLM/scan cost and against runaway growth.
 - **Trigger gating:** assistant decides *whether* a reflection pass is warranted from cheap signals (§8.2). It does not create a new background subsystem.
@@ -217,11 +217,11 @@ Decay is a *read-time* reweight plus an *occasional* consolidation demotion — 
 
 ### 7.3 Example (from the prompt)
 
-- "Robert is working on Cozmo."
+- "Robert is working on Novi."
 - "Robert redesigned the memory system."
-- "Robert wants Cozmo to become a personal assistant."
+- "Robert wants Novi to become a personal assistant."
 
-These are three separate extraction batches producing `CANDIDATE` items tagged `project`/`goal`. Corroboration (shared terms: *robert*, *cozmo*) advances them toward `VERIFIED`. The projection groups the goal-tagged item into the **Identity → Goal** bucket for "personal assistant," and the project-tagged items into the **Project: Cozmo** bucket. Storage still holds three atomic history rows; the *projection* synthesizes "Cozmo — local AI assistant, cognitive architecture focus, active development." No merge destroys history.
+These are three separate extraction batches producing `CANDIDATE` items tagged `project`/`goal`. Corroboration (shared terms: *robert*, *novi*) advances them toward `VERIFIED`. The projection groups the goal-tagged item into the **Identity → Goal** bucket for "personal assistant," and the project-tagged items into the **Project: Novi** bucket. Storage still holds three atomic history rows; the *projection* synthesizes "Novi — local AI assistant, cognitive architecture focus, active development." No merge destroys history.
 
 ---
 
@@ -269,7 +269,7 @@ Reflection writes only through the existing status/edge mutations (`update_statu
 ### 9.2 Contradictions
 
 - **Handler:** On a newly `VERIFIED` claim that conflicts with an existing `VERIFIED` item, mark the old item `SUPERSEDED` and write `ConflictRelationship(source=new, target=old, kind=CONFLICTS_WITH)` (plus `SUPERSEDES`). The old row keeps its token history; retrieval excludes it.
-- **No deletion.** "Robert uses a TUI" → "Robert migrated Cozmo to WebUI" = old `TUI` claim `SUPERSEDED` with a `supersedes` edge. Both facts remain inspectable; current state is derived from the newest non-superseded claim. The same rule makes user corrections append-only (§4.4).
+- **No deletion.** "Robert uses a TUI" → "Robert migrated Novi to WebUI" = old `TUI` claim `SUPERSEDED` with a `supersedes` edge. Both facts remain inspectable; current state is derived from the newest non-superseded claim. The same rule makes user corrections append-only (§4.4).
 
 ### 9.3 Temporal knowledge
 
@@ -320,7 +320,7 @@ Identify layer items + active scenarios + project anchors
 
 ---
 
-## 11. What Belongs in Cozmo V1
+## 11. What Belongs in Novi V1
 
 | # | Feature | Anchored to existing code | Complexity |
 |---|---|---|---|
@@ -340,11 +340,11 @@ All nine extend what exists. None introduce a new storage system or a new backgr
 
 ## 12. Deferred to Future Research
 
-- **Self-improvement loops / meta-learning** — Cozmo does not rewrite its own extraction prompt based on outcomes.
+- **Self-improvement loops / meta-learning** — Novi does not rewrite its own extraction prompt based on outcomes.
 - **Autonomous long-horizon goals** — scenario *regrouping* and *project anchoring from content* stays manual (already listed OUT in `phaseC-blueprint.md` §2).
 - **Learned relevance ranking** — the reweight/tiering function is static; a learned model is future work, out of V1 scope.
 - **Emotional / hedonic memory** — beyond "useful personalization," out of scope.
-- **Federated or cloud-shared memory** — Cozmo is local-first.
+- **Federated or cloud-shared memory** — Novi is local-first.
 - **Graph reasoning over the full relationship graph** — V1 uses edges for supersede/conflict provenance only; general path traversal is future work.
 - **Adaptive forgetting heuristics** — decay horizons are constant in V1; personalization of decay is future work.
 
@@ -373,7 +373,7 @@ All nine extend what exists. None introduce a new storage system or a new backgr
 2. A contradiction produces a `supersedes`/`conflicts_with` edge and preserves both histories.
 3. Old, un-corroborated claims decay in retrieval priority and drop out of the personal projection.
 4. A rarely-mentioned stable preference outranks a recently discussed temporary topic.
-5. Personal projection answers "what does Cozmo know about me" from Identity + Scenarios + Projects, with no new storage and no invented attributes.
+5. Personal projection answers "what does Novi know about me" from Identity + Scenarios + Projects, with no new storage and no invented attributes.
 6. Memory is inspectable and correctable; user corrections are append-only.
 7. `Brain.recall` returns important, verified, scenario-appropriate knowledge by default.
 8. Every write is append-only (supersede/archive), never an in-place mutation.

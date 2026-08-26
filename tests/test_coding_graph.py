@@ -2,7 +2,7 @@
 
 Prove the coding graph:
   - composes understand→plan→implement→verify as explicit transitions
-  - receives the model from Cozmo (state["model"]) and never resolves one
+  - receives the model from Novi (state["model"]) and never resolves one
   - delegates implement attempts to the injected run_loop (the runtime's
     ReAct loop) and preserves its stream events for replay
   - re-implements (bounded) on empty / max_steps outcomes
@@ -12,7 +12,7 @@ Prove the coding graph:
 
 import pytest
 
-from cozmo.graphs import CodingGraph
+from novi.graphs import CodingGraph
 
 
 class _StubModel:
@@ -99,7 +99,7 @@ def test_graph_uses_state_model_over_construction_model():
 def test_graph_never_resolves_model():
     """The graph module must not import any model-selection authority."""
     import inspect
-    import cozmo.graphs.coding_graph as mod
+    import novi.graphs.coding_graph as mod
 
     src = inspect.getsource(mod)
     forbidden = (
@@ -114,7 +114,7 @@ def test_graph_never_resolves_model():
 def test_graph_state_has_no_configuration_or_checkpoint():
     """Graph state carries only per-run workflow fields."""
     import inspect
-    from cozmo.graphs import state as st
+    from novi.graphs import state as st
 
     src = inspect.getsource(st)
     forbidden = ("checkpointer", "checkpoint", "llm.workloads",
@@ -206,8 +206,8 @@ def test_runtime_coding_intent_goes_through_graph():
 
     from langchain_core.messages import AIMessage
 
-    from cozmo.runtime.execution_context import ExecutionContext
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.execution_context import ExecutionContext
+    from novi.runtime.runtime import NoviRuntime
 
     streamed = {"tokens": []}
 
@@ -241,7 +241,7 @@ def test_runtime_coding_intent_goes_through_graph():
     )
 
     graph = CodingGraph()
-    rt = CozmoRuntime(model_service=_ModelService(), coding_graph=graph,
+    rt = NoviRuntime(model_service=_ModelService(), coding_graph=graph,
                       cfg={"runtime": {"temperature": 0.2}})
 
     ctx = ExecutionContext(user_input="add a logging helper")

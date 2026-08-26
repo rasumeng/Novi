@@ -37,25 +37,25 @@ import threading
 
 import pytest
 
-from cozmo.configuration.manager import Configuration
-from cozmo.configuration.bootstrap import build_registry as _build_registry
-from cozmo.connectors import (
+from novi.configuration.manager import Configuration
+from novi.configuration.bootstrap import build_registry as _build_registry
+from novi.connectors import (
     ConnectorAlreadyRegisteredError,
     ConnectorDefinition,
     ConnectorRegistry,
     UnknownConnectorError,
 )
-from cozmo.runtime.mcp_permissions import MCPPermissionGate, classify_operation
-from cozmo.runtime.tool_registry import ToolRegistry
+from novi.runtime.mcp_permissions import MCPPermissionGate, classify_operation
+from novi.runtime.tool_registry import ToolRegistry
 
 
 # ── helper: real PermissionResolver-backed executor ─────────────────────────
 
 
 def _make_executor(registry, cfg, *, gate=None, lesson_dir=None, perm_mode="manual"):
-    from cozmo.runtime.permissions import PermissionResolver
-    from cozmo.runtime.lessons import LessonStore
-    from cozmo.runtime.tool_executor import ToolExecutor
+    from novi.runtime.permissions import PermissionResolver
+    from novi.runtime.lessons import LessonStore
+    from novi.runtime.tool_executor import ToolExecutor
 
     perms = PermissionResolver(cfg, auto=False)
     lesson_store = LessonStore(persist_dir=str(lesson_dir)) if lesson_dir else object()
@@ -271,7 +271,7 @@ class FakeHost:
 @pytest.fixture
 def mcp_manager(monkeypatch):
     FakeHost.reset()
-    from cozmo.runtime.providers import mcp as mcp_mod
+    from novi.runtime.providers import mcp as mcp_mod
 
     monkeypatch.setattr(mcp_mod, "MCPHost", FakeHost)
     registry = ToolRegistry()
@@ -365,7 +365,7 @@ class FakeBotFactory:
 
 
 def test_telegram_represented_by_registry_and_lifecycle_works():
-    from cozmo.services.telegram import TelegramLifecycle
+    from novi.services.telegram import TelegramLifecycle
 
     factory = FakeBotFactory()
     life = TelegramLifecycle(object(), bot_factory=factory)
@@ -384,7 +384,7 @@ def test_telegram_represented_by_registry_and_lifecycle_works():
 
 
 def test_telegram_enable_disable_intact_behind_registry():
-    from cozmo.services.telegram import TelegramLifecycle
+    from novi.services.telegram import TelegramLifecycle
 
     factory = FakeBotFactory()
     life = TelegramLifecycle(object(), bot_factory=factory)
@@ -403,7 +403,7 @@ def test_telegram_enable_disable_intact_behind_registry():
 
 
 def test_telegram_status_never_exposes_token():
-    from cozmo.services.telegram import TelegramLifecycle
+    from novi.services.telegram import TelegramLifecycle
 
     factory = FakeBotFactory()
     life = TelegramLifecycle(object(), bot_factory=factory)
@@ -611,7 +611,7 @@ def test_deny_modes_and_session_rules_unaffected(tmp_path):
 
 def test_webui_connectors_status_endpoint(monkeypatch):
     """``GET /api/connectors/status`` relays the registry's secret-free statuses."""
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
     registry = ConnectorRegistry()
@@ -641,7 +641,7 @@ def test_webui_connectors_status_endpoint(monkeypatch):
 
 
 def test_webui_connectors_status_empty_when_no_backend(monkeypatch):
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
     ws._shared_backend = None

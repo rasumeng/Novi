@@ -15,7 +15,7 @@ Milestone contract:
     runtime→jobs/task lifecycle, orchestrator→execution mechanics).
 
 The guards are deliberate friction: changing a boundary forces editing this
-file AND the contract in cozmo/orchestrator/task_types.py.
+file AND the contract in novi/orchestrator/task_types.py.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import ast
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-COZMO_SRC = PROJECT_ROOT / "cozmo"
+NOVI_SRC = PROJECT_ROOT / "novi"
 
 
 # ── Documented field snapshots ──────────────────────────────────────────────
@@ -103,7 +103,7 @@ JOBS_FORBIDDEN = frozenset({"orchestrator", "runtime"})
 
 # Phase 4 (durable execution lifecycle) — the Runtime must not pull in the
 # Job store/manager directly; it only emits plan/step events that a
-# composition-root coordinator (cozmo/services) translates into Jobs.
+# composition-root coordinator (novi/services) translates into Jobs.
 RUNTIME_STORE_TOKENS = frozenset(
     {"JobStore", "JobManager", "job_store", "job_manager"}
 )
@@ -112,7 +112,7 @@ RUNTIME_STORE_TOKENS = frozenset(
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _read(*parts: str) -> str:
-    return (COZMO_SRC.joinpath(*parts)).read_text("utf-8", errors="replace")
+    return (NOVI_SRC.joinpath(*parts)).read_text("utf-8", errors="replace")
 
 
 def _parse(text: str) -> ast.Module:
@@ -203,7 +203,7 @@ def test_job_does_not_own_plan_or_goal():
 def test_jobs_does_not_import_orchestrator_or_runtime():
     """Job links to a Task by id string only — never by Task object/state."""
     violations = []
-    for p in (COZMO_SRC / "jobs").glob("*.py"):
+    for p in (NOVI_SRC / "jobs").glob("*.py"):
         rel = p.relative_to(PROJECT_ROOT)
         violations += [
             f"{rel}/{v}" for v in _forbidden_imports(p.read_text(encoding="utf-8"), JOBS_FORBIDDEN)
@@ -212,12 +212,12 @@ def test_jobs_does_not_import_orchestrator_or_runtime():
 
 
 def test_runtime_does_not_import_job_or_task_lifecycle():
-    """CozmoRuntime executes; it must not own Job or Task lifecycle."""
+    """NoviRuntime executes; it must not own Job or Task lifecycle."""
     # Legacy engine.py (which consumed Job.Checkpoint) was removed in Phase 3;
     # every runtime/ module must stay import-clean.
     allowed = set()
     violations = []
-    for p in (COZMO_SRC / "runtime").glob("*.py"):
+    for p in (NOVI_SRC / "runtime").glob("*.py"):
         if p.name in allowed:
             continue
         rel = p.relative_to(PROJECT_ROOT)
@@ -230,11 +230,11 @@ def test_runtime_does_not_import_job_or_task_lifecycle():
 def test_runtime_never_names_job_store_or_manager():
     """Phase 4: Runtime stays execution-only — no direct JobStore/JobManager use.
 
-    The durable execution coordinator lives in cozmo/services, which may
+    The durable execution coordinator lives in novi/services, which may
     import everything; runtime must not grow a backdoor into persistence.
     """
     violations = []
-    for f in (COZMO_SRC / "runtime").glob("*.py"):
+    for f in (NOVI_SRC / "runtime").glob("*.py"):
         rel = f.relative_to(PROJECT_ROOT)
         text = f.read_text("utf-8")
         for i, line in enumerate(text.splitlines(), 1):
@@ -274,7 +274,7 @@ def test_task_does_not_gain_checkpoint_field():
 def test_orchestrator_does_not_import_execution_mechanics_or_jobs():
     """Orchestrator creates/lanes a Task — it never executes or runs jobs."""
     violations = []
-    for p in (COZMO_SRC / "orchestrator").glob("*.py"):
+    for p in (NOVI_SRC / "orchestrator").glob("*.py"):
         rel = p.relative_to(PROJECT_ROOT)
         violations += [
             f"{rel}/{v}" for v in _forbidden_imports(p.read_text("utf-8"), ORCHESTRATOR_FORBIDDEN)

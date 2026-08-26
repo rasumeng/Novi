@@ -6,8 +6,8 @@ coordinates Task + Plan creation at the pipeline boundary.
 
 import pytest
 
-from cozmo.orchestrator.task_types import IntentType, Task, Goal, TaskStatus, ExecutionStrategy
-from cozmo.planner import (
+from novi.orchestrator.task_types import IntentType, Task, Goal, TaskStatus, ExecutionStrategy
+from novi.planner import (
     DEFAULT_STEP_TEMPLATES,
     Plan,
     PlanStep,
@@ -146,8 +146,8 @@ def test_plan_step_to_dict():
 
 @pytest.fixture
 def orchestrator(tmp_path):
-    from cozmo.orchestrator.orchestrator import Orchestrator
-    from cozmo.orchestrator.task_store import TaskStore
+    from novi.orchestrator.orchestrator import Orchestrator
+    from novi.orchestrator.task_store import TaskStore
 
     return Orchestrator(
         task_store=TaskStore(persist_dir=str(tmp_path / "tasks")),
@@ -187,7 +187,7 @@ def test_orchestrator_persists_plan_with_task(orchestrator):
 
 
 def test_orchestrator_without_planner_leaves_plan_none():
-    from cozmo.orchestrator.orchestrator import Orchestrator
+    from novi.orchestrator.orchestrator import Orchestrator
 
     bare = Orchestrator()  # no task_store, no planner → forward-compatible no-op
     plan = bare.plan("hello")

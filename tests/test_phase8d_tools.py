@@ -13,8 +13,8 @@ and graphs must never execute tools directly regardless of metadata.
 import ast
 import inspect
 
-from cozmo.runtime.tool_registry import ToolInfo, ToolRegistry, TOOL_CATEGORIES
-from cozmo.runtime.tool_risk import ToolRisk, get_tool_risk
+from novi.runtime.tool_registry import ToolInfo, ToolRegistry, TOOL_CATEGORIES
+from novi.runtime.tool_risk import ToolRisk, get_tool_risk
 
 
 def test_toolinfo_derives_risk_and_side_effects():
@@ -57,7 +57,7 @@ def test_registry_entries_carry_metadata():
 def test_no_duplicate_risk_tables_outside_authority():
     """The risk vocabulary must live in exactly one module. Any other
     production module defining a _DEFAULT_RISK-style table fails."""
-    import cozmo.runtime as rt_pkg
+    import novi.runtime as rt_pkg
     from pathlib import Path
 
     root = Path(rt_pkg.__file__).parent
@@ -86,10 +86,10 @@ def test_graphs_cannot_execute_tools_directly():
     The graphs orchestrate; ToolExecutor executes. This guard complements the
     runtime-side permission pipeline tests.
     """
-    import cozmo.graphs.coding_graph as cg
-    import cozmo.graphs.research_graph as rg
-    import cozmo.graphs.coding_intel as ci_mod
-    import cozmo.graphs.research_intel as ri_mod
+    import novi.graphs.coding_graph as cg
+    import novi.graphs.research_graph as rg
+    import novi.graphs.coding_intel as ci_mod
+    import novi.graphs.research_intel as ri_mod
 
     forbidden_imports = (
         "tool_executor", "tool_registry", "subprocess", "multiprocessing",
@@ -120,7 +120,7 @@ def test_graphs_cannot_execute_tools_directly():
 def test_metadata_never_becomes_execution_authority():
     """Executor decisions keep using their own pipeline: mutating the
     descriptive metadata of a registered tool must not change gating."""
-    from cozmo.runtime.tool_executor import ToolExecutor
+    from novi.runtime.tool_executor import ToolExecutor
 
     class _Allow:
         def resolve(self, *a, **k):

@@ -14,11 +14,11 @@ G  evaluation results disclose scripted/staged provenance
 
 import pytest
 
-from cozmo.graphs import CodingGraph, ResearchGraph
-from cozmo.graphs import coding_intel as ci
-from cozmo.graphs import research_intel as ri
-from cozmo.evidence.conflicts import ConflictDetector, MAJOR
-from cozmo.evidence.context import Fact
+from novi.graphs import CodingGraph, ResearchGraph
+from novi.graphs import coding_intel as ci
+from novi.graphs import research_intel as ri
+from novi.evidence.conflicts import ConflictDetector, MAJOR
+from novi.evidence.context import Fact
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ class _JsonModel:
 
 def _bundle(quality=None, text="grounding evidence text for key",
             results=None, error=None, query="q"):
-    from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
+    from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
 
     return EvidenceBundle(
         query=query,
@@ -296,7 +296,7 @@ def test_D_different_metrics_not_flagged():
 def test_D_pipeline_surfaces_realistic_contradiction():
     """Full seam: retrieval bundles → EvidenceProcessor extraction →
     ConflictDetector → collect_conflicts output."""
-    from cozmo.tools.search_pipeline import SearchResult
+    from novi.tools.search_pipeline import SearchResult
 
     body_a = ("Acme reported revenue of 96 billion dollars in 2024. The "
               "company expanded margins during the year.")
@@ -304,7 +304,7 @@ def test_D_pipeline_surfaces_realistic_contradiction():
               "company faced headwinds during the year.")
 
     def bundle(url, body):
-        from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
+        from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
         return EvidenceBundle(
             query="acme revenue 2024", merged_text=body, source_count=1,
             quality=RetrievalQuality.SUFFICIENT,
@@ -481,8 +481,8 @@ def test_F_timeout_does_not_trigger_repair():
 
 
 def test_G_research_driver_discloses_scripted_mode():
-    from cozmo.evaluation import BenchmarkCase
-    from cozmo.evaluation.drivers import CodingEvalDriver, ResearchEvalDriver
+    from novi.evaluation import BenchmarkCase
+    from novi.evaluation.drivers import CodingEvalDriver, ResearchEvalDriver
 
     driver = ResearchEvalDriver()  # offline default
     case = BenchmarkCase(id="REM-R1", input="question one",
@@ -497,8 +497,8 @@ def test_G_research_driver_discloses_scripted_mode():
 
 
 def test_G_coding_driver_flags_staged_repair():
-    from cozmo.evaluation import BenchmarkCase
-    from cozmo.evaluation.drivers import CodingEvalDriver
+    from novi.evaluation import BenchmarkCase
+    from novi.evaluation.drivers import CodingEvalDriver
 
     staged = {
         "files": {"app.py": "def add(a, b):\n    raise NotImplementedError\n"},
@@ -524,9 +524,9 @@ def test_G_coding_driver_flags_staged_repair():
 
 
 def test_G_metrics_surface_staged_repair_rate():
-    from cozmo.evaluation.metrics import CaseResult
-    from cozmo.evaluation import BenchmarkCase
-    from cozmo.evaluation import MetricCollector
+    from novi.evaluation.metrics import CaseResult
+    from novi.evaluation import BenchmarkCase
+    from novi.evaluation import MetricCollector
 
     case = BenchmarkCase(id="X", input="i", expected_intent="coding")
     r1 = CaseResult(case=case, intent="coding")
@@ -539,8 +539,8 @@ def test_G_metrics_surface_staged_repair_rate():
 
 
 def test_G_case_result_round_trip_carries_provenance():
-    from cozmo.evaluation.metrics import CaseResult
-    from cozmo.evaluation import BenchmarkCase
+    from novi.evaluation.metrics import CaseResult
+    from novi.evaluation import BenchmarkCase
 
     r = CaseResult(case=BenchmarkCase(id="Z", input="in"),
                    intent="coding", driver_mode="scripted",
@@ -552,8 +552,8 @@ def test_G_case_result_round_trip_carries_provenance():
 
 
 def test_G_compare_flags_coding_regression():
-    from cozmo.evaluation import RegressionDetector
-    from cozmo.evaluation.metrics import CodingMetrics, MetricSet
+    from novi.evaluation import RegressionDetector
+    from novi.evaluation.metrics import CodingMetrics, MetricSet
 
     base = MetricSet(coding=CodingMetrics(task_completion=1.0))
     cand = MetricSet(coding=CodingMetrics(task_completion=0.8))
@@ -563,8 +563,8 @@ def test_G_compare_flags_coding_regression():
 
 
 def test_G_research_result_records_incomplete_coverage():
-    from cozmo.evaluation import BenchmarkCase
-    from cozmo.evaluation.drivers import ResearchEvalDriver
+    from novi.evaluation import BenchmarkCase
+    from novi.evaluation.drivers import ResearchEvalDriver
 
     searches = []
 

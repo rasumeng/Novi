@@ -3,8 +3,8 @@
 from unittest.mock import patch
 
 import pytest
-from cozmo.tools.search_pipeline import SearchResult
-from cozmo.runtime.evidence import EvidenceCollector, EvidenceBundle, _domain
+from novi.tools.search_pipeline import SearchResult
+from novi.runtime.evidence import EvidenceCollector, EvidenceBundle, _domain
 
 
 def test_domain_extracts_netloc():
@@ -133,7 +133,7 @@ class TestEvidenceCollectorIntegration:
     def test_collect_no_results(self):
         """Search returning no results yields an empty bundle."""
         collector = EvidenceCollector()
-        with patch("cozmo.runtime.evidence._search_multi", return_value=([], None)):
+        with patch("novi.runtime.evidence._search_multi", return_value=([], None)):
             bundle = collector.collect("zxvzxcvasdfqwer")
         assert isinstance(bundle, EvidenceBundle)
         assert bundle.source_count == 0

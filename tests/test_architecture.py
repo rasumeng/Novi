@@ -7,10 +7,10 @@ Prevent re-introduction of anti-patterns eliminated in Phase E:
 
 Phase B rule guards:
   - Runtime never writes to storage directly (Rule #2): storage
-    internals stay confined to cozmo/brain/ and the composition root.
+    internals stay confined to novi/brain/ and the composition root.
 
 Phase C rule guards:
-  - The reasoning tier is pure: cozmo/brain/reasoning/ imports no storage.
+  - The reasoning tier is pure: novi/brain/reasoning/ imports no storage.
   - Brain.observe no longer calls the legacy MemoryManager write path.
 """
 
@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-COZMO_SRC = PROJECT_ROOT / "cozmo"
+NOVI_SRC = PROJECT_ROOT / "novi"
 
 # Model names that should NEVER appear in production code
 # (config defaults are the single exception)
@@ -35,12 +35,12 @@ HARDCODED_MODEL_PATTERNS = [
 # Ollama protocol keys (e.g. ``llama.context_length``) that are GGUF metadata
 # field names, not model names.
 ALLOWED_HARDCODE_FILES = {
-    "cozmo/ollama_util.py",    # deleted — no longer exists
-    "cozmo/ollama.py",         # Ollama process mgmt (start/stop/check)
-    "cozmo/cli.py",            # Ollama process mgmt integration
-    "cozmo/configuration/model_seeds.py",   # curated, NON-authoritative seed facts
-    "cozmo/configuration/name_inference.py",  # isolated weak name heuristics
-    "cozmo/configuration/runtime_inventory.py",  # Ollama protocol/GGUF key names
+    "novi/ollama_util.py",    # deleted — no longer exists
+    "novi/ollama.py",         # Ollama process mgmt (start/stop/check)
+    "novi/cli.py",            # Ollama process mgmt integration
+    "novi/configuration/model_seeds.py",   # curated, NON-authoritative seed facts
+    "novi/configuration/name_inference.py",  # isolated weak name heuristics
+    "novi/configuration/runtime_inventory.py",  # Ollama protocol/GGUF key names
 }
 
 # Model-name substrings used by name inference and evidence layers. They must
@@ -66,7 +66,7 @@ RETIRED_VOCABULARY = [
     "KNOWN_MODEL_FACTS",
 ]
 
-# Provider SDKs that only cozmo/providers/ may import
+# Provider SDKs that only novi/providers/ may import
 PROVIDER_ONLY_IMPORTS = [
     "ChatOllama",
     "langchain_ollama",
@@ -76,9 +76,9 @@ PROVIDER_ONLY_IMPORTS = [
 ]
 
 ALLOWED_PROVIDER_DIRS = {
-    "cozmo/providers",
-    "cozmo/runtime/providers",
-    "cozmo/runtime/models",
+    "novi/providers",
+    "novi/runtime/providers",
+    "novi/runtime/models",
 }
 
 
@@ -96,8 +96,8 @@ def _iter_py_files(root: Path, exclude_dirs=None):
 
 
 def _iter_frontend_files():
-    """Yield all .ts/.tsx source files under cozmo/webui/src."""
-    src = COZMO_SRC / "webui" / "src"
+    """Yield all .ts/.tsx source files under novi/webui/src."""
+    src = NOVI_SRC / "webui" / "src"
     if not src.exists():
         return
     for path in src.rglob("*"):
@@ -116,9 +116,9 @@ def _is_docstring(node: ast.AST) -> bool:
 # ── Test 1: No hardcoded model names ────────────────────────────────────
 
 def test_no_hardcoded_model_names():
-    """Fail if any .py file in cozmo/ contains hardcoded model names."""
+    """Fail if any .py file in novi/ contains hardcoded model names."""
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         if rel in ALLOWED_HARDCODE_FILES:
             continue
@@ -149,11 +149,11 @@ def test_no_model_name_substring_conditionals():
     ``in`` is the retired anti-pattern.
     """
     allowed = {
-        "cozmo/configuration/model_seeds.py",
-        "cozmo/configuration/name_inference.py",
+        "novi/configuration/model_seeds.py",
+        "novi/configuration/name_inference.py",
     }
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         if rel in allowed:
             continue
@@ -182,7 +182,7 @@ def test_no_retired_model_vocabulary():
     table name are all retired — in Python and in the frontend.
     """
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         if pyfile.suffix not in (".py", ".ts", ".tsx"):
             continue
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
@@ -257,7 +257,7 @@ def test_name_inference_never_used_by_runtime():
     must rely only on seed facts + measured runtime evidence, never a name
     substring.
     """
-    runtime_dir = COZMO_SRC / "runtime"
+    runtime_dir = NOVI_SRC / "runtime"
     for pyfile in runtime_dir.rglob("*.py"):
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -274,7 +274,7 @@ def test_name_inference_never_used_by_runtime():
 def test_provider_boundary():
     """Fail if provider-specific SDKs are imported outside allowed dirs."""
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC, exclude_dirs=["tests"]):
+    for pyfile in _iter_py_files(NOVI_SRC, exclude_dirs=["tests"]):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         is_allowed = any(rel.startswith(d) for d in ALLOWED_PROVIDER_DIRS)
         if is_allowed:
@@ -299,8 +299,8 @@ def test_model_resolution_ownership():
     """Fail if model resolution code bypasses ModelService.
 
     Allowed resolution entry points:
-      - cozmo/models/service.py (ModelService)
-      - cozmo/providers/base.py (LLMProvider base)
+      - novi/models/service.py (ModelService)
+      - novi/providers/base.py (LLMProvider base)
       - tests/
     """
     # Patterns that indicate model resolution
@@ -311,11 +311,11 @@ def test_model_resolution_ownership():
         "parse_model_spec",
     ]
     bypass_files = {
-        "cozmo/runtime/model_selector.py",  # ModelSelector — owned by runtime, allowed
-        "cozmo/runtime/models/factory.py",  # ModelRuntime — thin provider boundary, allowed
+        "novi/runtime/model_selector.py",  # ModelSelector — owned by runtime, allowed
+        "novi/runtime/models/factory.py",  # ModelRuntime — thin provider boundary, allowed
     }
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         if rel in bypass_files:
             continue
@@ -341,7 +341,7 @@ def test_runtime_does_not_touch_storage_internals():
     """Rule #2: the Runtime reports events; the Brain decides persistence.
 
     Storage implementation details (sqlite3, the store classes) may appear
-    only in cozmo/brain/ and in the composition root (services/context.py)
+    only in novi/brain/ and in the composition root (services/context.py)
     that wires the Brain. Any other production module importing them is a
     Rule #2 violation.
     """
@@ -350,10 +350,10 @@ def test_runtime_does_not_touch_storage_internals():
         "RelationshipStore", "conversation_store", "scenario_store",
         "vector_store", "relationship_store",
     ]
-    allowed_prefixes = ("cozmo/brain/",)
-    allowed_files = {"cozmo/services/context.py"}
+    allowed_prefixes = ("novi/brain/",)
+    allowed_files = {"novi/services/context.py"}
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         if rel in allowed_files or any(rel.startswith(p) for p in allowed_prefixes):
             continue
@@ -366,7 +366,7 @@ def test_runtime_does_not_touch_storage_internals():
                     violations.append(f"{rel}:{i}: {line.strip()[:80]}")
     if violations:
         raise AssertionError(
-            "Storage internals leaked outside cozmo/brain/ (Rule #2):\n"
+            "Storage internals leaked outside novi/brain/ (Rule #2):\n"
             + "\n".join(violations)
         )
 
@@ -374,12 +374,12 @@ def test_runtime_does_not_touch_storage_internals():
 # ── Test 5: Reasoning tier is pure ─────────────────────────────────────
 
 def test_reasoning_tier_has_no_storage_imports():
-    """Phase C: cozmo/brain/reasoning/ operates on Brain objects only.
+    """Phase C: novi/brain/reasoning/ operates on Brain objects only.
 
     No sqlite3, no LanceDB, no store classes, no storage module imports.
     Persistence lives in layers/Brain, never in reasoning.
     """
-    reasoning_dir = COZMO_SRC / "brain" / "reasoning"
+    reasoning_dir = NOVI_SRC / "brain" / "reasoning"
     if not reasoning_dir.exists():
         return
     forbidden = [
@@ -415,7 +415,7 @@ def test_brain_documents_append_only_rule():
     docstring must state this contract so future retrieval/brain-intelligence
     work builds against frozen semantics.
     """
-    brain_file = COZMO_SRC / "brain" / "brain.py"
+    brain_file = NOVI_SRC / "brain" / "brain.py"
     text = brain_file.read_text("utf-8", errors="replace")
     if "append-only" not in text:
         raise AssertionError(
@@ -430,7 +430,7 @@ def test_brain_does_not_register_in_place_mutation():
     ``.confidence =`` / ``.content =`` assignment on a stored item is the
     anti-pattern this rule forbids.
     """
-    brain_dir = COZMO_SRC / "brain"
+    brain_dir = NOVI_SRC / "brain"
     violations = []
     for pyfile in brain_dir.rglob("*.py"):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
@@ -457,30 +457,30 @@ def test_brain_observe_does_not_call_legacy_memory():
     Only the brain=None runtime/WebUI fallbacks and MemoryManager itself may
     reference add_interaction.
     """
-    brain_file = COZMO_SRC / "brain" / "brain.py"
+    brain_file = NOVI_SRC / "brain" / "brain.py"
     text = brain_file.read_text("utf-8", errors="replace")
     for i, line in enumerate(text.splitlines(), 1):
         if _is_comment(line):
             continue
         if "add_interaction" in line:
             raise AssertionError(
-                f"cozmo/brain/brain.py:{i}: legacy add_interaction still called from Brain"
+                f"novi/brain/brain.py:{i}: legacy add_interaction still called from Brain"
             )
 
 
 # ── Phase 7 Stage 1 — ModelRuntime architecture guards ───────────────────
 
 def _iter_runtime_files():
-    """Yield all .py files under cozmo/runtime/ (incl. runtime/models/)."""
-    return _iter_py_files(COZMO_SRC / "runtime")
+    """Yield all .py files under novi/runtime/ (incl. runtime/models/)."""
+    return _iter_py_files(NOVI_SRC / "runtime")
 
 
 # ── Guard 1 — no hardcoded model IDs in the runtime ──────────────────────
 
 def test_no_hardcoded_model_ids_in_runtime():
-    """The runtime (incl. cozmo/runtime/models/) must contain no model IDs.
+    """The runtime (incl. novi/runtime/models/) must contain no model IDs.
 
-    The runtime receives ``selected_model.model`` from Cozmo's resolver; a
+    The runtime receives ``selected_model.model`` from Novi's resolver; a
     literal model name must never appear in runtime execution code.
     """
     violations = []
@@ -506,7 +506,7 @@ def test_runtime_no_model_name_substring_conditionals():
     """Model-name substrings must never drive runtime logic.
 
     The runtime never branches on a model name; resolution happens strictly
-    upstream in Cozmo's model-selection system.
+    upstream in Novi's model-selection system.
     """
     violations = []
     for pyfile in _iter_runtime_files():
@@ -529,13 +529,13 @@ def test_runtime_no_model_name_substring_conditionals():
 
 def test_langchain_model_construction_confined():
     """ChatOllama / ChatOpenAI construction imports stay inside the provider
-    boundary (cozmo/providers/, cozmo/runtime/models/).
+    boundary (novi/providers/, novi/runtime/models/).
 
     Message-type imports from langchain_core in the runtime remain allowed —
     they are not model construction.
     """
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         is_allowed = any(rel.startswith(d) for d in ALLOWED_PROVIDER_DIRS)
         if is_allowed:
@@ -585,9 +585,9 @@ def test_runtime_does_not_import_recommendation():
 # ── Guard 5 — graph modules must never select/recommend models ───────────
 
 def test_graph_modules_never_select_models():
-    """If any LangGraph module exists it must receive its model from Cozmo's
+    """If any LangGraph module exists it must receive its model from Novi's
     resolver — it must never resolve, recommend, or select a model itself."""
-    graphs_dir = COZMO_SRC / "graphs"
+    graphs_dir = NOVI_SRC / "graphs"
     if not graphs_dir.exists():
         return  # no graphs in Stage 1 — guard is dormant
     forbidden = [
@@ -631,7 +631,7 @@ def test_no_model_fallback_or_substitution_vocabulary():
         "alternate_model",
         "auto_select",
     ]
-    scope = [COZMO_SRC / "runtime" / "models", COZMO_SRC / "models"]
+    scope = [NOVI_SRC / "runtime" / "models", NOVI_SRC / "models"]
     violations = []
     for root in scope:
         for pyfile in root.rglob("*.py"):
@@ -656,7 +656,7 @@ def test_no_automatic_vocabulary_in_runtime_models():
     """The runtime and model boundary must not reintroduce any Automatic
     concept. Selection is user-explicit; there is no automatic mode."""
     violations = []
-    scope = [COZMO_SRC / "runtime", COZMO_SRC / "models"]
+    scope = [NOVI_SRC / "runtime", NOVI_SRC / "models"]
     for root in scope:
         for pyfile in root.rglob("*.py"):
             rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
@@ -682,13 +682,13 @@ def test_apply_selection_is_sole_selection_writer():
     It is the single persisted-selection write path (Phase 6 contract).
     """
     allowed = {
-        "cozmo/configuration/resolver.py",   # definition
-        "cozmo/configuration/catalog.py",    # docstring reference
-        "cozmo/webui_server.py",             # selection endpoints
-        "cozmo/runtime/models/factory.py",   # prohibition reference (never calls it)
+        "novi/configuration/resolver.py",   # definition
+        "novi/configuration/catalog.py",    # docstring reference
+        "novi/webui_server.py",             # selection endpoints
+        "novi/runtime/models/factory.py",   # prohibition reference (never calls it)
     }
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         if rel in allowed:
             continue
@@ -706,8 +706,8 @@ def test_apply_selection_is_sole_selection_writer():
 
 
 # ── Phase 7 Stage 2 — legacy config shim guards ─────────────────────────
-# The legacy compatibility layer is gone: cozmo/config.py (deleted),
-# legacy_config()/COZMO_OLLAMA_URL (bootstrap.py), the raw-TOML CLI writes,
+# The legacy compatibility layer is gone: novi/config.py (deleted),
+# legacy_config()/NOVI_OLLAMA_URL (bootstrap.py), the raw-TOML CLI writes,
 # the PUT /api/config bulk endpoint, the sync cfg shadow dict, the
 # conversation ``mode`` field, run_stream ``force_mode``, and the brain=None
 # ``memory.add_interaction`` runtime fallback. These guards make sure none of
@@ -717,12 +717,12 @@ def test_apply_selection_is_sole_selection_writer():
 # ── Guard A — legacy config module erased ────────────────────────────────
 
 def test_no_legacy_config_module():
-    """The legacy ``cozmo/config.py`` dict-shim module must never return."""
-    assert not (COZMO_SRC / "config.py").exists(), \
-        "cozmo/config.py must stay deleted — bootstrap get_configuration() is the entry"
+    """The legacy ``novi/config.py`` dict-shim module must never return."""
+    assert not (NOVI_SRC / "config.py").exists(), \
+        "novi/config.py must stay deleted — bootstrap get_configuration() is the entry"
     forbidden = ["config.load(", "config.init(", "legacy_config("]
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -740,10 +740,10 @@ def test_no_legacy_config_module():
 # ── Guard B — no environment-variable shims ─────────────────────────────
 
 def test_no_env_override_shims():
-    """The COZMO_OLLAMA_URL env hack (and friends) must never return."""
-    forbidden = ["COZMO_OLLAMA_URL", "_apply_env_overrides"]
+    """The NOVI_OLLAMA_URL env hack (and friends) must never return."""
+    forbidden = ["NOVI_OLLAMA_URL", "_apply_env_overrides"]
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -760,12 +760,12 @@ def test_no_env_override_shims():
 # ── Guard C — no direct TOML writes outside the framework ───────────────
 
 def test_no_direct_toml_writes_outside_framework():
-    """Raw TOML serialization lives only inside cozmo/configuration/."""
+    """Raw TOML serialization lives only inside novi/configuration/."""
     forbidden = ["tomli_w", "toml.dump", '".toml", "w"']
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
-        if rel.startswith("cozmo/configuration/"):
+        if rel.startswith("novi/configuration/"):
             continue
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -784,13 +784,13 @@ def test_no_direct_toml_writes_outside_framework():
 
 def test_no_legacy_put_config_endpoint():
     """PUT /api/config (put_config) must not reappear in the WebUI server."""
-    webui = (COZMO_SRC / "webui_server.py").read_text("utf-8", errors="replace")
+    webui = (NOVI_SRC / "webui_server.py").read_text("utf-8", errors="replace")
     for i, line in enumerate(webui.splitlines(), 1):
         if _is_comment(line):
             continue
         if "def put_config" in line or '@app.put("/api/config")' in line:
             raise AssertionError(
-                f"cozmo/webui_server.py:{i}: legacy bulk-write endpoint returned"
+                f"novi/webui_server.py:{i}: legacy bulk-write endpoint returned"
             )
 
 
@@ -807,7 +807,7 @@ def test_no_legacy_config_write_consumers():
                 continue
             if "api/config" in line and "PUT" in line:
                 violations.append(f"{rel}:{i}: {line.strip()[:80]}")
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -826,7 +826,7 @@ def test_no_legacy_config_write_consumers():
 
 def test_no_conversation_mode_persistence():
     """The obsolete conversation ``mode`` field must never be persisted."""
-    webui = (COZMO_SRC / "webui_server.py").read_text("utf-8", errors="replace")
+    webui = (NOVI_SRC / "webui_server.py").read_text("utf-8", errors="replace")
     forbidden = [
         'body.get("mode"',
         '"mode": mode',
@@ -839,7 +839,7 @@ def test_no_conversation_mode_persistence():
             continue
         if any(tok in line for tok in forbidden):
             raise AssertionError(
-                f"cozmo/webui_server.py:{i}: legacy conversation mode persisted: {line.strip()[:80]}"
+                f"novi/webui_server.py:{i}: legacy conversation mode persisted: {line.strip()[:80]}"
             )
 
 
@@ -889,15 +889,15 @@ def test_no_legacy_memory_fallback_in_runtime():
 # ── Guard I — single configuration authority ────────────────────────────
 
 def test_configuration_constructed_only_in_framework():
-    """Configuration instances are built only inside cozmo/configuration/.
+    """Configuration instances are built only inside novi/configuration/.
 
     Every other consumer reads/writes through ``get_configuration()`` — the
     single composition root for configuration state.
     """
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
-        if rel.startswith("cozmo/configuration/"):
+        if rel.startswith("novi/configuration/"):
             continue
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -915,9 +915,9 @@ def test_configuration_constructed_only_in_framework():
 
 def test_cli_config_uses_framework():
     """config_cli.py must route every read/write through the framework."""
-    cli_cfg = COZMO_SRC / "config_cli.py"
+    cli_cfg = NOVI_SRC / "config_cli.py"
     if not cli_cfg.exists():
-        raise AssertionError("cozmo/config_cli.py missing")
+        raise AssertionError("novi/config_cli.py missing")
     text = cli_cfg.read_text("utf-8", errors="replace")
     if "get_configuration" not in text:
         raise AssertionError("config_cli.py must use get_configuration()")
@@ -926,7 +926,7 @@ def test_cli_config_uses_framework():
             continue
         if any(tok in line for tok in ("tomli_w", "config_mod", ".write_text(", 'open(""')):
             raise AssertionError(
-                f"cozmo/config_cli.py:{i}: direct config file I/O: {line.strip()[:80]}"
+                f"novi/config_cli.py:{i}: direct config file I/O: {line.strip()[:80]}"
             )
 
 
@@ -937,12 +937,12 @@ def test_no_cwd_relative_knowledge_path():
     never a CWD-relative ``./knowledge`` literal.
 
     The knowledge base lives under the configured workspace
-    (``~/.cozmo/knowledge`` by default); a process that starts elsewhere must
+    (``~/.novi/knowledge`` by default); a process that starts elsewhere must
     not silently read/write a different ``./knowledge`` folder.
     """
     forbidden = ['"./knowledge"', "KNOWLEDGE = Path", "Path('./knowledge')"]
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -967,7 +967,7 @@ def test_no_retired_retrieve_memory_rows_adapter():
     production code may reference the removed adapter again.
     """
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -989,7 +989,7 @@ def test_no_retired_store_project_context_method():
     store must not grow a second write path for it.
     """
     violations = []
-    for pyfile in _iter_py_files(COZMO_SRC):
+    for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
         text = pyfile.read_text("utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
@@ -1012,8 +1012,8 @@ def test_composition_roots_default_langgraph_engine():
     "legacy" escape hatch (constructor arg or config override) stays legal.
     """
     roots = [
-        COZMO_SRC / "webui_server.py",
-        COZMO_SRC / "services" / "context.py",
+        NOVI_SRC / "webui_server.py",
+        NOVI_SRC / "services" / "context.py",
     ]
     for path in roots:
         text = path.read_text("utf-8", errors="replace")

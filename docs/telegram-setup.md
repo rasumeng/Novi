@@ -1,8 +1,8 @@
 # Telegram real-device validation
 
 Milestone 5 Phase E-3 unifies every normal execution surface through the
-`ExecutionCoordinator`. The Telegram adapter (`cozmo/telegram_bot.py` +
-`cozmo/services/telegram.py`) is coordinator-backed: a message arrives on the
+`ExecutionCoordinator`. The Telegram adapter (`novi/telegram_bot.py` +
+`novi/services/telegram.py`) is coordinator-backed: a message arrives on the
 async loop, execution is bridged to a worker thread, and the coordinator owns
 the Task / Plan / Job / ExecutionHistory lifecycle. Conversation identity is
 `telegram:<chat_id>`.
@@ -12,9 +12,9 @@ validation from a physical phone. **Never commit a bot token.**
 
 ## Prerequisites
 
-- `python-telegram-bot` installed: `pip install "cozmo[telegram]"`
+- `python-telegram-bot` installed: `pip install "novi[telegram]"`
 - Ollama running (the runtime's model backend)
-- Cozmo installed editable (`pip install -e .`)
+- Novi installed editable (`pip install -e .`)
 
 ## 1. Create a bot with BotFather
 
@@ -28,8 +28,8 @@ validation from a physical phone. **Never commit a bot token.**
 ## 2. Configure the token locally
 
 The configuration framework owns settings
-(`cozmo/configuration/bootstrap.py` carries the `[telegram]` schema; the
-snapshot is `~/.cozmo/config.toml`). Edit `~/.cozmo/config.toml`:
+(`novi/configuration/bootstrap.py` carries the `[telegram]` schema; the
+snapshot is `~/.novi/config.toml`). Edit `~/.novi/config.toml`:
 
 ```toml
 [telegram]
@@ -41,21 +41,21 @@ allowed_chat_ids = ["<your_chat_id>"]          # leave empty to allow all
 `telegram.allowed_chat_ids` is enforced by the adapter before any execution —
 a denied chat produces no Task and no Job (`test_telegram_denied_chat_rejected_without_execution`).
 
-Config CLI alternative: `cozmo config set telegram.bot_token <token>`.
+Config CLI alternative: `novi config set telegram.bot_token <token>`.
 
-## 3. Run Cozmo locally
+## 3. Run Novi locally
 
 ```sh
-cozmo telegram
+novi telegram
 ```
 
 The bot answers via a worker thread and the shared `ExecutionCoordinator`
 path. All lifecycle (Task/Plan/Job/History) is visible through the WebUI
-conversation views and the `TaskStore` at `~/.cozmo`.
+conversation views and the `TaskStore` at `~/.novi`.
 
 ## 4. Live validation checklist
 
-1. **Phone → Cozmo → Coordinator → Runtime → Telegram** — send a message from a
+1. **Phone → Novi → Coordinator → Runtime → Telegram** — send a message from a
    physical phone; confirm the answer streams back.
 2. **Conversation persistence** — send again; subsequent turns reuse
    `telegram:<chat_id>` so continuation is discoverable.

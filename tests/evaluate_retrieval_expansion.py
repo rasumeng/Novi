@@ -32,17 +32,17 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cozmo.brain import Brain, EdgeKind, QueryContext, Relationship
-from cozmo.brain.layers.knowledge import KnowledgeLayer
-from cozmo.brain.layers.scenarios import ScenarioLayer
-from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
-from cozmo.brain.storage.relationship_store import RelationshipStore
-from cozmo.brain.storage.scenario_store import ScenarioStore
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.brain.types import KnowledgeStatus
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.sources import KnowledgeRetrievalSource
-from cozmo.services.embedding import EmbeddingService
+from novi.brain import Brain, EdgeKind, QueryContext, Relationship
+from novi.brain.layers.knowledge import KnowledgeLayer
+from novi.brain.layers.scenarios import ScenarioLayer
+from novi.brain.reasoning.resolver import LayeredRetrievalResolver
+from novi.brain.storage.relationship_store import RelationshipStore
+from novi.brain.storage.scenario_store import ScenarioStore
+from novi.brain.storage.vector_store import VectorStore
+from novi.brain.types import KnowledgeStatus
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.sources import KnowledgeRetrievalSource
+from novi.services.embedding import EmbeddingService
 
 # ── deterministic fake embedding ─────────────────────────────────────────────
 
@@ -176,7 +176,7 @@ def run_resolver_arm(brain, cases, *, expanded: bool):
     source arm. What the measurement isolates is exactly what the graph stage
     adds on top of a weak-but-present semantic hit.
     """
-    from cozmo.brain.types import KnowledgeHit
+    from novi.brain.types import KnowledgeHit
 
     seed_items = {
         c.seed_row["metadata"]["item_id"]: brain.knowledge_items(
@@ -250,8 +250,8 @@ def run_unified_arm(brain, idx, cases):
     Metrics here measure the FINAL selected context — the minimum-sufficient
     pick — not the full candidate pool.
     """
-    from cozmo.runtime.sources import KnowledgeRetrievalSource
-    from cozmo.runtime.unified_retrieval import SourceBinding, UnifiedRetriever
+    from novi.runtime.sources import KnowledgeRetrievalSource
+    from novi.runtime.unified_retrieval import SourceBinding, UnifiedRetriever
 
     src = KnowledgeRetrievalSource(brain)
     retriever = UnifiedRetriever()

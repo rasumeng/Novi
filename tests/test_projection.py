@@ -7,9 +7,9 @@ invent an attribute" invariant (empty projection when nothing is stated).
 
 from datetime import datetime, timedelta
 
-from cozmo.brain.brain import Brain
-from cozmo.brain.projection import category_of, project
-from cozmo.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
+from novi.brain.brain import Brain
+from novi.brain.projection import category_of, project
+from novi.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 
 
 def _item(

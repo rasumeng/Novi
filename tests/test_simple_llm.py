@@ -8,9 +8,9 @@ Covers the Settings-to-execution contract:
 
 import pytest
 
-from cozmo.models import ModelUnavailableError
-from cozmo.providers.base import OllamaProvider
-from cozmo.services.simple_llm import SimpleLLM
+from novi.models import ModelUnavailableError
+from novi.providers.base import OllamaProvider
+from novi.services.simple_llm import SimpleLLM
 
 
 class _FakeClient:

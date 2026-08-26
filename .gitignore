@@ -11,7 +11,7 @@ venv/
 .venv/
 env/
 .env/
-# Frontend is in cozmo/webui/ — tracked, not ignored
+# Frontend is in novi/webui/ — tracked, not ignored
 # (WebUi/ was a stale entry from a different layout)
 
 # IDE
@@ -25,12 +25,15 @@ env/
 .DS_Store
 Thumbs.db
 
-# Cozmo data (user-local, not shared)
+# Novi data (user-local, not shared) — anchored to the repo root so the
+# same names are still allowed as code directories deeper in the tree.
 data/
 chroma_db/
-.cozmo/
-workspace/
-knowledge/
+/.novi/
+# Legacy pre-rebrand profile dirs in old checkouts
+/.cozmo/
+/workspace/
+/knowledge/
 
 # Dev utilities
 node_modules/
@@ -42,10 +45,10 @@ node_modules/
 .env
 
 # Large files
-cozmo.zip
+novi.zip
 
 # Tauri desktop
-cozmo/webui/src-tauri/target
-cozmo/webui/src-tauri/gen
+novi/webui/src-tauri/target
+novi/webui/src-tauri/gen
 desktop/src-tauri/target/
 desktop/src-tauri/gen/

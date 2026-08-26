@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "cozmo-webui",
+      "name": "novi-webui",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "cozmo/webui", "run", "dev"],
+      "runtimeArgs": ["--prefix", "novi/webui", "run", "dev"],
       "port": 5173
     }
   ]

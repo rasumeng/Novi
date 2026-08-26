@@ -12,16 +12,16 @@ ModelRuntime never performs recommendation.
 
 import pytest
 
-from cozmo.models import ModelRegistry, ModelService, ModelUnavailableError
-from cozmo.providers import create_provider
-from cozmo.runtime.models import ModelRuntime, ResolvedModel
-from cozmo.services.simple_llm import SimpleLLM
+from novi.models import ModelRegistry, ModelService, ModelUnavailableError
+from novi.providers import create_provider
+from novi.runtime.models import ModelRuntime, ResolvedModel
+from novi.services.simple_llm import SimpleLLM
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
 def _registry(*models: str) -> ModelRegistry:
-    from cozmo.providers import ModelInfo
+    from novi.providers import ModelInfo
     reg = ModelRegistry()
     reg.update("ollama", [ModelInfo(name=m, provider="ollama") for m in models])
     return reg
@@ -251,7 +251,7 @@ def test_runtime_delegates_to_provider_layer():
 
 def test_runtime_default_factory_is_provider_boundary():
     """The default construction path is the canonical providers.create_provider."""
-    from cozmo.providers import create_provider as canonical
+    from novi.providers import create_provider as canonical
 
     assert ModelRuntime()._provider_factory is canonical
 
@@ -325,3 +325,65 @@ def test_simple_llm_general_empty_selection_raises(monkeypatch):
         llm.invoke("anything")
 
     assert langchain_constructed == {"ollama": 0, "openai": 0}
+
+
+# ── Test E — live selection updates (Settings change reaches the runtime) ──
+
+def test_modelservice_tracks_selection_change():
+    """Regression: a Settings model change must reach ModelService. The
+    composition root pushes a fresh config snapshot on every configuration
+    event via ``update_configuration``; resolve() must reflect it."""
+    runtime = ModelRuntime(provider_factory=lambda p, m, c: _RecorderProvider(m))
+    ms = ModelService(_config("qwen3:8b"), _registry("qwen3:8b", "llama3.2:3b"),
+                      runtime=runtime)
+
+    assert ms.resolve("general") == ("ollama", "qwen3:8b")
+
+    ms.update_configuration(_config("llama3.2:3b"))
+
+    assert ms.resolve("general") == ("ollama", "llama3.2:3b")
+
+
+def test_context_pushes_config_updates_to_model_service(monkeypatch):
+    """NoviContext subscribes to configuration events on first config access
+    and re-issues the snapshot to ModelService so ``llm.workloads.*`` edits
+    apply live instead of requiring a process restart."""
+    from novi.configuration.events import ConfigEvent
+    from novi.services import context as ctx_mod
+    from novi.services.context import NoviContext
+
+    class _FakeConfig:
+        def __init__(self):
+            self.snap = _config("qwen3:8b")
+            self.handlers = []
+
+        def snapshot(self):
+            return self.snap
+
+        def on_any(self, handler):
+            self.handlers.append(handler)
+
+        def emit(self, new_snap):
+            self.snap = new_snap
+            event = ConfigEvent(path="llm.workloads.general.model",
+                                value="llama3.2:3b")
+            for handler in self.handlers:
+                handler(event)
+
+    fake = _FakeConfig()
+    monkeypatch.setattr(ctx_mod, "get_configuration", lambda: fake)
+    monkeypatch.setattr(ModelService, "refresh", lambda self: None)
+
+    ctx = NoviContext()
+    from novi.providers import ModelInfo
+    ctx.model_registry.update("ollama", [
+        ModelInfo(name="qwen3:8b", provider="ollama"),
+        ModelInfo(name="llama3.2:3b", provider="ollama"),
+    ])
+    svc = ctx.model_service
+
+    assert svc.resolve("general") == ("ollama", "qwen3:8b")
+
+    fake.emit(_config("llama3.2:3b"))
+
+    assert svc.resolve("general") == ("ollama", "llama3.2:3b")

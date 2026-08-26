@@ -23,11 +23,11 @@ Conflicts (8B.5) / manifest (8B.6) / truncation (8B.7) / validation (8B.8)
 
 import pytest
 
-from cozmo.graphs import ResearchGraph
-from cozmo.graphs import research_intel as ri
-from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
-from cozmo.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
-from cozmo.tools.search_pipeline import SearchResult
+from novi.graphs import ResearchGraph
+from novi.graphs import research_intel as ri
+from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
+from novi.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
+from novi.tools.search_pipeline import SearchResult
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -376,7 +376,7 @@ def test_graph_synthesis_prompt_carries_manifest_and_conflicts(monkeypatch):
 
 
 def test_collect_conflicts_uses_existing_detector():
-    from cozmo.tools.search_pipeline import SearchResult as SR
+    from novi.tools.search_pipeline import SearchResult as SR
 
     b1 = EvidenceBundle(
         query="speed", merged_text="", source_count=1,

@@ -20,10 +20,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from cozmo.evidence import EvidenceProcessor, render_evidence_context
-from cozmo.runtime.evidence import EvidenceBundle, EvidenceCollector
-from cozmo.runtime.retrieval import RetrievalExecutor
-from cozmo.tools.search_pipeline import SearchResult
+from novi.evidence import EvidenceProcessor, render_evidence_context
+from novi.runtime.evidence import EvidenceBundle, EvidenceCollector
+from novi.runtime.retrieval import RetrievalExecutor
+from novi.tools.search_pipeline import SearchResult
 
 # ── fixture helpers ──────────────────────────────────────────────────────────
 
@@ -288,7 +288,7 @@ def test_executor_empty_results_no_processing():
 
 
 def test_evidence_package_stays_pure():
-    """No LangGraph, no storage, no model selection inside cozmo/evidence."""
+    """No LangGraph, no storage, no model selection inside novi/evidence."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
@@ -298,7 +298,7 @@ def test_evidence_package_stays_pure():
     write_shape = re.compile(
         r"\b(store|table|conn|db)\w*\.(add|add_many|update|delete|insert)\b"
     )
-    evidence_dir = root / "cozmo" / "evidence"
+    evidence_dir = root / "novi" / "evidence"
     for pyfile in evidence_dir.rglob("*.py"):
         text = pyfile.read_text(encoding="utf-8", errors="replace")
         for token in forbidden:
@@ -322,7 +322,7 @@ def test_evidence_never_touches_brain_knowledge_paths():
     root = Path(__file__).resolve().parent.parent
     banned = ("Brain(", "brain.learn", "knowledge_layer", "_sync_markdown",
               "markdown_store", "relationship_store")
-    for pyfile in (root / "cozmo" / "evidence").rglob("*.py"):
+    for pyfile in (root / "novi" / "evidence").rglob("*.py"):
         text = pyfile.read_text(encoding="utf-8", errors="replace")
         for token in banned:
             assert token not in text.replace('"""', ""), (

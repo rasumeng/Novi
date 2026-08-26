@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cozmo.orchestrator.task_types import (
+from novi.orchestrator.task_types import (
     GroundingDecision,
     EvidenceAnalysis,
     EvidenceRequirements,
@@ -14,10 +14,10 @@ from cozmo.orchestrator.task_types import (
     TaskAnalysis,
     ExecutionStrategy,
 )
-from cozmo.orchestrator.evidence import EvidenceDetector
-from cozmo.orchestrator.orchestrator import Orchestrator
-from cozmo.capabilities import CapabilityRegistry
-from cozmo.capabilities.builtin import register_builtin_capabilities
+from novi.orchestrator.evidence import EvidenceDetector
+from novi.orchestrator.orchestrator import Orchestrator
+from novi.capabilities import CapabilityRegistry
+from novi.capabilities.builtin import register_builtin_capabilities
 
 
 # ── GroundingDecision dataclass ──────────────────────────────────────────────
@@ -364,16 +364,16 @@ class TestTaskAnalysisField:
 class TestEvidencePriorityPrompt:
     def test_base_prompt_has_evidence_priority(self):
         """prompts.py BASE_PROMPT should include evidence priority instruction."""
-        from cozmo.runtime.prompts import BASE_PROMPT
+        from novi.runtime.prompts import BASE_PROMPT
 
         assert "primary source" in BASE_PROMPT.lower()
         assert "supplements" in BASE_PROMPT.lower()
 
     def test_system_prompt_has_priority_when_grounding(self):
         """When grounding_text present, system prompt has priority instruction."""
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.runtime import NoviRuntime
 
-        rt = CozmoRuntime()
+        rt = NoviRuntime()
         prompt = rt._system_prompt(
             user_input="test",
             grounding="search result content here",
@@ -384,9 +384,9 @@ class TestEvidencePriorityPrompt:
 
     def test_system_prompt_without_grounding(self):
         """Without grounding_text, identity has evidence priority but no grounding section."""
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.runtime import NoviRuntime
 
-        rt = CozmoRuntime()
+        rt = NoviRuntime()
         prompt = rt._system_prompt(user_input="test")
         # Identity always has the general instruction
         assert "primary source" in prompt.lower()

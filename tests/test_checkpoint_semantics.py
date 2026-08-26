@@ -1,6 +1,6 @@
 """Milestone 5 Phase 6A — Checkpoint.step contract + resume no-skip regression.
 
-Canonical invariant (cozmo/jobs/job.py, Checkpoint):
+Canonical invariant (novi/jobs/job.py, Checkpoint):
 
     Checkpoint.step == number of completed plan steps
                     == 0-based global plan index of the NEXT step to execute
@@ -22,15 +22,15 @@ This module proves the contract with BEHAVIOR, not just equality asserts:
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from cozmo.jobs.job import Checkpoint, JobStatus
-from cozmo.jobs.manager import JobManager
-from cozmo.orchestrator.task_types import ExecutionPlan, Goal, IntentType, Task
-from cozmo.planner.models import Plan, PlanStep, PlanStepStatus
-from cozmo.runtime.event_bus import EventBus
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
-from cozmo.services.continuation import ContinuationService
-from cozmo.services.job_lifecycle import JobLifecycle
+from novi.jobs.job import Checkpoint, JobStatus
+from novi.jobs.manager import JobManager
+from novi.orchestrator.task_types import ExecutionPlan, Goal, IntentType, Task
+from novi.planner.models import Plan, PlanStep, PlanStepStatus
+from novi.runtime.event_bus import EventBus
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
+from novi.services.continuation import ContinuationService
+from novi.services.job_lifecycle import JobLifecycle
 
 
 def _chunk(text):
@@ -100,7 +100,7 @@ def _run(plan, task, chunks, resume_from):
     bus = EventBus()
     events = []
     bus.on_any(lambda ev: events.append(ev))
-    runtime = CozmoRuntime(model_service=fake, event_bus=bus)
+    runtime = NoviRuntime(model_service=fake, event_bus=bus)
     ctx = ExecutionContext(user_input="do the thing", execution_plan=exec_plan)
     kinds = [item[0] for item in
              runtime.run_stream(context=ctx, resume_from=resume_from)]
@@ -164,10 +164,10 @@ def test_continuation_target_next_step_equals_checkpoint_step(
     plan, task = _make_plan()
     task.plan = plan
 
-    from cozmo.jobs.persistence import JobStore
-    from cozmo.orchestrator.task_store import TaskStore
+    from novi.jobs.persistence import JobStore
+    from novi.orchestrator.task_store import TaskStore
 
-    monkeypatch.setattr("cozmo.jobs.persistence.JOBS_DIR",
+    monkeypatch.setattr("novi.jobs.persistence.JOBS_DIR",
                         tmp_path / "jobs")
     task_store = TaskStore(persist_dir=str(tmp_path / "tasks"))
     task_store.save(task)
@@ -182,7 +182,7 @@ def test_continuation_target_next_step_equals_checkpoint_step(
 
 
 def _job_with_checkpoint(task_id, plan_id, step, completed):
-    from cozmo.jobs.job import Job
+    from novi.jobs.job import Job
 
     cp = Checkpoint(
         job_id="job-x", task_id=task_id, plan_id=plan_id, step=step,
@@ -231,10 +231,10 @@ def test_resume_through_continuation_never_skips_pending_step(tmp_path):
     """
     from unittest.mock import patch
 
-    from cozmo.jobs import persistence as persistence_mod
-    from cozmo.jobs.job import Job
-    from cozmo.jobs.persistence import JobStore
-    from cozmo.orchestrator.task_store import TaskStore
+    from novi.jobs import persistence as persistence_mod
+    from novi.jobs.job import Job
+    from novi.jobs.persistence import JobStore
+    from novi.orchestrator.task_store import TaskStore
 
     plan, task = _make_plan()
     task_store = TaskStore(persist_dir=str(tmp_path / "tasks"))

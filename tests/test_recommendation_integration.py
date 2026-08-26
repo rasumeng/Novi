@@ -6,31 +6,31 @@ never gates, unseeded records with real evidence participate everywhere,
 unknown stays unknown, and every output path stays advisory (no writes).
 """
 
-from cozmo.configuration.catalog import (
+from novi.configuration.catalog import (
     USER_FACING_CAPABILITIES,
     ModelRecommendationEngine,
     build_available_recommendations,
     build_catalog_payload,
 )
-from cozmo.configuration.eligibility import (
+from novi.configuration.eligibility import (
     CapabilityMatch,
     HardwareFit,
     evaluate_eligibility,
 )
-from cozmo.configuration.hardware import (
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
     HardwareProfile,
 )
-from cozmo.configuration.model_records import (
+from novi.configuration.model_records import (
     CapabilityEvidence,
     ModelIdentity,
     ModelRecord,
     ModelStatus,
 )
-from cozmo.configuration.qualification import Qualification
-from cozmo.configuration.resolver import WORKLOADS, recommend
+from novi.configuration.qualification import Qualification
+from novi.configuration.resolver import WORKLOADS, recommend
 
 
 def hw(vram=None, ram=None, conf=DetectionConfidence.HIGH,
@@ -92,9 +92,9 @@ def test_catalog_payload_unknown_stays_unknown():
 
 def test_catalog_payload_no_write_invariant(tmp_path):
     """build_catalog_payload must not touch configuration state."""
-    from cozmo.configuration.bootstrap import build_registry, DEFAULT_CONFIG
-    from cozmo.configuration.manager import Configuration
-    cfg = Configuration(build_registry(), tmp_path / "cozmo.toml",
+    from novi.configuration.bootstrap import build_registry, DEFAULT_CONFIG
+    from novi.configuration.manager import Configuration
+    cfg = Configuration(build_registry(), tmp_path / "novi.toml",
                         defaults=DEFAULT_CONFIG)
     cfg.initialize()
     before = cfg.state.as_dict()
@@ -192,9 +192,9 @@ def test_available_recommendations_custom_candidate_records():
 
 
 def test_available_recommendations_never_writes(tmp_path):
-    from cozmo.configuration.bootstrap import build_registry, DEFAULT_CONFIG
-    from cozmo.configuration.manager import Configuration
-    cfg = Configuration(build_registry(), tmp_path / "cozmo.toml",
+    from novi.configuration.bootstrap import build_registry, DEFAULT_CONFIG
+    from novi.configuration.manager import Configuration
+    cfg = Configuration(build_registry(), tmp_path / "novi.toml",
                         defaults=DEFAULT_CONFIG)
     cfg.initialize()
     before = cfg.state.as_dict()

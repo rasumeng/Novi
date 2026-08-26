@@ -1,4 +1,4 @@
-"""LangGraph dual-path runtime migration — parity + regression tests.
+﻿"""LangGraph dual-path runtime migration — parity + regression tests.
 
 Two layers:
 
@@ -7,7 +7,7 @@ Two layers:
    exact-call dedup message, max-steps wording, ToolMessage accumulation,
    context snapshot semantics, cancellation, and ModelUnavailableError
    propagation (never swallowed, never substituted).
-2. Runtime integration (hermetic CozmoRuntime): the opt-in langgraph engine
+2. Runtime integration (hermetic NoviRuntime): the opt-in langgraph engine
    replays graph events on run_stream, keeps the shared tail (trace finalize,
    Brain observation) intact, and stays byte-inert for the legacy default.
 
@@ -24,11 +24,11 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from cozmo.graphs import RuntimeWorkflowGraph
-from cozmo.models import ModelUnavailableError
+from novi.graphs import RuntimeWorkflowGraph
+from novi.models import ModelUnavailableError
 
 
-# ── fakes ────────────────────────────────────────────────────────────────────
+# â”€â”€ fakes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class ScriptedModel:
@@ -57,7 +57,7 @@ def _tc(name="search", args=None, call_id="call-1"):
 def _state(**kw):
     s = {
         "user_input": "hello",
-        "system_prompt": "You are Cozmo.",
+        "system_prompt": "You are Novi.",
         "seed_messages": [HumanMessage(content="earlier turn"),
                           AIMessage(content="earlier answer")],
         "messages": [],
@@ -79,7 +79,7 @@ def _snapshot(grounding="ground", memory="mem ctx", project="proj ctx"):
     }
 
 
-# ── 1. no-tool conversation ─────────────────────────────────────────────────
+# â”€â”€ 1. no-tool conversation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_plain_conversation_answers_without_tools():
@@ -101,7 +101,7 @@ def test_seed_messages_preserve_conversation_continuation():
     g = RuntimeWorkflowGraph()
     out = g.run(_state(model=model))
     first_call = model.calls[0]
-    assert first_call[0].content == "You are Cozmo."
+    assert first_call[0].content == "You are Novi."
     assert isinstance(first_call[1], HumanMessage)
     assert first_call[1].content == "earlier turn"
     assert isinstance(first_call[-1], HumanMessage)
@@ -110,7 +110,7 @@ def test_seed_messages_preserve_conversation_continuation():
                for m in first_call), "history AIMessage present"
 
 
-# ── 2. retrieved-context snapshot semantics ─────────────────────────────────
+# â”€â”€ 2. retrieved-context snapshot semantics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_retrieve_node_snapshots_runtime_context_verbatim():
@@ -141,7 +141,7 @@ def test_evidence_context_flows_through_state():
     assert out["evidence_context"] is ev
 
 
-# ── 3. tool round-trip: act/reason loop ──────────────────────────────────────
+# â”€â”€ 3. tool round-trip: act/reason loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_single_tool_call_executes_and_loops_back_to_reason():
@@ -250,7 +250,7 @@ def test_observations_recorded_per_execution():
         "one ToolMessage per call, ids preserved"
 
 
-# ── 4. failure / degradation / cancellation ─────────────────────────────────
+# â”€â”€ 4. failure / degradation / cancellation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_model_unavailable_error_propagates_untouched():
@@ -338,11 +338,11 @@ def test_empty_model_output_falls_back_with_legacy_wording():
     assert "(no response — the model returned empty output" in out["answer"]
 
 
-# ── 5. runtime integration (opt-in engine, hermetic) ─────────────────────────
+# â”€â”€ 5. runtime integration (opt-in engine, hermetic) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _runtime_ctx():
-    from cozmo.runtime.execution_context import ExecutionContext
+    from novi.runtime.execution_context import ExecutionContext
 
     ctx = ExecutionContext(user_input="hello")
     ctx.analysis = SimpleNamespace(
@@ -373,9 +373,9 @@ _bound = ScriptedModel([_ai("graph says hi")])
 
 
 def test_langgraph_engine_streams_answer_and_finalizes_trace():
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    rt = CozmoRuntime(model_service=_MS(),
+    rt = NoviRuntime(model_service=_MS(),
                       runtime_graph=RuntimeWorkflowGraph(),
                       workflow_engine="langgraph")
     ctx = _runtime_ctx()
@@ -388,7 +388,7 @@ def test_langgraph_engine_streams_answer_and_finalizes_trace():
 
 
 def test_langgraph_engine_replays_tool_events_in_order(monkeypatch):
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
     bound = ScriptedModel([
         _ai("", tool_calls=[_tc("echo", {"v": 1}, "c9")]),
@@ -405,7 +405,7 @@ def test_langgraph_engine_replays_tool_events_in_order(monkeypatch):
         def client_for_model(self, name, temperature=0.0):
             return bound
 
-    rt = CozmoRuntime(model_service=MS(),
+    rt = NoviRuntime(model_service=MS(),
                       runtime_graph=RuntimeWorkflowGraph(max_steps=4),
                       workflow_engine="langgraph")
     ctx = _runtime_ctx()
@@ -427,7 +427,7 @@ def test_langgraph_engine_replays_tool_events_in_order(monkeypatch):
 
 def test_legacy_default_ignores_graph_entirely():
     """workflow_engine='legacy' (default): graph present but never used."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
     unused = RuntimeWorkflowGraph()
     monkey_calls = []
@@ -438,13 +438,13 @@ def test_legacy_default_ignores_graph_entirely():
         return orig_run(state)
 
     unused.run = spy_run
-    rt = CozmoRuntime(model_service=_MS(), runtime_graph=unused)
+    rt = NoviRuntime(model_service=_MS(), runtime_graph=unused)
     assert rt._workflow_engine == "legacy"
     list(rt.run_stream(context=_runtime_ctx()))
     assert monkey_calls == []
 
 
-# ── 6. architecture guards ──────────────────────────────────────────────────
+# â”€â”€ 6. architecture guards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_graph_package_import_purity():
@@ -455,7 +455,7 @@ def test_graph_package_import_purity():
         "KnowledgeIndex", "ModelSelector", "ToolExecutor(",
         "SqliteSaver", "MemorySaver",
     )
-    graphs_dir = root / "cozmo" / "graphs"
+    graphs_dir = root / "novi" / "graphs"
     for pyfile in graphs_dir.rglob("*.py"):
         source = pyfile.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -482,9 +482,166 @@ def test_graph_package_import_purity():
 
 
 def test_workflow_graph_has_no_langgraph_checkpointer():
-    """Checkpoint/resumability decision pinned: Cozmo JobStore/ConversationStore
+    """Checkpoint/resumability decision pinned: Novi JobStore/ConversationStore
     remain the only durable authorities — no LangGraph checkpointer installed."""
     src = (Path(__file__).resolve().parent.parent /
-           "cozmo" / "graphs" / "runtime_graph.py").read_text(encoding="utf-8")
+           "novi" / "graphs" / "runtime_graph.py").read_text(encoding="utf-8")
     assert "compile(checkpointer" not in src
     assert "MemorySaver" not in src
+
+
+
+
+# ── live streaming contract (WebUI real-time channel) ───────────────────────
+
+
+class _Chunk:
+    """Minimal AIMessageChunk stand-in: content + reasoning kwargs."""
+
+    def __init__(self, content="", reasoning=""):
+        self.content = content
+        self.additional_kwargs = {"reasoning_content": reasoning} if reasoning else {}
+
+    def __add__(self, other):
+        merged_reason = (self.additional_kwargs.get("reasoning_content", "")
+                         + other.additional_kwargs.get("reasoning_content", ""))
+        return _Chunk(self.content + other.content, merged_reason)
+
+
+class StreamingModel:
+    """Stream-capable fake: yields scripted chunk lists per round."""
+
+    def __init__(self, rounds):
+        self.rounds = [list(r) for r in rounds]
+        self.calls = []
+
+    def stream(self, msgs):
+        self.calls.append(list(msgs))
+        if not self.rounds:
+            raise AssertionError("model streamed more rounds than scripted")
+        return iter(self.rounds.pop(0))
+
+    def invoke(self, msgs):
+        chunks = list(self.stream(msgs))
+        acc = None
+        for c in chunks:
+            acc = c if acc is None else acc + c
+        return AIMessage(content=acc.content if acc else "")
+
+
+def test_streaming_reason_emits_tokens_and_reasoning_live():
+    model = StreamingModel([
+        [_Chunk("Hel", reasoning="thinking hard"),
+         _Chunk("lo ", reasoning="still thinking"),
+         _Chunk("world")],
+    ])
+    g = RuntimeWorkflowGraph()
+    live: list = []
+    state = _state(model=model)
+    state["emit"] = live.append
+    out = g.run(state)
+
+    assert out["answer"] == "Hello world"
+    kinds = [item[0] for item in live]
+    assert "reasoning" in kinds and "token" in kinds
+    assert "".join(i[1] for i in live if i[0] == "token") == "Hello world"
+    assert "".join(i[1] for i in live if i[0] == "reasoning") == \
+        "thinking hardstill thinking"
+    # phases arrive too — node vocabulary for the activity panel
+    phases = [i[1]["phase"] for i in live if i[0] == "phase"]
+    assert phases == ["understanding", "retrieving", "reasoning", "answering"]
+    # buffered events stay EMPTY: tokens are delivered live only
+    assert [e for e in out["events"] if e[0] == "token"] == []
+
+
+def test_act_node_streams_thinking_tool_call_tool_result_live():
+    g = RuntimeWorkflowGraph()
+    live: list = []
+    state = _state(model=None)
+    state["emit"] = live.append
+    state["pending_tool_calls"] = [{"name": "search",
+                                    "args": {"q": "x"}, "id": "call-9"}]
+    state["messages"] = [SystemMessage(content="sys"), HumanMessage(content="q")]
+    state["execute_tool"] = lambda n, a, i: ("search output", "", True)
+    out = g._node_act(state)
+
+    assert out["attempt"] == 1
+    kinds = [i[0] for i in live]
+    assert kinds[0] == "phase"
+    assert [i[1]["phase"] for i in live if i[0] == "phase"][0] == "acting"
+    assert "thinking" in kinds and "tool_call" in kinds and "tool_result" in kinds
+    assert kinds.index("thinking") < kinds.index("tool_call") \
+        < kinds.index("tool_result")
+    # buffered copy still present for parity harnesses
+    buf_kinds = [e[0] for e in out["events"]]
+    assert buf_kinds == ["thinking", "tool_call", "tool_result"]
+
+
+def test_runtime_live_pump_delivers_items_before_graph_returns():
+    """The runtime pump must yield emitted items WHILE the graph runs —
+    before the final state (and any post-run frames) arrive."""
+    import threading
+    from novi.runtime.runtime import NoviRuntime
+
+    class SlowEmitGraph(RuntimeWorkflowGraph):
+        def run(self, state):
+            emit = state.get("emit")
+            marker = {"done": False}
+
+            def late_append():
+                state.setdefault("events", []).append(("token", "late"))
+
+            def work():
+                emit(("token", "early"))
+                t = threading.Timer(0.05, late_append)
+                t.start()
+                t.join()
+                marker["done"] = True
+                emit(("token", "final"))
+
+            th = threading.Thread(target=work)
+            th.start()
+            th.join()
+            state["answer"] = "earlyfinal" + ("late" if False else "")
+            state["completion_reason"] = "completed"
+            return state
+
+    rt = NoviRuntime(model_service=_MS(),
+                      runtime_graph=SlowEmitGraph(max_steps=2),
+                      workflow_engine="langgraph")
+    ctx = _runtime_ctx()
+    order = []
+    for ev in rt.run_stream(context=ctx):
+        if ev and isinstance(ev, tuple) and len(ev) > 1:
+            order.append((ev[0], str(ev[1])[:12]))
+    token_texts = [t for k, t in order if k == "token"]
+    assert "early" in token_texts and "final" in token_texts
+    # the whole-answer fallback token is suppressed when tokens streamed live
+    assert token_texts.count("graph says hi") == 0
+
+
+
+def test_langgraph_empty_run_surfaces_error_not_silence():
+    """A research run that ends with NO answer must emit a visible error
+    frame. Silent-empty terminals left the UI hanging with no response at
+    all (Deep Research re-synthesis failure)."""
+    from novi.runtime.runtime import NoviRuntime
+
+    class _EmptyResearchGraph:
+        max_search_attempts = 2
+
+        def run(self, state):
+            return {"answer": "", "completion_reason": "empty"}
+
+    rt = NoviRuntime(model_service=_MS(),
+                      research_graph=_EmptyResearchGraph(),
+                      workflow_engine="langgraph")
+    ctx = _runtime_ctx()
+    ctx.analysis.intent = SimpleNamespace(value="research")
+    events = list(rt.run_stream(context=ctx))
+
+    errors = [e for e in events if e and e[0] == "error"]
+    assert errors, "empty research run must yield a visible error frame"
+    assert "Deep Research" in errors[0][1]
+    kinds_after = [e[0] for e in events[events.index(errors[0]) + 1:]]
+    assert "token" not in kinds_after

@@ -1,4 +1,4 @@
-"""Phase 7 Stage 3B — CozmoRuntime._bind_runnable single binding seam.
+"""Phase 7 Stage 3B — NoviRuntime._bind_runnable single binding seam.
 
 Proves the runtime constructs its LangChain runnable through exactly one
 path: ``_bind_runnable → ModelService.bind_model/client_for_model``. Recovery
@@ -11,8 +11,8 @@ to web search.
 
 import pytest
 
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
 
 
 class _RecordingModelService:
@@ -43,7 +43,7 @@ def _ctx(model_name="m1", temperature=0.4):
 
 def test_bind_routes_through_model_service_with_tools():
     svc = _RecordingModelService()
-    rt = CozmoRuntime(model_service=svc)
+    rt = NoviRuntime(model_service=svc)
 
     runnable = rt._bind_runnable(_ctx(), ["read_file", "grep"])
 
@@ -53,7 +53,7 @@ def test_bind_routes_through_model_service_with_tools():
 
 def test_bind_routes_through_client_for_model_without_tools():
     svc = _RecordingModelService()
-    rt = CozmoRuntime(model_service=svc)
+    rt = NoviRuntime(model_service=svc)
 
     runnable = rt._bind_runnable(_ctx(), [])
 
@@ -63,7 +63,7 @@ def test_bind_routes_through_client_for_model_without_tools():
 
 def test_bind_uses_ctx_temperature_by_default():
     svc = _RecordingModelService()
-    rt = CozmoRuntime(model_service=svc)
+    rt = NoviRuntime(model_service=svc)
 
     rt._bind_runnable(_ctx(model_name="m9", temperature=0.7), ["t"])
 
@@ -72,7 +72,7 @@ def test_bind_uses_ctx_temperature_by_default():
 
 def test_bind_temperature_override_wins():
     svc = _RecordingModelService()
-    rt = CozmoRuntime(model_service=svc)
+    rt = NoviRuntime(model_service=svc)
 
     rt._bind_runnable(_ctx(temperature=0.4), ["t"], temperature=0.0)
 
@@ -82,7 +82,7 @@ def test_bind_temperature_override_wins():
 def test_bind_preserves_verbatim_model_name():
     """The selected model string reaches the seam unchanged."""
     svc = _RecordingModelService()
-    rt = CozmoRuntime(model_service=svc)
+    rt = NoviRuntime(model_service=svc)
 
     rt._bind_runnable(_ctx(model_name="qwen3:8b"), ["t"])
 
@@ -102,7 +102,7 @@ def test_run_stream_initial_bind_goes_through_seam():
                                      "additional_kwargs": {}})()
 
     svc.client = _LoopRunnable()
-    rt = CozmoRuntime(model_service=svc, cfg={"runtime": {"temperature": 0.2}})
+    rt = NoviRuntime(model_service=svc, cfg={"runtime": {"temperature": 0.2}})
 
     ctx = _ctx(model_name="m1", temperature=0.2)
     for _kind, *_rest in rt.run_stream(context=ctx):
@@ -117,10 +117,10 @@ def test_run_stream_does_not_reconstruct_inline():
     runtime hands the seam to the executor without invoking it."""
     import inspect
 
-    import cozmo.runtime.react_attempt as react_attempt
+    import novi.runtime.react_attempt as react_attempt
 
     loop_src = inspect.getsource(react_attempt.run_react_attempt)
-    seam_src = inspect.getsource(CozmoRuntime._bind_runnable)
+    seam_src = inspect.getsource(NoviRuntime._bind_runnable)
 
     assert "bind_runnable(ctx," in loop_src
     assert "bind_model" not in loop_src

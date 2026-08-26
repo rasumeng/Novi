@@ -40,13 +40,13 @@ import time
 
 import pytest
 
-from cozmo.runtime.mcp import (
+from novi.runtime.mcp import (
     MCPLifecycle,
     MCPRuntimeClient,
     MCPStatus,
     MCPToolDiscovery,
 )
-from cozmo.runtime.tool_registry import ToolRegistry
+from novi.runtime.tool_registry import ToolRegistry
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -139,7 +139,7 @@ def _cfg(enabled=True, servers=None):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_all_seams_instantiable_without_mcp_host():
-    from cozmo.runtime import mcp as mcp_pkg
+    from novi.runtime import mcp as mcp_pkg
     assert "MCPHost" not in vars(mcp_pkg)
     assert "MCPManager" not in vars(mcp_pkg)
 
@@ -159,7 +159,7 @@ def test_all_seams_instantiable_without_mcp_host():
 
 def test_connector_registry_stays_thin():
     import importlib
-    module_text = open(importlib.import_module("cozmo.connectors").__file__, encoding="utf-8").read()
+    module_text = open(importlib.import_module("novi.connectors").__file__, encoding="utf-8").read()
     assert "from .runtime.mcp" not in module_text
     assert "import MCPLifecycle" not in module_text
     assert "MCPHost" not in module_text
@@ -167,8 +167,8 @@ def test_connector_registry_stays_thin():
 
 def test_runtime_composition_stays_thin():
     import importlib
-    # webui built only via MCPManager seam wiring inside cozmo/webui.py
-    module_text = open(importlib.import_module("cozmo.webui").__file__, encoding="utf-8").read()
+    # webui built only via MCPManager seam wiring inside novi/webui.py
+    module_text = open(importlib.import_module("novi.webui").__file__, encoding="utf-8").read()
     assert "from .runtime.providers.mcp import MCPManager" in module_text
     # the seams themselves are not assembled by hand in webui
     assert "MCPLifecycle(" not in module_text
@@ -436,12 +436,12 @@ def test_status_stop_then_probe_disconnected(seams):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_manager_is_thin_facade_over_seams(monkeypatch):
-    from cozmo.runtime import mcp as mcp_mod
+    from novi.runtime import mcp as mcp_mod
 
     FakeRuntime.reset(akita={})
-    monkeypatch.setattr("cozmo.runtime.providers.mcp.MCPHost", FakeRuntime)
-    from cozmo.runtime.providers.mcp import MCPManager
-    from cozmo.runtime.tool_registry import ToolRegistry
+    monkeypatch.setattr("novi.runtime.providers.mcp.MCPHost", FakeRuntime)
+    from novi.runtime.providers.mcp import MCPManager
+    from novi.runtime.tool_registry import ToolRegistry
 
     reg = ToolRegistry()
     manager = MCPManager(reg)
@@ -472,8 +472,8 @@ def test_executor_consumes_seam_registered_tools(seams, tmp_path):
     life.start(_cfg(enabled=True))
 
     # a fresh per-session executor over the shared registration sees the tool
-    from cozmo.runtime.tool_executor import ToolExecutor
-    from cozmo.runtime.permissions import PermissionResolver
+    from novi.runtime.tool_executor import ToolExecutor
+    from novi.runtime.permissions import PermissionResolver
 
     executor = ToolExecutor(
         registry=reg,
@@ -501,7 +501,7 @@ class _NoopStore:
 
 def test_cli_mcp_uses_shared_runtime_primitive():
     import importlib
-    cli_mod = importlib.import_module("cozmo.cli")
+    cli_mod = importlib.import_module("novi.cli")
     cli_text = open(cli_mod.__file__, encoding="utf-8").read()
     # CLI drives connections through the runtime client seam
     assert "MCPRuntimeClient" in cli_text
@@ -513,7 +513,7 @@ def test_cli_mcp_uses_shared_runtime_primitive():
 
 def test_webui_mcp_test_uses_shared_primitive_and_is_isolated():
     import importlib
-    ws_mod = importlib.import_module("cozmo.webui_server")
+    ws_mod = importlib.import_module("novi.webui_server")
     ws_text = open(ws_mod.__file__, encoding="utf-8").read()
     assert "MCPRuntimeClient" in ws_text
     assert "MCPLifecycle(" not in ws_text
@@ -526,12 +526,12 @@ def test_webui_mcp_test_uses_shared_primitive_and_is_isolated():
 
 
 def test_webui_mcp_test_endpoint_reports_unknown_server(monkeypatch):
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
     ws._shared_backend = None
     monkeypatch.setattr(
-        "cozmo.configuration.discovery.query_ollama_tags",
+        "novi.configuration.discovery.query_ollama_tags",
         lambda url="", timeout=0.0: [],
     )
     try:
@@ -567,8 +567,8 @@ def test_seams_write_nothing_to_disk(seams, tmp_path):
 
 
 def test_seams_never_write_config(tmp_path):
-    from cozmo.configuration.bootstrap import build_registry as _build_registry
-    from cozmo.configuration.manager import Configuration
+    from novi.configuration.bootstrap import build_registry as _build_registry
+    from novi.configuration.manager import Configuration
 
     FakeRuntime.reset(akita={})
     reg = _build_registry()

@@ -8,11 +8,11 @@ projection, inspect/correct, append-only, green suite.
 
 from datetime import datetime, timedelta
 
-from cozmo.brain.brain import Brain
-from cozmo.brain.projection import project
-from cozmo.brain.reasoning import reflection, tiering, verification
-from cozmo.brain.reasoning.promotion import decide
-from cozmo.brain.types import (
+from novi.brain.brain import Brain
+from novi.brain.projection import project
+from novi.brain.reasoning import reflection, tiering, verification
+from novi.brain.reasoning.promotion import decide
+from novi.brain.types import (
     EdgeKind,
     KnowledgeForm,
     KnowledgeItem,
@@ -156,7 +156,7 @@ def test_acceptance_old_unconfirmed_decays_out_of_projection():
 
 
 def test_acceptance_stable_preference_outranks_recent_topic():
-    from cozmo.brain.types import KnowledgeHit
+    from novi.brain.types import KnowledgeHit
 
     stable = _item("s", "prefers dark mode", tags=("preference",), status=KnowledgeStatus.VERIFIED, importance=0.9, last_seen=_dt(1))
     recent = _item("r", "bikes to work", tags=("preference",), status=KnowledgeStatus.VERIFIED, importance=0.1, last_seen=_dt(5))
@@ -264,7 +264,7 @@ def test_synthetic_user_profile_evolves_correctly():
     pre2 = _item("p2", "user prefers python tooling", ("preference",), last_seen=_dt(2))
     pre3 = _item("p3", "prefers python tooling", ("preference",), last_seen=_dt(3))
     pre4 = _item("p4", "user prefers python build tooling", ("preference",), last_seen=_dt(4))
-    goal = _item("g", "wants cozmo to be a personal assistant", ("goal",), last_seen=_dt(5))
+    goal = _item("g", "wants novi to be a personal assistant", ("goal",), last_seen=_dt(5))
     layer = StubKnowledgeLayer([pre1, pre2, pre3, pre4, goal])
 
     report = _brain(layer).reflect()
@@ -284,7 +284,7 @@ def test_synthetic_user_profile_evolves_correctly():
 def test_acceptance_tiering_superseded_excluded_by_default():
     live = _item("a", "prefers python", status=KnowledgeStatus.VERIFIED)
     dead = _item("b", "prefers rust", status=KnowledgeStatus.SUPERSEDED)
-    from cozmo.brain.types import KnowledgeHit
+    from novi.brain.types import KnowledgeHit
 
     hits = [KnowledgeHit(item=dead), KnowledgeHit(item=live)]
     assert [h.item.id for h in tiering.tier_hits(hits)] == ["a"]

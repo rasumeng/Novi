@@ -2,7 +2,7 @@
 
 Covers the consent layer around missing recommended models for Automatic mode:
 
-* missing-model detection (catalog models Cozmo recommends but not installed)
+* missing-model detection (catalog models Novi recommends but not installed)
 * no install without explicit consent
 * explicit consent starts installation
 * successful installation refreshes advisory recommendations; user selection
@@ -22,8 +22,8 @@ import time
 
 import pytest
 
-from cozmo.configuration.discovery import DiscoveredModel
-from cozmo.configuration.hardware import (
+from novi.configuration.discovery import DiscoveredModel
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
@@ -44,11 +44,11 @@ def _isolated_home_and_config(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("HOMEDRIVE", str(tmp_path))
     monkeypatch.setenv("HOMEPATH", "")
-    import cozmo.configuration.bootstrap as boot
-    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".cozmo" / "config.toml")
+    import novi.configuration.bootstrap as boot
+    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".novi" / "config.toml")
     monkeypatch.setattr(boot, "_configuration", None)
     # Deterministic hardware so recommended-but-missing is predictable.
-    import cozmo.configuration.catalog as catalog_mod
+    import novi.configuration.catalog as catalog_mod
     monkeypatch.setattr(catalog_mod, "detect_hardware", lambda: BIG_HARDWARE)
 
 
@@ -56,17 +56,17 @@ def _make_app(monkeypatch, installed_names):
     from fastapi.testclient import TestClient
 
     holder = {"names": list(installed_names)}
-    from cozmo.configuration.discovery import ModelDiscovery
+    from novi.configuration.discovery import ModelDiscovery
     monkeypatch.setattr(
         ModelDiscovery, "installed",
         lambda self: [DiscoveredModel(name=n) for n in holder["names"]],
     )
-    from cozmo.webui_server import create_app
+    from novi.webui_server import create_app
     return TestClient(create_app(cfg={})), holder
 
 
 def _config():
-    from cozmo.configuration.bootstrap import get_configuration
+    from novi.configuration.bootstrap import get_configuration
     return get_configuration()
 
 
@@ -97,7 +97,7 @@ def test_discovery_reports_missing_recommended_models(monkeypatch):
 
 
 def test_seam_available_recommendations_is_pure_catalog_evidence(monkeypatch):
-    from cozmo.configuration.catalog import build_available_recommendations
+    from novi.configuration.catalog import build_available_recommendations
     recs = build_available_recommendations(
         installed_names={"llama3.1:8b"}, hardware=BIG_HARDWARE)
     names = {r["name"] for r in recs}
@@ -111,7 +111,7 @@ def test_seam_available_recommendations_is_pure_catalog_evidence(monkeypatch):
 
 
 def test_embeddings_never_surface_as_install_target(monkeypatch):
-    from cozmo.configuration.catalog import build_available_recommendations
+    from novi.configuration.catalog import build_available_recommendations
     recs = build_available_recommendations(installed_names=set(),
                                            hardware=BIG_HARDWARE)
     caps = {c for r in recs for c in r["capabilities"]}
@@ -129,7 +129,7 @@ def test_embeddings_never_surface_as_install_target(monkeypatch):
 
 
 def test_hardware_mismatch_models_are_not_recommended(monkeypatch):
-    from cozmo.configuration.catalog import build_available_recommendations
+    from novi.configuration.catalog import build_available_recommendations
     tiny = HardwareProfile(ram_gb=2.0, confidence=DetectionConfidence.LOW)
     recs = build_available_recommendations(installed_names=set(),
                                            hardware=tiny)
@@ -141,7 +141,7 @@ def test_hardware_mismatch_models_are_not_recommended(monkeypatch):
 
 
 def test_no_install_without_explicit_consent(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
     calls = []
     monkeypatch.setattr(ModelInstaller, "pull",
                         lambda self, name, on_progress=None: calls.append(name))
@@ -157,7 +157,7 @@ def test_no_install_without_explicit_consent(monkeypatch):
 
 
 def test_explicit_consent_starts_installation(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
     calls = []
     monkeypatch.setattr(ModelInstaller, "pull",
                         lambda self, name, on_progress=None: calls.append(name))
@@ -169,7 +169,7 @@ def test_explicit_consent_starts_installation(monkeypatch):
 
 
 def test_no_duplicate_install_requests(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
     gate = threading.Event()
     calls = []
 
@@ -195,7 +195,7 @@ def test_no_duplicate_install_requests(monkeypatch):
 
 
 def test_successful_install_refreshes_recommendations(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
 
     def pulling(self, name, on_progress=None):
         holder["names"].append(name)
@@ -230,7 +230,7 @@ def test_successful_install_refreshes_recommendations(monkeypatch):
 
 
 def test_failed_install_preserves_configuration(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
 
     def failing(self, name, on_progress=None):
         (on_progress or self.on_progress)({"name": name, "status": "error",
@@ -254,7 +254,7 @@ def test_failed_install_preserves_configuration(monkeypatch):
 
 
 def test_cancelled_install_preserves_configuration(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
     calls = []
     monkeypatch.setattr(ModelInstaller, "pull",
                         lambda self, name, on_progress=None: calls.append(name))
@@ -294,7 +294,7 @@ def test_dismiss_requires_a_model_name(monkeypatch):
 
 
 def test_install_never_touches_user_selection(monkeypatch):
-    from cozmo.configuration.install import ModelInstaller
+    from novi.configuration.install import ModelInstaller
 
     def pulling(self, name, on_progress=None):
         holder["names"].append(name)

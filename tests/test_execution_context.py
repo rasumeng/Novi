@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.tool_executor import ToolExecutor
-from cozmo.orchestrator.task_types import (
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.tool_executor import ToolExecutor
+from novi.orchestrator.task_types import (
     ComplexityScore,
     EvidenceAnalysis,
     EvidenceRequirements,
@@ -93,7 +93,7 @@ def test_cap_ids_from_analysis():
 
 
 def test_cap_ids_from_plan():
-    from cozmo.capabilities.base import Capability
+    from novi.capabilities.base import Capability
 
     plan = ExecutionPlan(capabilities=[
         Capability(id="coding"),
@@ -255,9 +255,9 @@ def test_to_dict_with_forces():
 
 def test_run_stream_accepts_context():
     """run_stream() should accept context= without error."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     ctx = ExecutionContext(user_input="hello")
     # run_stream is a generator; consume it to trigger init
     events = list(runtime.run_stream(context=ctx))
@@ -275,9 +275,9 @@ def test_run_stream_accepts_context():
 
 def test_ctx_model_name_controls_execution():
     """ctx.model_name set before run_stream should be used for model binding."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     ctx = ExecutionContext(user_input="hello")
     ctx.model_name = "test-model"
     list(runtime.run_stream(context=ctx))
@@ -286,9 +286,9 @@ def test_ctx_model_name_controls_execution():
 
 def test_ctx_memory_context_persists():
     """ctx.memory_context should survive through execution."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     ctx = ExecutionContext(user_input="hello")
     ctx.memory_context = "User prefers dark mode"
     list(runtime.run_stream(context=ctx))
@@ -298,9 +298,9 @@ def test_ctx_memory_context_persists():
 
 def test_ctx_plan_context_set_by_planner():
     """ctx.plan_context should be populated when planning triggers."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     # High complexity to trigger planning
     analysis = TaskAnalysis(
         intent=IntentType.PLANNING,
@@ -317,9 +317,9 @@ def test_ctx_plan_context_set_by_planner():
 
 def test_ctx_trace_receives_intent():
     """ctx.trace.intent should match ctx.intent_str after analysis."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     analysis = TaskAnalysis(intent=IntentType.CODING)
     ctx = ExecutionContext(user_input="fix bug", analysis=analysis)
     list(runtime.run_stream(context=ctx))
@@ -328,9 +328,9 @@ def test_ctx_trace_receives_intent():
 
 def test_ctx_trace_receives_model_routing():
     """ctx.trace should record model routing decisions."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
+    runtime = NoviRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
     ctx = ExecutionContext(user_input="hello")
     list(runtime.run_stream(context=ctx))
     # model_selected should be set (from configured model)
@@ -340,9 +340,9 @@ def test_ctx_trace_receives_model_routing():
 
 def test_ctx_allowed_tools_populated():
     """ctx.allowed_tools should be populated from analysis capabilities."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     analysis = TaskAnalysis(
         intent=IntentType.CODING,
         capabilities=["coding", "filesystem"],
@@ -354,10 +354,10 @@ def test_ctx_allowed_tools_populated():
 
 def test_ctx_execution_plan_drives_tools():
     """When execution_plan is set, ctx.allowed_tools comes from plan.tools."""
-    from cozmo.runtime.runtime import CozmoRuntime
-    from cozmo.orchestrator.task_types import ExecutionPlan, Goal
+    from novi.runtime.runtime import NoviRuntime
+    from novi.orchestrator.task_types import ExecutionPlan, Goal
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     plan = ExecutionPlan(
         goal=Goal(intent=IntentType.CODING),
         tools=["read_file", "edit_file"],
@@ -378,9 +378,9 @@ def test_ctx_to_dict_includes_memory_context():
 
 def test_ctx_grounding_populated():
     """ctx.grounding_text should be set (even if empty) after grounding phase."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     ctx = ExecutionContext(user_input="hello")
     list(runtime.run_stream(context=ctx))
     # grounding_text exists on ctx (may be empty for non-research)
@@ -394,11 +394,11 @@ def test_full_research_pipeline_trace_ownership():
     """Full research pipeline (intent → grounding → routing → ReAct → trace finalization)
     must complete without AttributeError and ctx.trace must own all trace data.
 
-    Regression test for: 'CozmoRuntime' object has no attribute '_trace'
+    Regression test for: 'NoviRuntime' object has no attribute '_trace'
     """
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
+    runtime = NoviRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
     analysis = TaskAnalysis(
         intent=IntentType.RESEARCH,
         strategy=ExecutionStrategy.RESEARCH,
@@ -418,7 +418,7 @@ def test_full_research_pipeline_trace_ownership():
     ctx = ExecutionContext(user_input="what is the best pve build in SHindo Life", analysis=analysis)
     # Deterministic: stub the live search; assertions target trace/routing state,
     # not search results.
-    with patch("cozmo.tools.search_pipeline._search_searxng", return_value=([], None)):
+    with patch("novi.tools.search_pipeline._search_searxng", return_value=([], None)):
         events = list(runtime.run_stream(context=ctx))
 
     # Trace must exist and be fully owned by ctx
@@ -448,11 +448,11 @@ def test_full_research_pipeline_trace_ownership():
 
 def test_backward_compat_trace_ownership():
     """Old API (positional params) must also populate trace through ctx.
-    Regression test for: 'CozmoRuntime' object has no attribute '_trace'
+    Regression test for: 'NoviRuntime' object has no attribute '_trace'
     """
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
-    runtime = CozmoRuntime()
+    runtime = NoviRuntime()
     events = list(runtime.run_stream("hello"))
     # Must not crash with AttributeError
     kinds = [k for k, *_ in events]
@@ -466,7 +466,7 @@ class TestSearchReformulation:
     """Unit tests for RetrievalExecutor static utilities."""
 
     def test_key_terms_extracts_meaningful_words(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
         terms = RetrievalExecutor.extract_key_terms("what is the best pve build in SHindo Life")
         assert "pve" in terms
         assert "build" in terms
@@ -477,7 +477,7 @@ class TestSearchReformulation:
         assert "the" not in terms
 
     def test_key_terms_skips_stopwords(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
         terms = RetrievalExecutor.extract_key_terms("how do I fix this bug")
         assert "fix" in terms
         assert "bug" in terms
@@ -485,23 +485,23 @@ class TestSearchReformulation:
         assert "do" not in terms
 
     def test_relevance_score_high_match(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
         text = "Shindo Life is a Roblox game with PvE builds and bloodlines"
         score = RetrievalExecutor.compute_relevance(text, ["shindo", "life", "pve", "build"])
         assert score >= 0.75
 
     def test_relevance_score_low_match(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
         text = "Genshin Impact best builds for Hu Tao and Zhongli"
         score = RetrievalExecutor.compute_relevance(text, ["shindo", "life", "pve"])
         assert score < 0.3
 
     def test_relevance_score_empty_terms(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
         assert RetrievalExecutor.compute_relevance("any text", []) == 1.0
 
     def test_reformulate_query_uses_key_terms(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
         terms = ["shindo", "life", "pve", "build", "roblox"]
         result = RetrievalExecutor.reformulate_query(None, terms)
         assert result == "shindo life pve build roblox"
@@ -513,7 +513,7 @@ class TestExecutorEntryPoint:
 
     def _fake_search(self):
         """Monkey-patch EvidenceCollector.collect to return SUFFICIENT."""
-        from cozmo.runtime.evidence import EvidenceBundle, EvidenceCollector, RetrievalQuality
+        from novi.runtime.evidence import EvidenceBundle, EvidenceCollector, RetrievalQuality
 
         def fake_collect(self, query, min_sources=1):
             b = EvidenceBundle(query=query)
@@ -528,8 +528,8 @@ class TestExecutorEntryPoint:
         return orig
 
     def _make_ctx(self, user_input: str):
-        from cozmo.runtime.execution_context import ExecutionContext
-        from cozmo.runtime.trace import ExecutionTrace
+        from novi.runtime.execution_context import ExecutionContext
+        from novi.runtime.trace import ExecutionTrace
         ctx = ExecutionContext(user_input=user_input)
         ctx.trace = ExecutionTrace(user_input=user_input)
         return ctx
@@ -551,7 +551,7 @@ class TestExecutorEntryPoint:
 
     def _set_plan(self, ctx, strategy):
         import types
-        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+        from novi.runtime.retrieval_policy import RetrievalStrategy
         ctx.analysis = types.SimpleNamespace(
             intent=types.SimpleNamespace(value="research"),
             capabilities=["research"],
@@ -572,8 +572,8 @@ class TestExecutorEntryPoint:
     # ── path 1: retrieval plan (WEB_ONLY) ────────────────────────────────
 
     def test_execute_plan_web_only(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
-        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+        from novi.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval_policy import RetrievalStrategy
 
         exe = RetrievalExecutor(debug_trace=True)
         ctx = self._make_ctx("test web only")
@@ -582,7 +582,7 @@ class TestExecutorEntryPoint:
         try:
             results = list(exe.execute(ctx, "test web only"))
         finally:
-            from cozmo.runtime.evidence import EvidenceCollector
+            from novi.runtime.evidence import EvidenceCollector
             EvidenceCollector.collect = orig
         kinds = [r[0] for r in results]
         assert "trace" in kinds
@@ -593,8 +593,8 @@ class TestExecutorEntryPoint:
     # ── path 1: retrieval plan (KNOWLEDGE_ONLY) ──────────────────────────
 
     def test_execute_plan_knowledge_only(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
-        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+        from novi.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval_policy import RetrievalStrategy
 
         exe = RetrievalExecutor(debug_trace=True)
         ctx = self._make_ctx("test kb only")
@@ -608,8 +608,8 @@ class TestExecutorEntryPoint:
     # ── path 1: retrieval plan (NONE) → no-op trace ─────────────────────
 
     def test_execute_plan_none(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
-        from cozmo.runtime.retrieval_policy import RetrievalStrategy
+        from novi.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval_policy import RetrievalStrategy
 
         exe = RetrievalExecutor(debug_trace=True)
         ctx = self._make_ctx("test plan none")
@@ -623,7 +623,7 @@ class TestExecutorEntryPoint:
 
     def test_execute_needs_grounding(self):
         import types
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
 
         exe = RetrievalExecutor(debug_trace=True)
         ctx = self._make_ctx("test needs grounding")
@@ -646,7 +646,7 @@ class TestExecutorEntryPoint:
         try:
             results = list(exe.execute(ctx, "test needs grounding"))
         finally:
-            from cozmo.runtime.evidence import EvidenceCollector
+            from novi.runtime.evidence import EvidenceCollector
             EvidenceCollector.collect = orig
         kinds = [r[0] for r in results]
         assert "trace" in kinds
@@ -657,7 +657,7 @@ class TestExecutorEntryPoint:
 
     def test_execute_no_grounding_needed(self):
         import types
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
 
         exe = RetrievalExecutor(debug_trace=True)
         ctx = self._make_ctx("test no grounding")
@@ -685,7 +685,7 @@ class TestExecutorEntryPoint:
 
     def test_execute_research_fallback(self):
         import types
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
 
         exe = RetrievalExecutor(debug_trace=True)
         # research intent requires no analysis, needs execution_plan
@@ -700,7 +700,7 @@ class TestExecutorEntryPoint:
         try:
             results = list(exe.execute(ctx, "test research fallback"))
         finally:
-            from cozmo.runtime.evidence import EvidenceCollector
+            from novi.runtime.evidence import EvidenceCollector
             EvidenceCollector.collect = orig
         kinds = [r[0] for r in results]
         assert "trace" in kinds
@@ -710,7 +710,7 @@ class TestExecutorEntryPoint:
     # ── path 5: nothing to do ───────────────────────────────────────────
 
     def test_execute_noop(self):
-        from cozmo.runtime.retrieval import RetrievalExecutor
+        from novi.runtime.retrieval import RetrievalExecutor
 
         exe = RetrievalExecutor(debug_trace=True)
         ctx = self._make_ctx("test noop")
@@ -735,7 +735,7 @@ class TestModelResolution:
         )
 
     def _selector(self, model_service):
-        from cozmo.runtime.model_selector import ModelSelector
+        from novi.runtime.model_selector import ModelSelector
         return ModelSelector(model_service)
 
     def test_resolve_returns_configured_model_verbatim(self):
@@ -751,7 +751,7 @@ class TestModelResolution:
 
     def test_resolve_unset_workload_raises_not_substitutes(self):
         """Unset workload must error, never fall back to another workload's model."""
-        from cozmo.models import ModelUnavailableError
+        from novi.models import ModelUnavailableError
         sel = self._selector(self._service({"general": "qwen3:8b"}))
         with pytest.raises(ModelUnavailableError):
             sel.resolve("research")
@@ -759,7 +759,7 @@ class TestModelResolution:
     def test_resolve_missing_configured_model_raises(self):
         """Configured-but-not-installed model must error, never substitute."""
         import types
-        from cozmo.models import ModelUnavailableError
+        from novi.models import ModelUnavailableError
 
         def resolve(w):
             if w == "general":
@@ -772,11 +772,11 @@ class TestModelResolution:
 
     def test_runtime_resolves_workload_model(self):
         """Runtime: intent/capability → workload → configured model."""
-        from cozmo.runtime.runtime import CozmoRuntime
-        from cozmo.runtime.execution_context import ExecutionContext
+        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.execution_context import ExecutionContext
 
         svc = self._service({"general": "gen-model", "research": "res-model"})
-        runtime = CozmoRuntime(model_service=svc)
+        runtime = NoviRuntime(model_service=svc)
         ctx = ExecutionContext(user_input="hello")
         list(runtime.run_stream(context=ctx))
         assert ctx.workload == "general"
@@ -786,14 +786,14 @@ class TestModelResolution:
     def test_runtime_missing_model_yields_explicit_error(self):
         """Missing workload model: explicit error, no LLM loop, no token output."""
         import types
-        from cozmo.models import ModelUnavailableError
-        from cozmo.runtime.runtime import CozmoRuntime
-        from cozmo.runtime.execution_context import ExecutionContext
+        from novi.models import ModelUnavailableError
+        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.execution_context import ExecutionContext
 
         def resolve(w):
             raise ModelUnavailableError("general", "not-installed-model", ["qwen3:8b"])
 
-        runtime = CozmoRuntime(model_service=types.SimpleNamespace(resolve=resolve))
+        runtime = NoviRuntime(model_service=types.SimpleNamespace(resolve=resolve))
         ctx = ExecutionContext(user_input="hello")
         events = list(runtime.run_stream(context=ctx))
         kinds = [k for k, *_ in events]
@@ -804,11 +804,11 @@ class TestModelResolution:
     def test_runtime_rejects_non_vision_model_for_images(self):
         """Image input against a non-vision selected model: explicit rejection."""
         import types
-        from cozmo.runtime.runtime import CozmoRuntime
-        from cozmo.runtime.execution_context import ExecutionContext
+        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.execution_context import ExecutionContext
 
         svc = self._service({"general": "gen-model"})
-        runtime = CozmoRuntime(model_service=svc)
+        runtime = NoviRuntime(model_service=svc)
         ctx = ExecutionContext(user_input="describe this")
         ctx.attachments = [{"type": "image", "path": "x.png", "mime": "image/png"}]
         events = list(runtime.run_stream(context=ctx))
@@ -818,11 +818,11 @@ class TestModelResolution:
 
 
 class TestToolExecutor:
-    """Regression tests for ToolExecutor (extracted from CozmoRuntime)."""
+    """Regression tests for ToolExecutor (extracted from NoviRuntime)."""
 
     @pytest.fixture
     def registry(self):
-        from cozmo.runtime.tool_registry import ToolRegistry
+        from novi.runtime.tool_registry import ToolRegistry
         reg = ToolRegistry()
 
         def _echo(**kwargs):
@@ -864,7 +864,7 @@ class TestToolExecutor:
 
     @pytest.fixture
     def executor(self, registry, perms, lesson_store):
-        from cozmo.runtime.tool_executor import ToolExecutor
+        from novi.runtime.tool_executor import ToolExecutor
         lc_tools = registry.as_lc_tools()
         return ToolExecutor(
             registry=registry,
@@ -973,7 +973,7 @@ class TestToolExecutor:
     # ── record_tool_call ─────────────────────────────────────────────────
 
     def test_record_tool_call(self):
-        from cozmo.runtime.trace import ExecutionTrace
+        from novi.runtime.trace import ExecutionTrace
         trace = ExecutionTrace(user_input="test")
         ToolExecutor.record_tool_call(
             None, 0, "echo", {"x": 1}, '{"x":1}', 10.5, True,

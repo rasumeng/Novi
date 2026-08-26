@@ -8,14 +8,14 @@ installation status and hardware fit.
 
 import pytest
 
-from cozmo.configuration.qualification import Qualification
-from cozmo.configuration.catalog import (
+from novi.configuration.qualification import Qualification
+from novi.configuration.catalog import (
     ModelFact,
     ModelRecommendationEngine,
     build_catalog_payload,
 )
-from cozmo.configuration.model_seeds import SEED_MODEL_FACTS
-from cozmo.configuration.discovery import DiscoveredModel, ModelStatus
+from novi.configuration.model_seeds import SEED_MODEL_FACTS
+from novi.configuration.discovery import DiscoveredModel, ModelStatus
 
 
 # ── All four grades exist ─────────────────────────────────────────────────
@@ -132,7 +132,7 @@ def test_qualification_field_distinct_from_status_in_payload():
 
 
 def test_qualification_independent_from_hardware():
-    from cozmo.configuration.hardware import HardwareProfile
+    from novi.configuration.hardware import HardwareProfile
     # Even with unknown/empty hardware, qualification is unchanged (the catalog
     # carries evidence; fit is a separate, later concern).
     engine = ModelRecommendationEngine(hardware=HardwareProfile())

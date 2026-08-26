@@ -6,8 +6,8 @@ and reopen persistence.
 
 from datetime import datetime, timezone
 
-from cozmo.brain.storage.scenario_store import ScenarioStore
-from cozmo.brain.types import Scenario, ScenarioStatus
+from novi.brain.storage.scenario_store import ScenarioStore
+from novi.brain.types import Scenario, ScenarioStatus
 
 
 def make_store(tmp_path):

@@ -13,10 +13,10 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from cozmo.runtime.evidence import RetrievalQuality
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.result_merger import MergeWeights, ResultMerger
-from cozmo.runtime.sources.base import MergedRetrievalResult, RetrievedItem, RetrievalResult
+from novi.runtime.evidence import RetrievalQuality
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.result_merger import MergeWeights, ResultMerger
+from novi.runtime.sources.base import MergedRetrievalResult, RetrievedItem, RetrievalResult
 
 BUDGET = ContextAllocation()
 NORMALIZATION = "weighted_source_position_overlap"

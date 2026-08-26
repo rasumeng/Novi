@@ -20,21 +20,21 @@ Brain.
 
 | # | Item | Where | Disposition |
 |---|---|---|---|
-| 1 | Flat `MemoryManager` internals (buffer/summarize/classify) | `cozmo/memory/manager.py` | Delete once no `brain=None` fallback remains |
+| 1 | Flat `MemoryManager` internals (buffer/summarize/classify) | `novi/memory/manager.py` | Delete once no `brain=None` fallback remains |
 | 2 | `brain=None` fallback branches in runtime + WebUI | `runtime/runtime.py` `_remember`, `webui_server.py` agent_memory | Remove; the Brain becomes mandatory |
 | 3 | `get/set_memory_manager` process-global | `memory/manager.py`, `services/context.py` | Remove; `get_brain()` is the single accessor |
 | 4 | Flat `MemoryManager.query` legacy path | `manager.py` `query` | Delete; replaced by `Brain.recall` → resolver |
 | 5 | `Brain.retrieve_memory_rows` compat adapter | `brain/brain.py:182` | **DONE (post-cutover stage)** — deleted; zero production callers (MemoryRetrievalSource reads `Brain.recall` directly). Guard: `test_no_retired_retrieve_memory_rows_adapter` |
 | 6 | `memory_ops` raw-store reads | `tools/memory_ops.py` | Brain-only access |
-| 7 | Legacy `Engine` (parallel ReAct loop) | `runtime/engine.py` | Delete once jobs migrated to `CozmoRuntime` |
+| 7 | Legacy `Engine` (parallel ReAct loop) | `runtime/engine.py` | Delete once jobs migrated to `NoviRuntime` |
 
 ## 2. Dead Code / Obsolete Adapters
 
 | # | Item | Where | Disposition |
 |---|---|---|---|
-| 1 | One-time Phase C→D migration adapter | `cozmo/brain/storage/migrations.py` | Archive to `cozmo/tools/` as documented manual utility, or delete |
+| 1 | One-time Phase C→D migration adapter | `novi/brain/storage/migrations.py` | Archive to `novi/tools/` as documented manual utility, or delete |
 | 2 | Dead source adapters (never instantiated) | `runtime/sources/{identity,scenario,file}.py` | Delete (exported in `sources/__init__.py` but unreachable) |
-| 3 | `chroma.sqlite3` legacy artifacts | `.cozmo/project_index` | Purge (documented in audits) |
+| 3 | `chroma.sqlite3` legacy artifacts | `.novi/project_index` | Purge (documented in audits) |
 | 4 | `MemoryManager.query` unused `type_filter` / `MEMORY_TYPES` | `manager.py` | Remove during item 1.4 |
 
 ## 3. Technical Debt (flagged in audits, still open)

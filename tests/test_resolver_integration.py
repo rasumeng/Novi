@@ -16,15 +16,15 @@ authoritative selection:
 Hermetic: in-memory / tmp_path config; no network, no Ollama, no services.
 """
 
-from cozmo.configuration.bootstrap import build_registry, DEFAULT_CONFIG
-from cozmo.configuration.hardware import (
+from novi.configuration.bootstrap import build_registry, DEFAULT_CONFIG
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
     HardwareProfile,
 )
-from cozmo.configuration.manager import Configuration
-from cozmo.configuration.resolver import (
+from novi.configuration.manager import Configuration
+from novi.configuration.resolver import (
     WORKLOADS,
     recommend,
     apply_selection,
@@ -46,7 +46,7 @@ HW_BIG = hw("RTX 4090", 24.0, GpuConfidence.KNOWN_VRAM, 64.0, DetectionConfidenc
 
 def _make_cfg(tmp_path, bus=None, reg=None):
     reg = reg or build_registry()
-    cfg = Configuration(reg, tmp_path / "cozmo.toml", defaults=DEFAULT_CONFIG,
+    cfg = Configuration(reg, tmp_path / "novi.toml", defaults=DEFAULT_CONFIG,
                         bus=bus)
     cfg.initialize()
     return cfg
@@ -181,7 +181,7 @@ def test_apply_selection_reaches_runtime_apply_path(tmp_path):
 
 def test_selection_paths_never_install():
     import inspect
-    from cozmo.configuration import resolver
+    from novi.configuration import resolver
     text = inspect.getsource(resolver)
     assert "pull" not in text
     assert "ModelInstaller" not in text

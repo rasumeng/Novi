@@ -16,14 +16,14 @@ Hermetic: in-memory / tmp_path config; no real user config, network, or services
 
 import pytest
 
-from cozmo.configuration.bootstrap import build_registry
-from cozmo.configuration.manager import Configuration, ValidationError
-from cozmo.configuration.registry import UnknownSettingError
+from novi.configuration.bootstrap import build_registry
+from novi.configuration.manager import Configuration, ValidationError
+from novi.configuration.registry import UnknownSettingError
 
 
 def build_cfg(tmp_path, bus=None, hooks=None) -> Configuration:
     reg = build_registry()
-    cfg = Configuration(reg, tmp_path / "cozmo.toml", bus=bus)
+    cfg = Configuration(reg, tmp_path / "novi.toml", bus=bus)
     cfg.initialize()
     if hooks:
         for owner, fn in hooks.items():
@@ -133,7 +133,7 @@ def test_mcp_and_memory_persist(tmp_path):
 
 
 def test_events_emitted(tmp_path):
-    from cozmo.configuration.events import ConfigBus
+    from novi.configuration.events import ConfigBus
     bus = ConfigBus()
     seen = []
     bus.on_any(lambda ev: seen.append(ev.path))
@@ -163,7 +163,7 @@ def test_apply_hooks_fire(tmp_path):
 def test_migrate_runs_with_new_registrations():
     # Legacy models mirror still migrates to llm.workloads even with the new
     # 'models' namespace registered (migration is data-level, not schema).
-    from cozmo.configuration.migration import migrate
+    from novi.configuration.migration import migrate
     out = migrate({"models": {"chat": "llama3", "max_tokens": 4096}})
     assert "models" not in out
     assert out["llm"]["workloads"]["general"]["model"] == "llama3"

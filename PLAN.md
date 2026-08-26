@@ -1,8 +1,8 @@
-# Cozmo — Architecture Evolution Plan
+# Novi — Architecture Evolution Plan
 
 ## 1. Project Vision
 
-Cozmo transforms from a local AI chatbot with tools into a local AI agent operating system.
+Novi transforms from a local AI chatbot with tools into a local AI agent operating system.
 
 Every user request becomes a `Task`. The system determines intent, complexity, strategy, tools, and model — the user never chooses a mode. Intelligence is modular, measurable, and replaceable. The runtime orchestrates execution without owning domain logic. Subsystems communicate through stable interfaces and events. Concrete implementations of every major capability remain swappable.
 
@@ -14,7 +14,7 @@ The system serves as a local-first agent platform: private, extensible, and obse
 
 ### 2.1 Runtime
 
-The runtime (`CozmoRuntime`) is a production-grade ReAct loop. It takes user input, executes a multi-phase pipeline (retrieval → planning → ReAct loop → memory), and streams results back to the consumer.
+The runtime (`NoviRuntime`) is a production-grade ReAct loop. It takes user input, executes a multi-phase pipeline (retrieval → planning → ReAct loop → memory), and streams results back to the consumer.
 
 **Responsibilities:**
 - Execute the full agent loop: retrieve, plan, invoke model, process tool calls, recover from failures
@@ -494,7 +494,7 @@ class SourceRanking:
 Status: **FROZEN baseline** — the Phase 7 implementation is complete and stable.
 Do not modify evidence processing without a gated, incremental change.
 
-- **Measurement command:** `python -m cozmo.evaluation evidence [--dataset tests\evidence_corpus.json] [--save PATH]`
+- **Measurement command:** `python -m novi.evaluation evidence [--dataset tests\evidence_corpus.json] [--save PATH]`
   (also `evidence-compare BASELINE.json CANDIDATE.json`). Corpus: `tests/evidence_corpus.json`
   (9 cases, EV-01..EV-09). Frozen reference report: `tests/evidence_baseline.json`.
 - **Baseline numbers** (qwen3:8b, temp 0.0, 9-case corpus, 2026-07-31):
@@ -818,7 +818,7 @@ Other deferred items:
 
 #### Purpose
 
-Enable Cozmo to perform tasks that span multiple steps, extended time periods, and session boundaries. Current architecture handles single-turn execution well but has no planning abstraction beyond inline plan generation in runtime. The empty `planner/` module must be built.
+Enable Novi to perform tasks that span multiple steps, extended time periods, and session boundaries. Current architecture handles single-turn execution well but has no planning abstraction beyond inline plan generation in runtime. The empty `planner/` module must be built.
 
 #### Goals
 
@@ -1042,7 +1042,7 @@ Every major capability must have:
                          ▼
 ┌──────────────────────────────────────────────────────────┐
 │                    Runtime Layer                          │
-│    CozmoRuntime     RetrievalExecutor     ToolExecutor    │
+│    NoviRuntime     RetrievalExecutor     ToolExecutor    │
 │    Engine           RuntimeTracer        ExecutionContext │
 │    RetrievalCoordinator                  LessonStore      │
 └──────┬──────────┬──────────┬──────────┬──────────────────┘

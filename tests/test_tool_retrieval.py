@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import cozmo.tools.file_ops as file_ops
-import cozmo.tools.memory_ops as memory_ops
+import novi.tools.file_ops as file_ops
+import novi.tools.memory_ops as memory_ops
 
 
 class _FakeMemory:
@@ -151,7 +151,7 @@ class TestSearchKnowledgeDelegation:
 
 class TestCoordinatorBudgetUnchanged:
     def test_memory_knowledge_are_not_web_tools(self):
-        from cozmo.runtime.retrieval_coordinator import RetrievalCoordinator
+        from novi.runtime.retrieval_coordinator import RetrievalCoordinator
 
         c = RetrievalCoordinator()
         assert not c.is_web_tool("search_memory")
@@ -160,7 +160,7 @@ class TestCoordinatorBudgetUnchanged:
         assert not c.is_fetch_tool("search_memory")
 
     def test_record_does_not_consume_web_budget(self):
-        from cozmo.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
+        from novi.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
 
         coord = RetrievalCoordinator(RetrievalBudget(max_web_searches=1, max_web_fetches=1))
         coord.record("search_memory", {"query": "q"}, "result")
@@ -169,7 +169,7 @@ class TestCoordinatorBudgetUnchanged:
         assert coord.budget.fetches_used == 0
 
     def test_intercept_allows_memory_knowledge_through(self):
-        from cozmo.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
+        from novi.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
 
         coord = RetrievalCoordinator(RetrievalBudget(max_web_searches=0, max_web_fetches=0))
         assert coord.intercept("search_memory", {"query": "q"}) is None
@@ -179,8 +179,8 @@ class TestCoordinatorBudgetUnchanged:
 class TestToolExecutorIntegration:
     def test_tool_output_flows_through_pipeline_unchanged(self):
         """ToolResult.output equals direct tool output → trace preview identical."""
-        from cozmo.runtime.retrieval_coordinator import RetrievalCoordinator
-        from cozmo.runtime.tool_executor import ToolExecutor
+        from novi.runtime.retrieval_coordinator import RetrievalCoordinator
+        from novi.runtime.tool_executor import ToolExecutor
 
         mem = _FakeMemory(_memory_results())
         ki = _FakeKnowledgeIndex(_knowledge_results())
@@ -210,7 +210,7 @@ class TestToolExecutorIntegration:
 
     def test_failed_retrieval_marks_tool_failure(self):
         """Adapter failure surfaces as a ToolExecutor failure, not success."""
-        from cozmo.runtime.tool_executor import ToolExecutor
+        from novi.runtime.tool_executor import ToolExecutor
 
         class _BoomMemory(_FakeMemory):
             def query(self, text, k=5, distance_threshold=0.5, memory_types=None):
@@ -235,8 +235,8 @@ class _RegistryWith:
     """Minimal ToolRegistry stand-in registering tool functions."""
 
     def __init__(self, extra):
-        from cozmo.tools import TOOL_REGISTRY
-        from cozmo.runtime.tool_registry import ToolRegistry
+        from novi.tools import TOOL_REGISTRY
+        from novi.runtime.tool_registry import ToolRegistry
 
         self._reg = ToolRegistry()
         for name, fn in TOOL_REGISTRY.items():

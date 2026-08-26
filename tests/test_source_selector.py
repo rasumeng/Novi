@@ -15,8 +15,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from cozmo.runtime.retrieval_policy import RetrievalPolicy, RetrievalStrategy, SourceType
-from cozmo.runtime.source_selector import SourceSelection, SourceSelector
+from novi.runtime.retrieval_policy import RetrievalPolicy, RetrievalStrategy, SourceType
+from novi.runtime.source_selector import SourceSelection, SourceSelector
 
 
 def select(needs_grounding=False, signal_types=(), signal_strengths=None,

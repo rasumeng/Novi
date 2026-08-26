@@ -15,7 +15,7 @@ Covers the M5.3 Telegram acceptance tests:
   7. Failed startup does not modify configuration.
   8. Shutdown is idempotent.
   9. Status is safe and never exposes the token.
-  10. Existing CLI ``cozmo telegram`` behavior stays intact.
+  10. Existing CLI ``novi telegram`` behavior stays intact.
 
 No network: a fake bot factory / fake telegram SDK is used throughout.
 """
@@ -25,9 +25,9 @@ from pathlib import Path
 
 import pytest
 
-from cozmo.configuration.bootstrap import build_registry as _build_registry
-from cozmo.configuration.manager import Configuration
-from cozmo.services.telegram import TelegramLifecycle
+from novi.configuration.bootstrap import build_registry as _build_registry
+from novi.configuration.manager import Configuration
+from novi.services.telegram import TelegramLifecycle
 
 
 # ── fake bot ──────────────────────────────────────────────────────────────
@@ -240,13 +240,13 @@ def test_apply_hook_fires_on_telegram_set(tmp_path, ctx, factory):
 
 
 def test_cli_telegram_command_unchanged(monkeypatch):
-    """``cozmo telegram`` still builds + runs the bot, ignoring ``enabled``.
+    """``novi telegram`` still builds + runs the bot, ignoring ``enabled``.
 
     M5.6: the CLI builds its own command-scoped bot directly (the allowed
     exception) and no longer registers a module-global ``set_bot_instance``.
     """
-    import cozmo.cli as cli_mod
-    import cozmo.services.telegram as tg_svc
+    import novi.cli as cli_mod
+    import novi.services.telegram as tg_svc
 
     seen = {}
 
@@ -270,8 +270,8 @@ def test_cli_telegram_command_unchanged(monkeypatch):
 
 
 def test_cli_telegram_no_token_prints_error(monkeypatch, ctx, factory):
-    """The no-token guard in ``cozmo telegram`` is untouched."""
-    import cozmo.cli as cli_mod
+    """The no-token guard in ``novi telegram`` is untouched."""
+    import novi.cli as cli_mod
 
     class FakeCtx:
         config = {"telegram": {"enabled": True, "bot_token": "", "allowed_chat_ids": []}}
@@ -393,7 +393,7 @@ def fake_sdk(monkeypatch):
 
 
 def test_telegram_bot_start_stop_lifecycle(fake_sdk):
-    from cozmo.telegram_bot import TelegramBot
+    from novi.telegram_bot import TelegramBot
 
     async def handler(chat_id, text):
         return "ok"
@@ -411,7 +411,7 @@ def test_telegram_bot_start_stop_lifecycle(fake_sdk):
 
 
 def test_telegram_bot_run_still_uses_run_polling(fake_sdk):
-    from cozmo.telegram_bot import TelegramBot
+    from novi.telegram_bot import TelegramBot
 
     async def handler(chat_id, text):
         return "ok"

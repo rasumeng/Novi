@@ -6,8 +6,8 @@ execution-pipeline boundary and references it from ExecutionPlan.task_id.
 
 import pytest
 
-from cozmo.orchestrator.task_types import TaskStatus
-from cozmo.orchestrator.task_store import TaskStore
+from novi.orchestrator.task_types import TaskStatus
+from novi.orchestrator.task_store import TaskStore
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def store(tmp_path):
 
 @pytest.fixture
 def orchestrator(tmp_path):
-    from cozmo.orchestrator.orchestrator import Orchestrator
+    from novi.orchestrator.orchestrator import Orchestrator
 
     return Orchestrator(task_store=TaskStore(persist_dir=str(tmp_path / "tasks")))
 
@@ -173,7 +173,7 @@ def test_plan_task_id_matches_store_task(orchestrator):
 
 
 def test_plan_without_task_store_leaves_task_id_empty():
-    from cozmo.orchestrator.orchestrator import Orchestrator
+    from novi.orchestrator.orchestrator import Orchestrator
 
     bare = Orchestrator()
     plan = bare.plan("hello there", conversation_id="conv-1")

@@ -12,8 +12,8 @@ mocked primitives. Covers:
 
 from __future__ import annotations
 
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.retrieval_policy import (
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.retrieval_policy import (
     RetrievalPlan,
     RetrievalPolicy,
     RetrievalStrategy,

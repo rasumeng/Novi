@@ -15,7 +15,7 @@ Telegram conforms to the M5.4/M5.5 connector architecture:
     Telegram tool adapter (bound via composition-root injection)
 
 Key M5.6 shifts:
-  * module-global ``_bot_instance`` in ``cozmo/tools/telegram.py`` is GONE —
+  * module-global ``_bot_instance`` in ``novi/tools/telegram.py`` is GONE —
     the tool resolves the ACTIVE lifecycle-owned runtime client through a
     bound accessor (``make_telegram_send`` + ``TelegramLifecycle.get_runtime_client``)
   * the CLI owns its own command-scoped bot (allowed exception) and no longer
@@ -42,7 +42,7 @@ Covers the M5.6 acceptance tests:
   16. Shutdown is idempotent.
   17. Failed start leaves no stale client.
   18. Failed start exposes safe error status.
-  19. CLI ``cozmo telegram`` remains functional.
+  19. CLI ``novi telegram`` remains functional.
   20. Generic ``/api/connectors/status`` reports Telegram safely.
   21. Existing ``/api/telegram/status`` stays compatible.
   22. No token/chat credentials appear in status responses.
@@ -54,12 +54,12 @@ Hermetic: fake bot factory / fake Telegram SDK — no network, token, or API.
 import asyncio
 import pytest
 
-from cozmo.connectors import ConnectorDefinition, ConnectorRegistry
-from cozmo.configuration.bootstrap import build_registry as _build_registry
-from cozmo.configuration.manager import Configuration
-from cozmo.runtime.tool_registry import ToolRegistry
-from cozmo.services.telegram import TelegramLifecycle
-import cozmo.tools.telegram as tg_tools
+from novi.connectors import ConnectorDefinition, ConnectorRegistry
+from novi.configuration.bootstrap import build_registry as _build_registry
+from novi.configuration.manager import Configuration
+from novi.runtime.tool_registry import ToolRegistry
+from novi.services.telegram import TelegramLifecycle
+import novi.tools.telegram as tg_tools
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -404,8 +404,8 @@ def test_failed_start_exposes_safe_error_status(factory):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_cli_telegram_command_functional(monkeypatch):
-    import cozmo.cli as cli_mod
-    import cozmo.services.telegram as tg_svc
+    import novi.cli as cli_mod
+    import novi.services.telegram as tg_svc
 
     seen = {}
 
@@ -429,7 +429,7 @@ def test_cli_telegram_command_functional(monkeypatch):
 
 
 def test_cli_telegram_no_token_prints_error(monkeypatch, capsys):
-    import cozmo.cli as cli_mod
+    import novi.cli as cli_mod
 
     class FakeCtx:
         config = {"telegram": {"enabled": True, "bot_token": "",
@@ -445,7 +445,7 @@ def test_cli_telegram_no_token_prints_error(monkeypatch, capsys):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_generic_connectors_status_reports_telegram_safely(monkeypatch):
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
     life = TelegramLifecycle(object(), bot_factory=FakeBotFactory())
@@ -470,7 +470,7 @@ def test_generic_connectors_status_reports_telegram_safely(monkeypatch):
 
 
 def test_telegram_status_endpoint_compatible(monkeypatch):
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
     life = TelegramLifecycle(object(), bot_factory=FakeBotFactory())
@@ -489,7 +489,7 @@ def test_telegram_status_endpoint_compatible(monkeypatch):
 
 
 def test_telegram_status_endpoint_fallback_when_no_backend(monkeypatch):
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     from fastapi.testclient import TestClient
 
     ws._shared_backend = None

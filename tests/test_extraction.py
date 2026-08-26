@@ -5,14 +5,14 @@ These tests pin extraction, classification, and summarization with and without
 injected LLM hooks.
 """
 
-from cozmo.brain.reasoning.extraction import (
+from novi.brain.reasoning.extraction import (
     ExtractedClaim,
     KnowledgeExtractor,
     LayerClassifier,
     Summarizer,
     _normalize,
 )
-from cozmo.brain.types import Turn
+from novi.brain.types import Turn
 
 
 def make_turns(*pairs):

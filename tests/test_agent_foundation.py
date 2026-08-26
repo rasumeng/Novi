@@ -37,19 +37,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from cozmo.graphs import CodingGraph, ResearchGraph
-from cozmo.graphs.state import (
+from novi.graphs import CodingGraph, ResearchGraph
+from novi.graphs.state import (
     MAX_STATE_ERRORS,
     AgentStateBase,
     ErrorRecord,
     append_error,
     should_stop,
 )
-from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
-from cozmo.runtime.event_bus import EventBus
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
+from novi.runtime.event_bus import EventBus
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
+from novi.runtime.runtime import NoviRuntime
 
 
 # ── shared stubs ──────────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ def test_agent_state_base_fields_exist():
             "attempt", "max_attempts", "errors",
             "completion_reason"} <= base_keys
 
-    from cozmo.graphs.state import ResearchState, CodingState
+    from novi.graphs.state import ResearchState, CodingState
     # Both specialize the base: inherited keys merge into child annotations.
     for state_cls in (ResearchState, CodingState):
         assert base_keys <= set(state_cls.__annotations__), (
@@ -246,7 +246,7 @@ def test_attempt_bound_independent_of_budget():
 
 def test_no_coordinator_bypass_possible_via_runtime():
     """The runtime always injects the run's coordinator into graph state."""
-    from cozmo.runtime.runtime import CozmoRuntime
+    from novi.runtime.runtime import NoviRuntime
 
     captured = {}
 
@@ -260,7 +260,7 @@ def test_no_coordinator_bypass_possible_via_runtime():
         def client_for_model(self, name, temperature=0.0):
             return _StubModel()
 
-    rt = CozmoRuntime(model_service=_M(), research_graph=ResearchGraph(),
+    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
                       cfg={"runtime": {"temperature": 0.2}})
     original = rt._research_graph_state
 
@@ -399,7 +399,7 @@ def test_normal_execution_unaffected_without_probe():
 
 
 def _make_plan(task_id="t1", n=3):
-    from cozmo.planner.models import Plan, PlanStep
+    from novi.planner.models import Plan, PlanStep
 
     plan = Plan(id="p1", task_id=task_id)
     descriptions = ["Gather relevant information", "Synthesize findings",
@@ -411,7 +411,7 @@ def _make_plan(task_id="t1", n=3):
 
 
 def _make_execution_plan(plan, analysis):
-    from cozmo.orchestrator.task_types import ExecutionPlan
+    from novi.orchestrator.task_types import ExecutionPlan
 
     return ExecutionPlan(
         task_id=plan.task_id,
@@ -455,7 +455,7 @@ def test_research_plan_single_honest_step():
         def client_for_model(self, name, temperature=0.0):
             return _StubModel()
 
-    rt = CozmoRuntime(model_service=_M(), research_graph=ResearchGraph(),
+    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
                       event_bus=bus, cfg={"runtime": {"temperature": 0.2}})
     rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
 
@@ -516,7 +516,7 @@ def test_coding_plan_single_honest_step():
         def client_for_model(self, name, temperature=0.0):
             return _StreamRunnable()
 
-    rt = CozmoRuntime(model_service=_M(), coding_graph=CodingGraph(),
+    rt = NoviRuntime(model_service=_M(), coding_graph=CodingGraph(),
                       cfg={"runtime": {"temperature": 0.2}})
     plan_ref = ep = _make_execution_plan(plan, analysis)
     ctx = ExecutionContext(user_input="add a logging helper")
@@ -547,7 +547,7 @@ def test_research_failure_emits_honest_step_and_plan_failed():
         def client_for_model(self, name, temperature=0.0):
             return _EmptyModel()
 
-    rt = CozmoRuntime(model_service=_M(), research_graph=ResearchGraph(),
+    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
                       cfg={"runtime": {"temperature": 0.2}})
     rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
     ctx = ExecutionContext(user_input="python asyncio event loop basics")
@@ -564,7 +564,7 @@ def test_research_failure_emits_honest_step_and_plan_failed():
 
 def test_job_lifecycle_checkpoint_stays_honest():
     """One graph execution → one checkpoint whose step reflects reality."""
-    from cozmo.services.job_lifecycle import JobLifecycle
+    from novi.services.job_lifecycle import JobLifecycle
 
     class FakeManager:
         def __init__(self):
@@ -603,7 +603,7 @@ def test_job_lifecycle_checkpoint_stays_honest():
         def client_for_model(self, name, temperature=0.0):
             return _StubModel()
 
-    rt = CozmoRuntime(model_service=_M(), research_graph=ResearchGraph(),
+    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
                       event_bus=bus, cfg={"runtime": {"temperature": 0.2}})
     rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
     analysis = SimpleNamespace(**_RESEARCH_ANALYSIS)
@@ -624,8 +624,8 @@ def test_job_lifecycle_checkpoint_stays_honest():
 
 
 def test_tool_category_single_source():
-    from cozmo.runtime.tool_executor import ToolExecutor
-    from cozmo.runtime.tool_registry import TOOL_CATEGORIES, tool_category
+    from novi.runtime.tool_executor import ToolExecutor
+    from novi.runtime.tool_registry import TOOL_CATEGORIES, tool_category
 
     assert ToolExecutor.tool_category("read_file") == "workspace"
     assert ToolExecutor.tool_category("execute_python") == "python"
@@ -640,8 +640,8 @@ def test_tool_category_single_source():
 def test_duplicate_category_tables_cannot_return():
     """Source-scan the runtime and executor: no local _TOOL_CATEGORIES table
     may exist anywhere except tool_registry."""
-    import cozmo.runtime.runtime as rt_mod
-    import cozmo.runtime.tool_executor as te_mod
+    import novi.runtime.runtime as rt_mod
+    import novi.runtime.tool_executor as te_mod
 
     for mod in (rt_mod, te_mod):
         tree = ast.parse(inspect.getsource(mod))
@@ -654,7 +654,7 @@ def test_duplicate_category_tables_cannot_return():
 
 
 def test_toolinfo_derives_category_from_registry():
-    from cozmo.runtime.tool_registry import ToolInfo, TOOL_CATEGORIES
+    from novi.runtime.tool_registry import ToolInfo, TOOL_CATEGORIES
 
     info = ToolInfo(name="edit_file", description="d", fn=lambda: "")
     assert info.category == TOOL_CATEGORIES["edit_file"]
@@ -716,7 +716,7 @@ def test_coding_retry_event_on_bounded_reimplement():
 def test_webui_forwards_phase_events_additively():
     """The WebSocket forwarder passes phase/retry payloads verbatim and still
     routes unknown kinds through the generic branch."""
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
 
     forwarded = []
 
@@ -741,13 +741,13 @@ def test_webui_forwards_phase_events_additively():
 def test_graphs_import_boundary_extended():
     """Guard 5 extension: graphs never touch configuration, jobs, services,
     persistence — or LangGraph checkpointing."""
-    import cozmo.graphs.coding_graph as cg
-    import cozmo.graphs.research_graph as rg
-    import cozmo.graphs.research_intel as rint
-    import cozmo.graphs.state as st
+    import novi.graphs.coding_graph as cg
+    import novi.graphs.research_graph as rg
+    import novi.graphs.research_intel as rint
+    import novi.graphs.state as st
 
     forbidden_prefixes = ("..configuration", "..jobs", "..services",
-                          "langgraph.checkpoint", "cozmo.jobs")
+                          "langgraph.checkpoint", "novi.jobs")
     for mod in (cg, rg, rint, st):
         tree = ast.parse(inspect.getsource(mod))
         for node in ast.walk(tree):
@@ -765,8 +765,8 @@ def test_graphs_import_boundary_extended():
 def test_graphs_never_construct_models_or_execute_tools():
     """AST scan of graph sources for direct-execution / construction verbs
     that would violate Guard 5 even without an import."""
-    import cozmo.graphs.coding_graph as cg
-    import cozmo.graphs.research_graph as rg
+    import novi.graphs.coding_graph as cg
+    import novi.graphs.research_graph as rg
 
     forbidden_calls = {"create_provider", "bind_tools", "create_chat_model",
                        "apply_selection", "resolve"}

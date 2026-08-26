@@ -15,8 +15,8 @@ Covered surfaces:
 
 import pytest
 
-from cozmo.configuration.bootstrap import build_registry
-from cozmo.configuration.redaction import ConfigRedactor
+from novi.configuration.bootstrap import build_registry
+from novi.configuration.redaction import ConfigRedactor
 
 
 @pytest.fixture
@@ -106,12 +106,12 @@ def test_masked_readback_preserves_stored_value(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("HOMEDRIVE", str(tmp_path))
     monkeypatch.setenv("HOMEPATH", "")
-    import cozmo.configuration.bootstrap as boot
-    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".cozmo" / "config.toml")
+    import novi.configuration.bootstrap as boot
+    monkeypatch.setattr(boot, "CONFIG_PATH", tmp_path / ".novi" / "config.toml")
     monkeypatch.setattr(boot, "_configuration", None)
 
     from fastapi.testclient import TestClient
-    from cozmo.webui_server import create_app
+    from novi.webui_server import create_app
 
     client = TestClient(create_app(cfg={}))
     client.patch("/api/configuration", json={

@@ -7,9 +7,9 @@ metadata string-matching. Rows still carry a metadata dict for consumers.
 
 import pytest
 
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
-from cozmo.services.embedding import EmbeddingService
+from novi.brain.storage.vector_store import VectorStore
+from novi.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):

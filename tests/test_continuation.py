@@ -8,13 +8,13 @@ Covers:
 
 import pytest
 
-from cozmo.orchestrator.intent import IntentDetector, classify_intent
-from cozmo.orchestrator.task_types import IntentType, Task, TaskStatus
-from cozmo.orchestrator.task_store import TaskStore
-from cozmo.jobs.job import Checkpoint, Job, JobStatus
-from cozmo.jobs.persistence import JobStore
-from cozmo.services.continuation import ContinuationService
-from cozmo.planner.models import Plan, PlanStep
+from novi.orchestrator.intent import IntentDetector, classify_intent
+from novi.orchestrator.task_types import IntentType, Task, TaskStatus
+from novi.orchestrator.task_store import TaskStore
+from novi.jobs.job import Checkpoint, Job, JobStatus
+from novi.jobs.persistence import JobStore
+from novi.services.continuation import ContinuationService
+from novi.planner.models import Plan, PlanStep
 
 
 def make_task(tid, *, status=TaskStatus.IN_PROGRESS, conversation_id="",
@@ -55,7 +55,7 @@ def task_store(tmp_path):
 
 @pytest.fixture
 def job_store(tmp_path, monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
     return JobStore()
 

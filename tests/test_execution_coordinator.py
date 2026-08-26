@@ -20,18 +20,18 @@ import time
 
 import pytest
 
-from cozmo.jobs.job import Checkpoint, Job, JobStatus
-from cozmo.jobs.manager import JobManager
-from cozmo.orchestrator import Orchestrator
-from cozmo.orchestrator.intent import IntentDetector
-from cozmo.orchestrator.task_store import TaskStore
-from cozmo.orchestrator.task_types import (
+from novi.jobs.job import Checkpoint, Job, JobStatus
+from novi.jobs.manager import JobManager
+from novi.orchestrator import Orchestrator
+from novi.orchestrator.intent import IntentDetector
+from novi.orchestrator.task_store import TaskStore
+from novi.orchestrator.task_types import (
     ExecutionPlan, ExecutionStrategy, Goal, IntentType, Task,
 )
-from cozmo.planner.models import Plan, PlanStep
-from cozmo.runtime.event_bus import EventBus
-from cozmo.services.execution import ExecutionCoordinator
-from cozmo.services.job_lifecycle import JobLifecycle
+from novi.planner.models import Plan, PlanStep
+from novi.runtime.event_bus import EventBus
+from novi.services.execution import ExecutionCoordinator
+from novi.services.job_lifecycle import JobLifecycle
 
 
 # ── fakes / harness ───────────────────────────────────────────────────────────
@@ -109,9 +109,9 @@ def task_store(tmp_path):
 
 @pytest.fixture
 def job_store(tmp_path, monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
-    from cozmo.jobs.persistence import JobStore
+    from novi.jobs.persistence import JobStore
     return JobStore()
 
 
@@ -190,7 +190,7 @@ def _seed_continuation(task_store, job_store):
 
 
 def test_continuation_resumes_new_attempt_with_resume_from(task_store, job_store):
-    from cozmo.services.continuation import ContinuationService
+    from novi.services.continuation import ContinuationService
 
     _seed_continuation(task_store, job_store)
     jm = JobManager(store=job_store)
@@ -221,7 +221,7 @@ def test_continuation_resumes_new_attempt_with_resume_from(task_store, job_store
 
 
 def test_continuation_reopen_failure_surfaces_error(task_store, job_store):
-    from cozmo.services.continuation import ContinuationService
+    from novi.services.continuation import ContinuationService
 
     plan = Plan(id="plan-1", task_id="task-1")
     plan.add_step(PlanStep(id="plan-1-s1", plan_id="plan-1", description="x"))
@@ -297,7 +297,7 @@ def test_record_history_with_parent_records_both_exactly_once(task_store):
 # ── ambiguity ────────────────────────────────────────────────────────────────
 
 def test_ambiguous_continuation_surfaces_candidates_no_job(task_store, job_store):
-    from cozmo.services.continuation import ContinuationService
+    from novi.services.continuation import ContinuationService
 
     # two distinct resumable tasks in different conversations → ambiguous
     plan = Plan(id="plan-1", task_id="task-1")
@@ -333,7 +333,7 @@ def test_ambiguous_continuation_surfaces_candidates_no_job(task_store, job_store
 
 def _force_continuation_intent(coord):
     """Force a continuation intent by swapping the coordinator's detector."""
-    from cozmo.orchestrator.task_types import IntentType
+    from novi.orchestrator.task_types import IntentType
     class _CIntent(_FakeIntent):
         def detect(self, user_input, history=None, has_images=False):
             return (IntentType.CONTINUATION, 1.0)
@@ -345,14 +345,14 @@ def _force_continuation_intent(coord):
 
 @pytest.fixture
 def session():
-    from cozmo.webui_server import Session
-    from cozmo.runtime.event_bus import EventBus
+    from novi.webui_server import Session
+    from novi.runtime.event_bus import EventBus
     from unittest.mock import patch, MagicMock
 
     loop = MagicMock()
     loop.call_soon_threadsafe = lambda fn, *a: fn(*a) if callable(fn) else None
     backend = (MagicMock(), MagicMock(), MagicMock(), EventBus())
-    with patch("cozmo.webui_server.build_runtime", return_value=backend):
+    with patch("novi.webui_server.build_runtime", return_value=backend):
         sess = Session(loop=loop)
     return sess
 

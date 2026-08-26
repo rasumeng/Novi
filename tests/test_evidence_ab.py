@@ -10,13 +10,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from cozmo.evaluation import (
+from novi.evaluation import (
     EvidenceABReport,
     EvidenceDataset,
     compare_evidence_ab,
     run_evidence_ab,
 )
-from cozmo.evaluation.evidence_ab import MODES, REGRESSION_TOLERANCE
+from novi.evaluation.evidence_ab import MODES, REGRESSION_TOLERANCE
 
 CORPUS_PATH = Path(__file__).parent / "evidence_corpus.json"
 
@@ -63,7 +63,7 @@ def _run(dataset: EvidenceDataset):
 
 def _bern_case():
     """Partial-extraction drop: one passage retained, key entity (Bern) excluded."""
-    from cozmo.evaluation.evidence_ab import EvidenceCase
+    from novi.evaluation.evidence_ab import EvidenceCase
 
     return EvidenceCase(
         id="C-98",
@@ -173,7 +173,7 @@ def test_compare_flags_b_recall_regression(tmp_path):
 
 
 def test_cli_evidence_compare(tmp_path):
-    from cozmo.evaluation import __main__ as m
+    from novi.evaluation import __main__ as m
 
     ds = EvidenceDataset.from_json(CORPUS_PATH)
     report, _ = _run(ds)

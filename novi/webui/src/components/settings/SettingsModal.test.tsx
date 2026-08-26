@@ -1,0 +1,168 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+
+const mockValues: Record<string, unknown> = {}
+
+const mockDiscovery = {
+  hardware: { ramGb: 16, gpu: { name: '', vramTotalGb: null, vendor: '' }, confidence: 'unknown' },
+  models: [],
+  missingModels: [],
+  installedNames: [],
+  workloads: { general: '', research: '', code: '' },
+  recommended: { workloads: {}, provisional: true },
+  vision_capable: false,
+}
+
+const frameworkMock = {
+  schema: { settings: [], groups: [] },
+  values: mockValues,
+  discovery: mockDiscovery as never,
+  settingsByCategory: { general: [], models: [], agent: [], memory: [], skills: [], connectors: [], permissions: [], developer: [] },
+  loading: false,
+  installs: {},
+  set: vi.fn(),
+  install: vi.fn().mockResolvedValue(true),
+  refreshDiscovery: vi.fn().mockResolvedValue(undefined),
+  saveWorkloadSelection: vi.fn().mockResolvedValue({ ok: true }),
+  applyRecommended: vi.fn().mockResolvedValue({ ok: true }),
+  removeModel: vi.fn().mockResolvedValue(true),
+  reload: vi.fn(),
+}
+
+vi.mock('framer-motion', () => {
+  const React = require('react')
+  return {
+    AnimatePresence: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+    motion: {
+      div: ({ children, ...props }: { children?: React.ReactNode }) =>
+        React.createElement('div', props, children),
+    },
+  }
+})
+
+vi.mock('@/hooks/useToast', () => ({
+  useToast: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showInfo: vi.fn() }),
+}))
+
+vi.mock('@/services/novi', () => ({
+  fetchTools: () => Promise.resolve([]),
+  fetchSkills: () => Promise.resolve([]),
+  fetchKnowledgeOverview: () => Promise.resolve([]),
+  fetchMcpStatus: () => Promise.resolve({}),
+  uploadSkill: () => Promise.resolve(true),
+  createSkill: () => Promise.resolve(true),
+  deleteSkill: () => Promise.resolve(true),
+}))
+
+vi.mock('./api', () => ({
+  fetchConfig: () => Promise.resolve({ models: {} }),
+  saveConfig: vi.fn(),
+}))
+
+vi.mock('@/hooks/useFrameworkSettings', () => ({
+  useFrameworkSettings: () => frameworkMock,
+}))
+
+import { SettingsModal, legacyPatch } from './SettingsModal'
+import { saveConfig } from './api'
+
+const NAV = ['General', 'Models', 'Agent', 'Memory', 'Skills', 'Connectors', 'Permissions', 'Developer']
+
+function navButtonLabels(): string[] {
+  return screen.getAllByRole('button').map((b) => (b.textContent ?? '').trim()).filter(Boolean)
+}
+
+describe('SettingsModal navigation (M4 IA)', () => {
+  beforeEach(() => {
+    frameworkMock.values = { ...mockValues }
+    frameworkMock.discovery = mockDiscovery as never
+    frameworkMock.installs = {}
+  })
+
+  it('exposes all eight first-class navigation destinations', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    const labels = navButtonLabels()
+    for (const label of NAV) {
+      expect(labels).toContain(label)
+    }
+  })
+
+  it('does not expose Advanced as a first-class destination', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    expect(navButtonLabels()).not.toContain('Advanced')
+  })
+
+  it('opens General first and renders it without experience cards', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    expect(screen.getByText('Novi is running')).toBeTruthy()
+    expect(screen.queryByText('Experience')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Light|Medium|Heavy|Custom/i })).toBeNull()
+  })
+
+  it('navigates to a page and renders its content', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
+    expect(screen.getByText('Model library')).toBeTruthy()
+  })
+
+  it('has exactly eight first-class destinations', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    // Leave General first so its content-area quick-link buttons don't get
+    // counted alongside the sidebar nav buttons.
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
+    const nav = navButtonLabels().filter((l) => NAV.includes(l))
+    expect(nav).toHaveLength(8)
+    expect(new Set(nav).size).toBe(8)
+  })
+
+  it('keeps Permissions as a destination distinct from Connectors', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    const labels = navButtonLabels()
+    expect(labels).toContain('Permissions')
+    expect(labels).toContain('Connectors')
+  })
+
+  it('Developer is the home for internal/diagnostic settings, not capability routing', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Developer')!)
+    expect(screen.getByText('Expert configuration')).toBeTruthy()
+    expect(screen.queryByText('Internal model routing')).toBeNull()
+    expect(screen.queryByText(/select capabilit/i)).toBeNull()
+  })
+})
+
+describe('SettingsModal legacy flush (selection-clobber regression)', () => {
+  beforeEach(() => {
+    vi.mocked(saveConfig).mockClear()
+  })
+
+  it('never bulk-writes the llm or models roots (framework-owned)', () => {
+    const initial = {
+      llm: { max_tokens: 65536, workloads: { general: { model: 'qwen3:8b' }, research: { model: 'qwen3:8b' }, code: { model: 'qwen3:8b' } } },
+      models: { agent: 'llama3.2:3b' },
+    }
+    const next = {
+      llm: { max_tokens: 65536, workloads: { general: { model: 'qwen2.5vl:7b' }, research: { model: 'qwen3:8b' }, code: { model: 'qwen3:8b' } } },
+      models: { agent: 'llama3.2:3b' },
+    }
+    expect(legacyPatch(next, initial)).toEqual({})
+  })
+
+  it('skips roots that are unchanged since the modal snapshot', () => {
+    const initial = { models: {}, permissions: { write_file: 'ask' }, runtime: { max_steps: 8 } }
+    expect(legacyPatch(initial, initial)).toEqual({})
+  })
+
+  it('PUTs only roots that actually changed', () => {
+    const initial = { models: {}, permissions: { write_file: 'ask' }, runtime: { max_steps: 8 } }
+    const next = { models: {}, permissions: { write_file: 'allow' }, runtime: { max_steps: 8 } }
+    expect(legacyPatch(next, initial)).toEqual({ permissions: { write_file: 'allow' } })
+  })
+
+  it('closing an unedited modal does not flush stale legacy roots', async () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
+    fireEvent.click(screen.getByLabelText('Close settings'))
+    expect(saveConfig).not.toHaveBeenCalled()
+  })
+})

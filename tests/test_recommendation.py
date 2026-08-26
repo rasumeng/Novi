@@ -1,7 +1,7 @@
 """Generic recommendation engine tests (Phase 5.5).
 
 Covers the model-name-agnostic primitives in
-``cozmo.configuration.recommendation``: evidence grading (unknown stays
+``novi.configuration.recommendation``: evidence grading (unknown stays
 unknown, explicit-only negatives), capability tri-state answers, memory
 bounds, hardware fit (strong/weak/unknown, never fabricated), score + rank
 components, and advisory seed enrichment. Also verifies the engine never
@@ -21,19 +21,19 @@ from pathlib import Path
 
 import pytest
 
-from cozmo.configuration.hardware import (
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
     HardwareProfile,
 )
-from cozmo.configuration.model_records import (
+from novi.configuration.model_records import (
     CapabilityEvidence,
     ModelIdentity,
     ModelRecord,
 )
-from cozmo.configuration.qualification import Qualification
-from cozmo.configuration.recommendation import (
+from novi.configuration.qualification import Qualification
+from novi.configuration.recommendation import (
     ESTIMATE_OVERHEAD,
     EvidenceStrength,
     HardwareFit,
@@ -46,7 +46,7 @@ from cozmo.configuration.recommendation import (
     rank_components,
     recommendation_score,
 )
-from cozmo.configuration.resolver import WORKLOADS, recommend
+from novi.configuration.resolver import WORKLOADS, recommend
 
 
 def _record(name="test:model", **kw) -> ModelRecord:
@@ -356,7 +356,7 @@ def test_merge_curated_evidence_none_passthrough():
 
 def test_engine_has_no_seed_table_and_no_model_names():
     """Engine module must not import the seed table or special-case names."""
-    path = Path(__file__).parent.parent / "cozmo" / "configuration" / "recommendation.py"
+    path = Path(__file__).parent.parent / "novi" / "configuration" / "recommendation.py"
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = []

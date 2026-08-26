@@ -5,7 +5,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from cozmo.tools.search_pipeline import (
+from novi.tools.search_pipeline import (
     _SEARXNG_TIME_MAP,
     _search_searxng,
     _search_multi,
@@ -31,7 +31,7 @@ class _FakeResponse:
 @pytest.fixture
 def searxng_stub(monkeypatch):
     """Stub SearXNG bootstrap so tests never touch the live server or Docker."""
-    monkeypatch.setattr("cozmo.tools.search_pipeline._ensure_searxng", lambda: "http://localhost:8080")
+    monkeypatch.setattr("novi.tools.search_pipeline._ensure_searxng", lambda: "http://localhost:8080")
 
 
 class TestTimeRangeMapping:
@@ -92,7 +92,7 @@ class TestEvidenceBundleError:
     """EvidenceBundle carries error field through collect()."""
 
     def test_error_on_search_failure(self):
-        with patch("cozmo.tools.search_pipeline._search_searxng") as mock_search:
+        with patch("novi.tools.search_pipeline._search_searxng") as mock_search:
             mock_search.return_value = ([], "HTTP 400: Bad Request")
             config = SearchConfig()
             results, err = _search_multi("query", config)
@@ -100,7 +100,7 @@ class TestEvidenceBundleError:
             assert err == "HTTP 400: Bad Request"
 
     def test_no_error_on_success(self):
-        with patch("cozmo.tools.search_pipeline._search_searxng") as mock_search:
+        with patch("novi.tools.search_pipeline._search_searxng") as mock_search:
             mock_search.return_value = ([SearchResult(title="A", url="http://a", snippet="test")], None)
             config = SearchConfig()
             results, err = _search_multi("query", config)

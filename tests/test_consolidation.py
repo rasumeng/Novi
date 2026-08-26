@@ -10,12 +10,12 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from cozmo.brain.layers.knowledge import KnowledgeLayer
-from cozmo.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
-from cozmo.brain.reasoning import verification
-from cozmo.brain.storage.vector_store import VectorStore
-from cozmo.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
-from cozmo.services.embedding import EmbeddingService
+from novi.brain.layers.knowledge import KnowledgeLayer
+from novi.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
+from novi.brain.reasoning import verification
+from novi.brain.storage.vector_store import VectorStore
+from novi.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):

@@ -1,8 +1,8 @@
 """Phase F — verification + promotion (pure reasoning) tests."""
 
-from cozmo.brain.reasoning.promotion import PromotionOutcome, decide
-from cozmo.brain.reasoning.verification import corroboration, is_confirm, tokens
-from cozmo.brain.types import (
+from novi.brain.reasoning.promotion import PromotionOutcome, decide
+from novi.brain.reasoning.verification import corroboration, is_confirm, tokens
+from novi.brain.types import (
     EdgeKind,
     KnowledgeForm,
     KnowledgeItem,
@@ -25,7 +25,7 @@ class TestConfirm:
     def test_explicit_confirmation_prefix(self):
         assert is_confirm("remember that I prefer python")
         assert is_confirm("I always use uv for builds")
-        assert is_confirm("never call the service 'cozmo'")
+        assert is_confirm("never call the service 'novi'")
 
     def test_plain_statement_is_not_confirmation(self):
         assert not is_confirm("the build uses uv")

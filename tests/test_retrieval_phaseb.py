@@ -16,9 +16,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
-from cozmo.runtime.trace import ExecutionTrace
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
+from novi.runtime.trace import ExecutionTrace
 
 
 class _FakeMemory:
@@ -43,7 +43,7 @@ class _FakeProject:
 
 
 def _analysis(intent="conversation", needs_memory=False):
-    from cozmo.runtime.retrieval_policy import RetrievalPlan, SourceType
+    from novi.runtime.retrieval_policy import RetrievalPlan, SourceType
 
     plan = RetrievalPlan()
     if needs_memory:
@@ -75,7 +75,7 @@ def _ctx(user_input, intent="conversation", needs_memory=False):
 
 class TestMemoryContextIntegration:
     def _runtime(self, memory):
-        return CozmoRuntime(model_service=MagicMock(), memory=memory)
+        return NoviRuntime(model_service=MagicMock(), memory=memory)
 
     def test_populates_memory_context(self):
         memory = _FakeMemory([
@@ -112,7 +112,7 @@ class TestMemoryContextIntegration:
         assert ctx.memory_context == ""
 
     def test_no_query_without_memory_manager(self):
-        rt = CozmoRuntime(model_service=MagicMock())
+        rt = NoviRuntime(model_service=MagicMock())
         ctx = _ctx("q", intent="conversation", needs_memory=True)
         list(rt.retrieval_executor.execute(ctx, "q"))
         assert ctx.memory_context == ""
@@ -138,7 +138,7 @@ class TestMemoryContextIntegration:
 
     def test_distance_threshold_from_config(self):
         memory = _FakeMemory([])
-        rt = CozmoRuntime(model_service=MagicMock(), memory=memory,
+        rt = NoviRuntime(model_service=MagicMock(), memory=memory,
                           cfg={"runtime": {"memory_distance_threshold": 0.7}})
         ctx = _ctx("q", intent="conversation", needs_memory=True)
         list(rt.retrieval_executor.execute(ctx, "q"))
@@ -146,14 +146,14 @@ class TestMemoryContextIntegration:
         assert threshold == 0.7
 
     def test_brain_routes_memory_source_through_brain(self):
-        from cozmo.brain import Brain
+        from novi.brain import Brain
 
         memory = _FakeMemory([
             {"text": "via brain", "distance": 0.1,
              "metadata": {"type": "fact", "frequency": 1, "timestamp": ""}}
         ])
         brain = Brain(memory=memory)
-        rt = CozmoRuntime(model_service=MagicMock(), memory=memory, brain=brain)
+        rt = NoviRuntime(model_service=MagicMock(), memory=memory, brain=brain)
         ctx = _ctx("q", intent="conversation", needs_memory=True)
         list(rt.retrieval_executor.execute(ctx, "q"))
         assert memory.query_calls and memory.query_calls[0][0] == "q"
@@ -162,7 +162,7 @@ class TestMemoryContextIntegration:
 
 class TestProjectContextIntegration:
     def _runtime(self, project):
-        return CozmoRuntime(model_service=MagicMock(), project_index=project)
+        return NoviRuntime(model_service=MagicMock(), project_index=project)
 
     def test_populates_project_context_for_coding(self):
         project = _FakeProject("src/foo.py: def foo()")
@@ -188,7 +188,7 @@ class TestProjectContextIntegration:
         assert ctx.project_context == ""
 
     def test_no_project_index(self):
-        rt = CozmoRuntime(model_service=MagicMock())
+        rt = NoviRuntime(model_service=MagicMock())
         ctx = _ctx("how does foo work", intent="coding", needs_memory=False)
         list(rt.retrieval_executor.execute(ctx, "how does foo work"))
         assert ctx.project_context == ""
@@ -207,7 +207,7 @@ class TestPromptContextParity:
             {"text": "User likes Python", "distance": 0.2,
              "metadata": {"type": "preference", "frequency": 3, "timestamp": ""}},
         ])
-        rt = CozmoRuntime(model_service=MagicMock(), memory=memory)
+        rt = NoviRuntime(model_service=MagicMock(), memory=memory)
         ctx = _ctx("hello", intent="conversation", needs_memory=True)
         list(rt.retrieval_executor.execute(ctx, "hello"))
         prompt = rt._system_prompt(
@@ -221,7 +221,7 @@ class TestPromptContextParity:
     def test_project_section_identical(self):
         """System prompt project section matches the pre-migration format."""
         project = _FakeProject("src/foo.py: def foo()")
-        rt = CozmoRuntime(model_service=MagicMock(), project_index=project)
+        rt = NoviRuntime(model_service=MagicMock(), project_index=project)
         ctx = _ctx("how does foo work", intent="coding", needs_memory=False)
         list(rt.retrieval_executor.execute(ctx, "how does foo work"))
         prompt = rt._system_prompt(
@@ -233,7 +233,7 @@ class TestPromptContextParity:
         assert "src/foo.py: def foo()" in prompt
 
     def test_no_sections_when_empty(self):
-        rt = CozmoRuntime(model_service=MagicMock())
+        rt = NoviRuntime(model_service=MagicMock())
         prompt = rt._system_prompt(
             user_input="hi",
             memory_context="",
@@ -243,6 +243,6 @@ class TestPromptContextParity:
         assert "Relevant project context:" not in prompt
 
     def test_runtime_has_no_legacy_memory_methods(self):
-        rt = CozmoRuntime(model_service=MagicMock())
+        rt = NoviRuntime(model_service=MagicMock())
         assert not hasattr(rt, "_query_memory")
         assert not hasattr(rt, "_rank_memories")

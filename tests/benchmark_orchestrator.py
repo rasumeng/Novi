@@ -6,9 +6,9 @@ Measures time for: IntentDetector + EvidenceDetector + ComplexityEstimator
 
 import time
 
-from cozmo.orchestrator import Orchestrator
-from cozmo.capabilities import CapabilityRegistry
-from cozmo.capabilities.builtin import register_builtin_capabilities
+from novi.orchestrator import Orchestrator
+from novi.capabilities import CapabilityRegistry
+from novi.capabilities.builtin import register_builtin_capabilities
 
 BENCHMARK_QUERIES = [
     "What is the best PVE loadout in Shindo Life?",

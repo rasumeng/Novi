@@ -30,17 +30,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from cozmo.jobs.job import JobStatus
-from cozmo.jobs.manager import JobManager
-from cozmo.jobs.persistence import JobStore
-from cozmo.orchestrator import Orchestrator
-from cozmo.orchestrator.intent import IntentDetector
-from cozmo.orchestrator.task_store import TaskStore
-from cozmo.orchestrator.task_types import (
+from novi.jobs.job import JobStatus
+from novi.jobs.manager import JobManager
+from novi.jobs.persistence import JobStore
+from novi.orchestrator import Orchestrator
+from novi.orchestrator.intent import IntentDetector
+from novi.orchestrator.task_store import TaskStore
+from novi.orchestrator.task_types import (
     ExecutionPlan, ExecutionStrategy, Goal, IntentType,
 )
-from cozmo.planner.models import Plan, PlanStep
-from cozmo.services.job_lifecycle import JobLifecycle
+from novi.planner.models import Plan, PlanStep
+from novi.services.job_lifecycle import JobLifecycle
 
 
 # ── harness (mirrors test_execution_surfaces / test_execution_coordinator) ──
@@ -119,7 +119,7 @@ class _HarnessRuntime:
 @pytest.fixture
 def webui_backend(tmp_path, monkeypatch):
     """The shared WebUI backend dict, hermetic (temp stores, real JobLifecycle)."""
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
 
     task_store = TaskStore(persist_dir=str(tmp_path / "tasks"))
@@ -147,8 +147,8 @@ def webui_backend(tmp_path, monkeypatch):
     return backend
 
 
-def _fake_cozmo_runtime_factory(harness):
-    """Return a CozmoRuntime replacement that returns the harness runtime."""
+def _fake_novi_runtime_factory(harness):
+    """Return a NoviRuntime replacement that returns the harness runtime."""
 
     def factory(**kw):
         harness.bus = kw.get("event_bus")
@@ -158,8 +158,8 @@ def _fake_cozmo_runtime_factory(harness):
 
 
 def _compose_webui_session(backend):
-    """Replicate cozmo.webui_server.Session.__init__ coordinator wiring."""
-    from cozmo.services.execution import ExecutionCoordinator
+    """Replicate novi.webui_server.Session.__init__ coordinator wiring."""
+    from novi.services.execution import ExecutionCoordinator
 
     return ExecutionCoordinator(
         orchestrator=backend["orchestrator"],
@@ -172,12 +172,12 @@ def _compose_webui_session(backend):
 
 def test_webui_execution_persists_checkpoint(webui_backend, monkeypatch):
     """A normal WebUI execution → exactly one Job → durable Checkpoint."""
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     backend = webui_backend
     monkeypatch.setattr(ws, "get_backend", lambda cfg=None: backend)
 
     harness = _HarnessRuntime()
-    monkeypatch.setattr(ws, "CozmoRuntime", _fake_cozmo_runtime_factory(harness))
+    monkeypatch.setattr(ws, "NoviRuntime", _fake_novi_runtime_factory(harness))
 
     runtime, orchestrator, job_manager, event_bus = ws.build_runtime({})
     assert harness.bus is event_bus          # session bus is the live bus
@@ -220,12 +220,12 @@ def test_webui_plan_started_does_not_double_create_job(webui_backend,
                                                        monkeypatch):
     """Invariant: one execution attempt → exactly one Job, even with a wired
     JobLifecycle whose plan.started fallback is ready to create a second."""
-    import cozmo.webui_server as ws
+    import novi.webui_server as ws
     backend = webui_backend
     monkeypatch.setattr(ws, "get_backend", lambda cfg=None: backend)
 
     harness = _HarnessRuntime()
-    monkeypatch.setattr(ws, "CozmoRuntime", _fake_cozmo_runtime_factory(harness))
+    monkeypatch.setattr(ws, "NoviRuntime", _fake_novi_runtime_factory(harness))
 
     runtime, orchestrator, job_manager, event_bus = ws.build_runtime({})
     coordinator = _compose_webui_session(backend)

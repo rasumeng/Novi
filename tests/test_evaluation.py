@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from cozmo.evaluation import (
+from novi.evaluation import (
     AnalysisDriver,
     BenchmarkCase,
     BenchmarkDataset,
@@ -20,7 +20,7 @@ from cozmo.evaluation import (
     RegressionDetector,
     TraceCollector,
 )
-from cozmo.evaluation.metrics import AnswerMetrics, CaseResult, RetrievalMetrics, ToolMetrics
+from novi.evaluation.metrics import AnswerMetrics, CaseResult, RetrievalMetrics, ToolMetrics
 
 CORPUS_PATH = Path(__file__).parent / "regression_corpus.json"
 
@@ -252,7 +252,7 @@ class TestTraceCollector:
         assert tc.last == {"request_id": "1", "intent": "coding"}
 
     def test_accepts_trace_object(self):
-        from cozmo.runtime.trace import ExecutionTrace
+        from novi.runtime.trace import ExecutionTrace
 
         tc = TraceCollector()
         trace = ExecutionTrace(user_input="hello", intent="coding")
@@ -274,7 +274,7 @@ class TestTraceCollector:
         assert tc.last is None
 
     def test_event_bus_attach(self):
-        from cozmo.runtime.event_bus import EventBus, EventType
+        from novi.runtime.event_bus import EventBus, EventType
 
         bus = EventBus()
         tc = TraceCollector(event_bus=bus)
@@ -293,7 +293,7 @@ class TestTraceCollector:
 
 class TestEvaluationRunner:
     def test_full_analysis_run(self):
-        from cozmo.evaluation.drivers import AnalysisDriver
+        from novi.evaluation.drivers import AnalysisDriver
 
         ds = BenchmarkDataset.from_json(CORPUS_PATH)
         runner = EvaluationRunner(driver=AnalysisDriver())
@@ -306,7 +306,7 @@ class TestEvaluationRunner:
         assert result.metrics.retrieval.recall > 0.7
 
     def test_limit_and_tags(self):
-        from cozmo.evaluation.drivers import AnalysisDriver
+        from novi.evaluation.drivers import AnalysisDriver
 
         ds = BenchmarkDataset.from_json(CORPUS_PATH)
         runner = EvaluationRunner(driver=AnalysisDriver())
@@ -316,7 +316,7 @@ class TestEvaluationRunner:
         assert r2.metrics.n == len(ds.by_tags("memory"))
 
     def test_compare_accepts_results_and_files(self, tmp_path):
-        from cozmo.evaluation.drivers import AnalysisDriver
+        from novi.evaluation.drivers import AnalysisDriver
 
         ds = BenchmarkDataset.from_json(CORPUS_PATH)
         runner = EvaluationRunner(driver=AnalysisDriver())
@@ -333,7 +333,7 @@ class TestEvaluationRunner:
         assert all(f.severity == "unchanged" for f in report2.findings)
 
     def test_analysis_driver_grounding_match(self):
-        from cozmo.evaluation.drivers import AnalysisDriver
+        from novi.evaluation.drivers import AnalysisDriver
 
         ds = BenchmarkDataset.from_json(CORPUS_PATH)
         runner = EvaluationRunner(driver=AnalysisDriver())
@@ -353,7 +353,7 @@ class _FakeRuntime:
     """Minimal RuntimeInterface-compatible runtime that emits traces."""
 
     def __init__(self, event_bus, answer="", fail=False, delay=0.0):
-        from cozmo.runtime.event_bus import EventType
+        from novi.runtime.event_bus import EventType
 
         self.event_bus = event_bus
         self._answer = answer
@@ -393,8 +393,8 @@ class _FakeRuntime:
 
 class TestRuntimeDriver:
     def test_consumes_trace_and_answer(self):
-        from cozmo.evaluation.drivers import RuntimeDriver
-        from cozmo.runtime.event_bus import EventBus
+        from novi.evaluation.drivers import RuntimeDriver
+        from novi.runtime.event_bus import EventBus
 
         bus = EventBus()
         fake = _FakeRuntime(bus, answer="a useful answer")
@@ -411,8 +411,8 @@ class TestRuntimeDriver:
         assert result.latency_ms > 0
 
     def test_records_failure_as_error(self):
-        from cozmo.evaluation.drivers import RuntimeDriver
-        from cozmo.runtime.event_bus import EventBus
+        from novi.evaluation.drivers import RuntimeDriver
+        from novi.runtime.event_bus import EventBus
 
         bus = EventBus()
         fake = _FakeRuntime(bus, fail=True)
@@ -423,8 +423,8 @@ class TestRuntimeDriver:
         assert "error" in result.error
 
     def test_timeout_guard(self):
-        from cozmo.evaluation.drivers import RuntimeDriver
-        from cozmo.runtime.event_bus import EventBus
+        from novi.evaluation.drivers import RuntimeDriver
+        from novi.runtime.event_bus import EventBus
 
         bus = EventBus()
         fake = _FakeRuntime(bus, delay=2.0)
@@ -455,7 +455,7 @@ class TestBoundaries:
             "runtime.execution_context",
             "runtime.retrieval_coordinator",
         ]
-        ev_dir = Path(__file__).parent.parent / "cozmo" / "evaluation"
+        ev_dir = Path(__file__).parent.parent / "novi" / "evaluation"
         for py in ev_dir.rglob("*.py"):
             if py.name == "drivers.py":
                 continue

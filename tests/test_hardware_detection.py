@@ -18,8 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import cozmo.configuration.hardware as hardware
-from cozmo.configuration.hardware import (
+import novi.configuration.hardware as hardware
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     HardwareProfile,
@@ -27,7 +27,7 @@ from cozmo.configuration.hardware import (
     detect_hardware,
     detect_ram_gb,
 )
-from cozmo.runtime.resources import ResourceManager
+from novi.runtime.resources import ResourceManager
 
 
 # ── GPU detection ─────────────────────────────────────────────────────────

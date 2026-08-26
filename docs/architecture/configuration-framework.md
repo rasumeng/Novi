@@ -1,6 +1,6 @@
-# Cozmo Configuration Framework (Settings V2)
+# Novi Configuration Framework (Settings V2)
 
-Milestone 4.5 architecture document. Defines the replacement of Cozmo's
+Milestone 4.5 architecture document. Defines the replacement of Novi's
 configuration architecture. This is **not** a UI redesign or a refactor — it
 is a replacement of how configuration is owned, routed, validated, and applied
 at runtime.
@@ -20,13 +20,13 @@ not archive.
 >
 > **Phase 5 (Dynamic Model Intelligence) updates the shipped model layer:**
 > curated facts are now **non-authoritative seed evidence**
-> (`cozmo/configuration/model_seeds.py`, `SEED_MODEL_FACTS`); discovery is a
+> (`novi/configuration/model_seeds.py`, `SEED_MODEL_FACTS`); discovery is a
 > runtime inventory producing rich `ModelRecord`s (`/api/tags` + `/api/show`,
-> `cozmo/configuration/runtime_inventory.py`) with provenance-rich capability
-> evidence (`cozmo/configuration/model_records.py`,
-> `cozmo/configuration/evidence.py`); weak name heuristics are isolated in
-> `cozmo/configuration/name_inference.py` and never used by the runtime;
-> metadata is cached in memory (`cozmo/configuration/metadata_cache.py`).
+> `novi/configuration/runtime_inventory.py`) with provenance-rich capability
+> evidence (`novi/configuration/model_records.py`,
+> `novi/configuration/evidence.py`); weak name heuristics are isolated in
+> `novi/configuration/name_inference.py` and never used by the runtime;
+> metadata is cached in memory (`novi/configuration/metadata_cache.py`).
 > There is still no Automatic/Custom model mode and no authoritative model
 > universe. See the "Phase 5 — Dynamic Model Intelligence" section below.
 
@@ -37,11 +37,11 @@ not archive.
 Today "settings" is spread across four disconnected layers with no single
 owner.
 
-### 1.1 Backend: `cozmo/config.py`
+### 1.1 Backend: `novi/config.py`
 
 A module-global TOML loader. `load()`:
 
-1. Reads `~/.cozmo/config.toml` (or returns a hardcoded `DEFAULT_CONFIG`).
+1. Reads `~/.novi/config.toml` (or returns a hardcoded `DEFAULT_CONFIG`).
 2. Auto-migrates legacy `[models]` → `[llm.roles]`.
 3. Synthesizes a **virtual legacy `models` section** for old code paths
    (`_apply_backward_compat`).
@@ -59,18 +59,18 @@ Problems:
 
 Every subsystem reaches into the same flat dict with `.get(key, fallback)`:
 
-- `cozmo/runtime/runtime.py` reads `cfg["llm"]["default_model"] or "qwen3:8b"`,
+- `novi/runtime/runtime.py` reads `cfg["llm"]["default_model"] or "qwen3:8b"`,
   `cfg["runtime"]["routing"]`, `tool_gate`, `planning`, `memory`, etc.
-- `cozmo/runtime/model_router.py` defaulting to `default_model="qwen3:8b"`.
-- `cozmo/services/context.py` (`ollama_url`, memory tuning, brain wiring).
-- `cozmo/memory/manager.py`, `knowledge_index.py`, `brain/storage/*` default to
+- `novi/runtime/model_router.py` defaulting to `default_model="qwen3:8b"`.
+- `novi/services/context.py` (`ollama_url`, memory tuning, brain wiring).
+- `novi/memory/manager.py`, `knowledge_index.py`, `brain/storage/*` default to
   `nomic-embed-text`.
-- `cozmo/providers/base.py` parsing.
+- `novi/providers/base.py` parsing.
 
 These are hardcoded fallbacks scattered across the codebase — exactly what the
 milestone forbids.
 
-### 2.3 Frontend: `cozmo/webui/src/components/settings/`
+### 2.3 Frontend: `novi/webui/src/components/settings/`
 
 React layer. `SettingsModal` hosts four pages (Settings / Models / Advanced /
 Developer) that render **schema-driven** fields straight from the framework and
@@ -94,7 +94,7 @@ server-side.
 
 ### 2.5 Bridge
 
-`cozmo/webui_server.py`:
+`novi/webui_server.py`:
 - `GET /api/config` → returns the whole dict.
 - `PUT /api/config` → `deep_merge` into the shared `cfg`, write TOML, then
   refresh only MCP. **No validation, no events, no runtime reload for most
@@ -182,7 +182,7 @@ No subsystem ever re-reads `config.toml` directly.
 
 ## 5. Proposed Configuration Framework
 
-New package `cozmo/configuration/`.
+New package `novi/configuration/`.
 
 | Module | Responsibility |
 |---|---|
@@ -236,7 +236,7 @@ Registration is done by the owning subsystem, not by a Settings page.
 Every change emits an event on a tiny internal bus:
 
 ```
-event: cozmo.config.updated
+event: novi.config.updated
   data: { path, value, previous, by }
 ```
 
@@ -304,7 +304,7 @@ class DiscoveredModel:
 `hardware_fit` (VRAM/RAM vs. approx). Recommendations are always annotated:
 
 ```
-Recommended (Tested with Cozmo)
+Recommended (Tested with Novi)
 Recommended (Best for your hardware: 16 GB RAM)
 Recommended (Works with Memory)
 Recommended (Supports Tool Calling)
@@ -341,9 +341,9 @@ Four pages, single responsibility:
 
 | Page | Purpose |
 |---|---|
-| **General** | How Cozmo behaves (isExperience auto) |
-| **Models** | What Cozmo runs (discovery, presets, install) |
-| **Advanced** | How Cozmo executes (memory, tools, permissions, providers) |
+| **General** | How Novi behaves (isExperience auto) |
+| **Models** | What Novi runs (discovery, presets, install) |
+| **Advanced** | How Novi executes (memory, tools, permissions, providers) |
 | **Developer** | Diagnostics + experimental controls |
 
 `SettingsUI reads the registered schema from `GET /api/schema` rather than
@@ -354,7 +354,7 @@ presentation layer.
 
 ## 8. Migration strategy
 
-1. Land `cozmo/configuration` new package, unused until ready.
+1. Land `novi/configuration` new package, unused until ready.
 2. Add `Configuration` implementation; route `config.load()` through new
    resolver, keeps TT backward `models` projection off.
 3. Migrate consumers one subsystem at a time to read from framework; then().
@@ -427,7 +427,7 @@ the strict runtime contract (workload → selected model → validate capabiliti
 6. **Unknown stays unknown:** VRAM/params/context/quant/capabilities are
    `None` when unknown, never fabricated.
 
-### Data model (`cozmo/configuration/model_records.py`)
+### Data model (`novi/configuration/model_records.py`)
 
 - `ModelRecord` is the single canonical record: identity, runtime/source/
   format, measured facts, capability evidence with provenance, qualification,
@@ -436,7 +436,7 @@ the strict runtime contract (workload → selected model → validate capabiliti
   `source` (runtime / seed / name-inference) and `confidence`.
 - `ModelStatus`: `installed` / `available` / `missing`.
 
-### Runtime inventory (`cozmo/configuration/runtime_inventory.py`)
+### Runtime inventory (`novi/configuration/runtime_inventory.py`)
 
 - `RuntimeInventory` abstraction. `OllamaRuntimeInventory` uses `/api/tags`
   (list) + `/api/show` (detail: `parameter_size`, `quantization_level`,
@@ -448,17 +448,17 @@ the strict runtime contract (workload → selected model → validate capabiliti
   `embedding`→embeddings, `reasoning`→reasoning); unrecognized tokens stay in
   raw metadata.
 
-### Evidence layer (`cozmo/configuration/evidence.py`)
+### Evidence layer (`novi/configuration/evidence.py`)
 
 - Capability claims merge first-set-wins: **runtime > seed > name-inference**.
-- Weak name inference is isolated in `cozmo/configuration/name_inference.py`
+- Weak name inference is isolated in `novi/configuration/name_inference.py`
   and is **never** used for authoritative runtime validation
   (`model_selector.model_capabilities` = seed facts + measured runtime
   evidence only).
 - Unknown models with real evidence appear in discovery and participate in
   recommendations as experimental candidates.
 
-### Metadata cache (`cozmo/configuration/metadata_cache.py`)
+### Metadata cache (`novi/configuration/metadata_cache.py`)
 
 - In-memory TTL cache for `/api/show` detail, keyed per (url, name).
 - **Never an authority for the runtime** (selection is validated live).
@@ -484,7 +484,7 @@ only ever an "experimental last resort". Phase 5.5 replaces that with a
 enrichment only — it never gates eligibility and its membership is never
 recommendation evidence strength.
 
-### Engine (`cozmo/configuration/recommendation.py`)
+### Engine (`novi/configuration/recommendation.py`)
 
 Model-name-agnostic primitives operating on `ModelRecord` + `HardwareProfile`.
 This module never imports or iterates `SEED_MODEL_FACTS` and has no model-name
@@ -513,7 +513,7 @@ seed-only advisory, future remote) is irrelevant to it.
   that adds seed claims (when no stronger claim exists) and fills
   display/caveats/qualification/metadata gaps. Augments evidence, never gates.
 
-### Orchestration (`cozmo/configuration/catalog.py`)
+### Orchestration (`novi/configuration/catalog.py`)
 
 `ModelRecommendationEngine.for_record()` is the generic recommendation decision
 for one record; `for_model()` is the legacy name-based wrapper. Seed-only
@@ -522,7 +522,7 @@ advisory records are built by `_seed_advisory_records()` and run through the
 `build_available_recommendations()` produces the "recommended but missing"
 setup suggestions from any candidate source. All of it is pure and advisory.
 
-### Evidence-based ranking (`cozmo/configuration/resolver.py`)
+### Evidence-based ranking (`novi/configuration/resolver.py`)
 
 `recommend()` ranks installed candidates by capability coverage → hardware fit
 → evidence strength → confidence → breadth, then a name tie-break.
@@ -534,7 +534,7 @@ hardware", "experimental / unverified (last resort)" — the last only for
 experimental/name-inference-grade evidence). `apply_selection()` remains the
 only selection write.
 
-### Evidence-based eligibility (`cozmo/configuration/eligibility.py`)
+### Evidence-based eligibility (`novi/configuration/eligibility.py`)
 
 `evaluate_eligibility(record=...)` derives eligibility from the record's
 provenance-rich evidence and generic hardware fit. An unseeded record with real

@@ -9,7 +9,7 @@ ExecutionContext seam.
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from cozmo.evidence import (
+from novi.evidence import (
     Conflict,
     ConflictDetector,
     ConfidenceAssessor,
@@ -23,9 +23,9 @@ from cozmo.evidence import (
     Source,
     SourceRanking,
 )
-from cozmo.evidence.conflicts import MAJOR, MINOR
-from cozmo.runtime.evidence import EvidenceBundle
-from cozmo.tools.search_pipeline import SearchResult
+from novi.evidence.conflicts import MAJOR, MINOR
+from novi.runtime.evidence import EvidenceBundle
+from novi.tools.search_pipeline import SearchResult
 
 CURRENT = datetime.now(timezone.utc)
 
@@ -395,13 +395,13 @@ class TestEvidenceProcessor:
 
 class TestWiring:
     def test_execution_context_evidence_field_defaults_none(self):
-        from cozmo.runtime.execution_context import ExecutionContext
+        from novi.runtime.execution_context import ExecutionContext
 
         ctx = ExecutionContext(user_input="x")
         assert ctx.evidence_context is None
 
     def test_execution_context_accepts_evidence_context(self):
-        from cozmo.runtime.execution_context import ExecutionContext
+        from novi.runtime.execution_context import ExecutionContext
 
         ev = EvidenceContext(query="q")
         ctx = ExecutionContext(user_input="x", evidence_context=ev)

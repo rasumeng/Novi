@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from cozmo.brain.storage.conversation_store import ConversationStore
-from cozmo.brain.types import Turn
+from novi.brain.storage.conversation_store import ConversationStore
+from novi.brain.types import Turn
 
 
 def make_store(tmp_path):

@@ -1,12 +1,12 @@
-# Cozmo Desktop — Tauri Migration
+# Novi Desktop — Tauri Migration
 
-Design notes for wrapping the existing Cozmo WebUI in a native desktop app
+Design notes for wrapping the existing Novi WebUI in a native desktop app
 without touching the backend or the UI.
 
 ## Goal and constraints
 
 - Thin wrapper only. No UI redesign.
-- No changes to Cozmo Brain, Runtime, Memory, Retrieval, Orchestrator, or
+- No changes to Novi Brain, Runtime, Memory, Retrieval, Orchestrator, or
   backend logic.
 - WebSocket protocol (`/ws/chat`) preserved byte-for-byte.
 - The desktop app launches the React frontend and connects to the existing
@@ -15,16 +15,16 @@ without touching the backend or the UI.
 ## How the browser workflow works today
 
 ```
-cozmo webui (cli.py)  →  run_server (webui_server.py:1584)  →  uvicorn on 127.0.0.1:8765
+novi webui (cli.py)  →  run_server (webui_server.py:1584)  →  uvicorn on 127.0.0.1:8765
    ├─ /api/*          REST endpoints (config, conversations, projects, skills, memory, MCP…)
    ├─ /ws/chat        WebSocket JSON protocol
    └─ /               serves webui/dist when present (webui_server.py:1578)
 ```
 
-Frontend (Vite, in `cozmo/webui/`):
+Frontend (Vite, in `novi/webui/`):
 
 - Dev: uses `import.meta.env.DEV` → WS + API hard-pointed at
-  `http://localhost:8765` (`webui/src/services/cozmo.ts:40-46`).
+  `http://localhost:8765` (`webui/src/services/novi.ts:40-46`).
 - Prod build: uses same-origin `location.host`.
 
 Key consequence: because the backend already serves the built frontend, a
@@ -38,7 +38,7 @@ Tauri (Rust) shell
   ├─ single-instance guard      (tauri-plugin-single-instance, registered first)
   ├─ BackendLauncher            (src/backend/launcher.rs)
   │    ├─ resolve python        venv/Scripts/python.exe (win) or venv/bin/python (unix)
-  │    ├─ spawn                 python -m cozmo webui --host --port   (child of the app)
+  │    ├─ spawn                 python -m novi webui --host --port   (child of the app)
   │    ├─ logs                  stdout/stderr piped → Tauri stderr + ring buffer
   │    ├─ health                poll GET /api/models until HTTP 200
   │    └─ stop                  taskkill /PID /T /F (win) or kill (unix) on exit
@@ -94,16 +94,16 @@ The abstraction in `launcher.rs` keeps the health-check and lifecycle generic
 (`is_running`, `is_ready`, `wait_until_ready`, `stop`) and only varies the
 command:
 
-- `Python` kind: `python -m cozmo webui --host --port`
-- `Sidecar` kind: `<executable> --host --port`, selected via `COZMO_BACKEND_BIN`
+- `Python` kind: `python -m novi webui --host --port`
+- `Sidecar` kind: `<executable> --host --port`, selected via `NOVI_BACKEND_BIN`
 
 Swapping in a frozen/bundled backend later requires no frontend or window code
 changes — only the launcher's command selection.
 
 ## Configuration
 
-Environment variables honored by the shell: `COZMO_REPO_ROOT`,
-`COZMO_PYTHON`, `COZMO_BACKEND_PORT`, `COZMO_BACKEND_BIN`.
+Environment variables honored by the shell: `NOVI_REPO_ROOT`,
+`NOVI_PYTHON`, `NOVI_BACKEND_PORT`, `NOVI_BACKEND_BIN`.
 
 ## Windows packaging
 
@@ -115,7 +115,7 @@ Environment variables honored by the shell: `COZMO_REPO_ROOT`,
 ## Risks / notes
 
 - Rust toolchain required to build; not needed to run the browser app.
-- Port `8765` collisions with an already-running `cozmo webui` — mitigated
+- Port `8765` collisions with an already-running `novi webui` — mitigated
   for the desktop app itself by the single-instance guard, but a manually
   started browser-mode backend on the same port can still collide.
 - On Windows the release binary runs `windows_subsystem = "windows"` (no
@@ -127,4 +127,4 @@ Environment variables honored by the shell: `COZMO_REPO_ROOT`,
 ## Validation
 
 - `tauri dev` (requires rust + node).
-- `npm --prefix cozmo/webui run build` for the frontend build step.
+- `npm --prefix novi/webui run build` for the frontend build step.

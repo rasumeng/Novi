@@ -10,9 +10,9 @@ No stores are touched — all probes use fakes.
 
 from __future__ import annotations
 
-from cozmo.runtime.retrieval import RetrievalExecutor
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.retrieval_policy import RetrievalPlan, RetrievalStrategy
+from novi.runtime.retrieval import RetrievalExecutor
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.retrieval_policy import RetrievalPlan, RetrievalStrategy
 
 
 class TestContextAllocationContract:
@@ -71,7 +71,7 @@ class TestContextAllocationConsumed:
         }
 
     def test_memory_source_honors_max_results(self):
-        from cozmo.runtime.sources import MemoryRetrievalSource
+        from novi.runtime.sources import MemoryRetrievalSource
 
         class _FakeManager:
             def __init__(self):
@@ -88,7 +88,7 @@ class TestContextAllocationConsumed:
         assert store.calls == [("q", 12)]
 
     def test_knowledge_source_honors_max_results(self):
-        from cozmo.runtime.sources import KnowledgeRetrievalSource
+        from novi.runtime.sources import KnowledgeRetrievalSource
 
         class _FakeIndex:
             def __init__(self):

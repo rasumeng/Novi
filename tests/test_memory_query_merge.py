@@ -7,8 +7,8 @@ store only. Knowledge-layer retrieval is exercised through the resolver
 
 import pytest
 
-from cozmo.memory.manager import MemoryManager
-from cozmo.services.embedding import EmbeddingService
+from novi.memory.manager import MemoryManager
+from novi.services.embedding import EmbeddingService
 
 
 class FakeEmbed(EmbeddingService):

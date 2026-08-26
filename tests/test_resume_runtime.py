@@ -1,6 +1,6 @@
 """Milestone 5 Phase 5C — Runtime Resume Execution.
 
-Covers resume_from behavior on CozmoRuntime.run_stream():
+Covers resume_from behavior on NoviRuntime.run_stream():
   - resume_from=0 behaves like a normal full run.
   - resume_from=N skips earlier steps without re-executing them.
   - step event indexes stay globally correct across the whole plan.
@@ -12,12 +12,12 @@ Covers resume_from behavior on CozmoRuntime.run_stream():
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from cozmo.orchestrator.task_types import ExecutionPlan, Goal, IntentType, Task
-from cozmo.planner import PlannerEngine
-from cozmo.planner.models import PlanStatus, PlanStepStatus
-from cozmo.runtime.event_bus import EventBus
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.orchestrator.task_types import ExecutionPlan, Goal, IntentType, Task
+from novi.planner import PlannerEngine
+from novi.planner.models import PlanStatus, PlanStepStatus
+from novi.runtime.event_bus import EventBus
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
 
 
 def _chunk(text):
@@ -86,7 +86,7 @@ def _run(plan, task, chunks, resume_from, max_steps=6):
     bus = EventBus()
     events = []
     bus.on_any(lambda ev: events.append(ev))
-    runtime = CozmoRuntime(model_service=fake, event_bus=bus)
+    runtime = NoviRuntime(model_service=fake, event_bus=bus)
     ctx = ExecutionContext(user_input="do the thing", execution_plan=exec_plan)
     kinds = [item[0] for item in runtime.run_stream(context=ctx, resume_from=resume_from)]
     return kinds, ctx, fake, events, plan
@@ -186,7 +186,7 @@ def test_resume_failure_marks_plan_failed_and_preserves_prior_completion():
 
 def test_unplanned_run_ignores_resume_from():
     fake = FakeModel(["plain answer"])
-    runtime = CozmoRuntime(model_service=fake, event_bus=EventBus())
+    runtime = NoviRuntime(model_service=fake, event_bus=EventBus())
     ctx = ExecutionContext(user_input="hello")
     kinds = [item[0] for item in runtime.run_stream(context=ctx, resume_from=3)]
     assert "token" in kinds

@@ -16,7 +16,7 @@ is gone; without extractor/layers, observe() behaves as Phase B.
 import pytest
 from types import SimpleNamespace
 
-from cozmo.brain import (
+from novi.brain import (
     Brain,
     ContextResolution,
     EdgeKind,
@@ -29,8 +29,8 @@ from cozmo.brain import (
     ReflectionReport,
     Turn,
 )
-from cozmo.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
-from cozmo.brain.types import Scenario, ScenarioStatus
+from novi.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
+from novi.brain.types import Scenario, ScenarioStatus
 
 
 class StubMemory:
@@ -427,7 +427,7 @@ def test_observe_edge_failure_keeps_extraction():
 
 
 def test_recall_without_memory_raises():
-    from cozmo.memory import manager as memory_module
+    from novi.memory import manager as memory_module
 
     saved = memory_module._memory_manager
     memory_module._memory_manager = None
@@ -705,8 +705,8 @@ def test_scenario_lifecycle_statuses():
 
 
 def test_facade_over_real_memory_manager(tmp_path):
-    from cozmo.memory.manager import MemoryManager
-    from cozmo.services.embedding import EmbeddingService
+    from novi.memory.manager import MemoryManager
+    from novi.services.embedding import EmbeddingService
 
     class StubLLM:
         def invoke(self, prompt):
@@ -743,7 +743,7 @@ def test_facade_over_real_memory_manager(tmp_path):
 
 
 def test_observe_with_real_conversation_store(tmp_path):
-    from cozmo.brain.storage.conversation_store import ConversationStore
+    from novi.brain.storage.conversation_store import ConversationStore
 
     store = ConversationStore(persist_dir=str(tmp_path / "convs"))
     brain = Brain(memory=StubMemory(), conversation_store=store)

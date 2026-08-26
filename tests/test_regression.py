@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from cozmo.orchestrator import Orchestrator
-from cozmo.capabilities import CapabilityRegistry
-from cozmo.capabilities.builtin import register_builtin_capabilities
+from novi.orchestrator import Orchestrator
+from novi.capabilities import CapabilityRegistry
+from novi.capabilities.builtin import register_builtin_capabilities
 
 CORPUS_PATH = Path(__file__).parent / "regression_corpus.json"
 

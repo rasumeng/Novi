@@ -8,9 +8,9 @@ application when a pass runs against a store that still holds the same items.
 
 from datetime import datetime, timedelta
 
-from cozmo.brain.brain import Brain
-from cozmo.brain.reasoning import reflection
-from cozmo.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
+from novi.brain.brain import Brain
+from novi.brain.reasoning import reflection
+from novi.brain.types import KnowledgeForm, KnowledgeItem, KnowledgeStatus
 
 
 class StubThisMemory:

@@ -8,8 +8,8 @@ Covers:
 
 import pytest
 
-from cozmo.runtime.event_bus import EventBus
-from cozmo.timeline import (
+from novi.runtime.event_bus import EventBus
+from novi.timeline import (
     CONVERSATION_OBSERVED,
     JOB_CHECKPOINTED,
     JOB_COMPLETED,
@@ -149,8 +149,8 @@ def test_surfaced_events_set_is_exactly_three():
 def test_webui_bridge_wires_service_from_context(tmp_path, monkeypatch):
     """The WebUI read-only bridge subscribes to the context's brain bus and
     surfaces brain events into the timeline (never into the brain)."""
-    import cozmo.timeline.timeline_service as ts_mod
-    from cozmo.timeline.timeline_store import TimelineStore
+    import novi.timeline.timeline_service as ts_mod
+    from novi.timeline.timeline_store import TimelineStore
 
     class _TempStore(TimelineStore):
         def __init__(self, *a, **k):
@@ -158,7 +158,7 @@ def test_webui_bridge_wires_service_from_context(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ts_mod, "TimelineStore", _TempStore)
 
-    from cozmo.webui_server import _build_timeline_bridge
+    from novi.webui_server import _build_timeline_bridge
 
     bus = EventBus()
 
@@ -183,7 +183,7 @@ def test_webui_bridge_wires_service_from_context(tmp_path, monkeypatch):
 
 
 def test_webui_bridge_disabled_without_context():
-    from cozmo.webui_server import _build_timeline_bridge
+    from novi.webui_server import _build_timeline_bridge
     assert _build_timeline_bridge({}) is None
 
 
@@ -211,7 +211,7 @@ def test_knowledge_overview_shape_and_privacy():
                 {"content": "Likes architectural explanations", "evidence": "candidate"},
             ],
             "project": [
-                {"content": "Cozmo", "evidence": "corroborated"},
+                {"content": "Novi", "evidence": "corroborated"},
             ],
         },
         "items": [

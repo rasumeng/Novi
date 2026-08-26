@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import types
 
-from cozmo.runtime.evidence import RetrievalQuality
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.retrieval import (
+from novi.runtime.evidence import RetrievalQuality
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.retrieval import (
     RecoveryAction,
     RecoveryDecision,
     RetrievalExecutor,
     RetrievalRecoveryState,
 )
-from cozmo.runtime.retrieval_policy import RetrievalPlan, RetrievalStrategy
-from cozmo.runtime.trace import ExecutionTrace
+from novi.runtime.retrieval_policy import RetrievalPlan, RetrievalStrategy
+from novi.runtime.trace import ExecutionTrace
 
 
 def _plan(strategy: RetrievalStrategy) -> RetrievalPlan:
@@ -246,17 +246,17 @@ class _ScriptedRunnable:
 def _runtime(model_service=None, registry=None):
     from unittest.mock import MagicMock
 
-    from cozmo.runtime.runtime import CozmoRuntime
-    from cozmo.runtime.tool_registry import ToolRegistry
+    from novi.runtime.runtime import NoviRuntime
+    from novi.runtime.tool_registry import ToolRegistry
 
     reg = registry
     if reg is None:
-        from cozmo.tools import TOOL_REGISTRY
+        from novi.tools import TOOL_REGISTRY
 
         reg = ToolRegistry()
         for name, fn in TOOL_REGISTRY.items():
             reg.register(name, fn)
-    return CozmoRuntime(model_service=model_service or MagicMock(), registry=reg)
+    return NoviRuntime(model_service=model_service or MagicMock(), registry=reg)
 
 
 class TestRuntimeIntegration:
@@ -265,8 +265,8 @@ class TestRuntimeIntegration:
         executor recommends upgrade, runtime rebinds tools, trace records it."""
         from unittest.mock import MagicMock, patch
 
-        from cozmo.runtime.evidence import EvidenceBundle
-        from cozmo.runtime.runtime import CozmoRuntime
+        from novi.runtime.evidence import EvidenceBundle
+        from novi.runtime.runtime import NoviRuntime
 
         rt = _runtime()
         ctx = ExecutionContext(user_input="question")
@@ -277,7 +277,7 @@ class TestRuntimeIntegration:
 
         empty = EvidenceBundle(query="question", results=[], source_count=0,
                                quality=RetrievalQuality.EMPTY)
-        with patch("cozmo.runtime.evidence.EvidenceCollector.collect", return_value=empty):
+        with patch("novi.runtime.evidence.EvidenceCollector.collect", return_value=empty):
             events = list(rt.run_stream(context=ctx))
 
         assert ctx.trace.recovery_attempts == 1
@@ -310,7 +310,7 @@ class TestRuntimeIntegration:
             def search(self, query, k=5, rerank=True):
                 return []
 
-        with patch("cozmo.tools.file_ops.get_knowledge_index", return_value=_EmptyIndex()):
+        with patch("novi.tools.file_ops.get_knowledge_index", return_value=_EmptyIndex()):
             events = list(rt.run_stream(context=ctx))
 
         assert ctx.trace.recovery_attempts == 1
@@ -323,7 +323,7 @@ class TestRuntimeIntegration:
         """Site 1: web plan + web tools missing → tools granted before loop."""
         from unittest.mock import MagicMock, patch
 
-        from cozmo.runtime.evidence import EvidenceBundle
+        from novi.runtime.evidence import EvidenceBundle
 
         rt = _runtime()
         ctx = ExecutionContext(user_input="question")
@@ -334,7 +334,7 @@ class TestRuntimeIntegration:
 
         empty = EvidenceBundle(query="question", results=[], source_count=0,
                                quality=RetrievalQuality.EMPTY)
-        with patch("cozmo.runtime.evidence.EvidenceCollector.collect", return_value=empty):
+        with patch("novi.runtime.evidence.EvidenceCollector.collect", return_value=empty):
             events = list(rt.run_stream(context=ctx))
 
         assert "web_search" in ctx.allowed_tools

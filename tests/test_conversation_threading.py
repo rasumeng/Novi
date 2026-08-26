@@ -1,6 +1,6 @@
 """Regression tests — conversation ownership threading (Milestone 5, Phase 0).
 
-Before the fix, CozmoRuntime._remember() called ``brain.observe(Turn(...))``
+Before the fix, NoviRuntime._remember() called ``brain.observe(Turn(...))``
 without a conversation_id, so the Brain assigned a fresh conversation id every
 turn: one user conversation became many Brain conversations, scenarios never
 accumulated, and extraction batching never saw a full thread.
@@ -14,10 +14,10 @@ scenario; extraction batching works across turns.
 
 import pytest
 
-from cozmo.brain import Brain, Turn
-from cozmo.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
-from cozmo.brain.storage.conversation_store import ConversationStore
-from cozmo.runtime.runtime import CozmoRuntime
+from novi.brain import Brain, Turn
+from novi.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
+from novi.brain.storage.conversation_store import ConversationStore
+from novi.runtime.runtime import NoviRuntime
 
 
 class RecordingBus:
@@ -99,7 +99,7 @@ class RecordingBrain:
 
 
 def make_runtime(brain=None):
-    return CozmoRuntime(brain=brain)
+    return NoviRuntime(brain=brain)
 
 
 # ── Unit: runtime → Turn → Brain ────────────────────────────────────────────
@@ -109,12 +109,12 @@ def test_remember_forwards_conversation_id_to_brain():
     brain = RecordingBrain()
     rt = make_runtime(brain)
 
-    rt._remember("user says hi", "cozmo replies", conversation_id="conv-webui-1")
+    rt._remember("user says hi", "novi replies", conversation_id="conv-webui-1")
 
     assert len(brain.observed) == 1
     turn = brain.observed[0]
     assert turn.user == "user says hi"
-    assert turn.assistant == "cozmo replies"
+    assert turn.assistant == "novi replies"
     assert turn.conversation_id == "conv-webui-1"
 
 
@@ -122,7 +122,7 @@ def test_remember_without_conversation_id_leaves_none():
     brain = RecordingBrain()
     rt = make_runtime(brain)
 
-    rt._remember("user says hi", "cozmo replies")
+    rt._remember("user says hi", "novi replies")
 
     assert len(brain.observed) == 1
     assert brain.observed[0].conversation_id is None
@@ -143,9 +143,9 @@ def test_remember_error_path_forwards_conversation_id():
 def test_run_stream_stores_conversation_id_on_context():
     from unittest.mock import MagicMock
 
-    from cozmo.runtime.execution_context import ExecutionContext
+    from novi.runtime.execution_context import ExecutionContext
 
-    rt = CozmoRuntime(model_service=MagicMock())
+    rt = NoviRuntime(model_service=MagicMock())
     ctx = ExecutionContext(user_input="hi")
     try:
         for _ in rt.run_stream(context=ctx, conversation_id="conv-webui-2"):
@@ -159,9 +159,9 @@ def test_run_stream_stores_conversation_id_on_context():
 def test_run_stream_keeps_context_conversation_id_default():
     from unittest.mock import MagicMock
 
-    from cozmo.runtime.execution_context import ExecutionContext
+    from novi.runtime.execution_context import ExecutionContext
 
-    rt = CozmoRuntime(model_service=MagicMock())
+    rt = NoviRuntime(model_service=MagicMock())
     ctx = ExecutionContext(user_input="hi")
     try:
         for _ in rt.run_stream(context=ctx):

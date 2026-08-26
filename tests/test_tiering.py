@@ -9,13 +9,13 @@ by default, included on request.
 
 from datetime import datetime, timedelta
 
-from cozmo.brain.reasoning.resolver import LayeredRetrievalResolver
-from cozmo.brain.reasoning.tiering import (
+from novi.brain.reasoning.resolver import LayeredRetrievalResolver
+from novi.brain.reasoning.tiering import (
     bucket_confidence,
     bucket_importance,
     tier_hits,
 )
-from cozmo.brain.types import (
+from novi.brain.types import (
     KnowledgeForm,
     KnowledgeHit,
     KnowledgeItem,

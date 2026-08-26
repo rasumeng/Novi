@@ -7,9 +7,9 @@ across diverse scenarios. Reports accuracy, false positives, false negatives.
 from dataclasses import dataclass, field
 from typing import Optional
 
-from cozmo.orchestrator import Orchestrator
-from cozmo.capabilities import CapabilityRegistry
-from cozmo.capabilities.builtin import register_builtin_capabilities
+from novi.orchestrator import Orchestrator
+from novi.capabilities import CapabilityRegistry
+from novi.capabilities.builtin import register_builtin_capabilities
 
 # ── Scenario definition ──────────────────────────────────────────────────
 

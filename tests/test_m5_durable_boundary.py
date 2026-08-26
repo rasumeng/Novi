@@ -14,7 +14,7 @@ Ensures the decisions from the durability-vs-configuration audit stay true:
   4. Permissions are re-evaluated at tool-call time per run — a checkpointed
      task whose tool was permitted cannot inherit that permission after it is
      revoked; nothing is snapshotted into durable state.
-  5. Startup recovery runs once per CozmoContext on every execution surface
+  5. Startup recovery runs once per NoviContext on every execution surface
      (``build_application_execution`` → ``ctx.recover_once``), so CLI/Telegram
      surfaces match the WebUI ``warmup`` sweep (F-4 parity).
 """
@@ -23,16 +23,16 @@ import json
 
 import pytest
 
-from cozmo.jobs.job import Checkpoint, JobStatus
-from cozmo.jobs.manager import JobManager
-from cozmo.jobs.persistence import JobStore
-from cozmo.runtime.event_bus import EventBus
-from cozmo.services.job_lifecycle import JobLifecycle
+from novi.jobs.job import Checkpoint, JobStatus
+from novi.jobs.manager import JobManager
+from novi.jobs.persistence import JobStore
+from novi.runtime.event_bus import EventBus
+from novi.services.job_lifecycle import JobLifecycle
 
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
     return JobStore()
 
@@ -84,7 +84,7 @@ def test_step_context_persisted_redacted(manager, store):
 
 
 def test_redaction_covers_nested_and_long_leaves():
-    from cozmo.runtime.execution_redaction import redact_value
+    from novi.runtime.execution_redaction import redact_value
 
     blob = {
         "Authorization": "Bearer abc",
@@ -107,7 +107,7 @@ def test_redaction_covers_nested_and_long_leaves():
 def test_durable_state_never_carries_config_or_secrets(tmp_path,
                                                        manager, store):
     """A full run's persisted JSON contains no settings/credential material."""
-    from cozmo.services.job_lifecycle import JobLifecycle
+    from novi.services.job_lifecycle import JobLifecycle
 
     # drive through the lifecycle so the durability-gate redaction applies
     bus = EventBus()
@@ -139,7 +139,7 @@ def test_durable_state_never_carries_config_or_secrets(tmp_path,
 
 def test_continuation_plan_model_spec_empty_resolves_at_runtime(manager):
     """Resume target + continuation ExecutionPlan carry NO model pin."""
-    from cozmo.orchestrator.task_types import ExecutionPlan
+    from novi.orchestrator.task_types import ExecutionPlan
 
     plan = ExecutionPlan(
         task_id="task-r",
@@ -164,7 +164,7 @@ def test_runtime_resolve_prefers_service_when_plan_empty():
     resume after a settings change re-resolves, nothing in the checkpoint pins
     the old model.
     """
-    from cozmo.orchestrator.task_types import ExecutionPlan
+    from novi.orchestrator.task_types import ExecutionPlan
 
     # plan level: continuation builds model_spec with empty model — no pin
     pinned = ExecutionPlan(task_id="t", goal="g",
@@ -175,7 +175,7 @@ def test_runtime_resolve_prefers_service_when_plan_empty():
 
     # the durable contract that matters: nothing about the model is carried
     # into the checkpoint path — Checkpoint has no model/provider fields
-    from cozmo.jobs.job import Checkpoint
+    from novi.jobs.job import Checkpoint
     cp = Checkpoint(job_id="j", task_id="t", plan_id="p", step=1)
     serialized = json.dumps(cp.to_dict())
     assert "model" not in serialized
@@ -204,18 +204,18 @@ def test_checkpoint_never_snapshots_permissions(manager, store):
 # ── 5. recovery parity: recover_once across surfaces ────────────────────────
 
 def test_recover_once_runs_single_sweep(tmp_path, monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
 
-    from cozmo.jobs.job import Job
-    from cozmo.jobs.persistence import JobStore
-    from cozmo.services.context import CozmoContext
+    from novi.jobs.job import Job
+    from novi.jobs.persistence import JobStore
+    from novi.services.context import NoviContext
 
     store = JobStore()
     store.save(Job(id="job-parity", task_id="task-parity",
                    status=JobStatus.RUNNING))
 
-    ctx = CozmoContext(cfg={"ollama": {"url": "http://x"}})
+    ctx = NoviContext(cfg={"ollama": {"url": "http://x"}})
     bus = EventBus()
     seen = []
     bus.on("job.interrupted", lambda ev: seen.append(ev))
@@ -230,19 +230,19 @@ def test_recover_once_runs_single_sweep(tmp_path, monkeypatch):
 
 def test_recover_once_reached_from_build_application_execution(tmp_path,
                                                                monkeypatch):
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
 
-    from cozmo.jobs.job import Job
-    from cozmo.jobs.persistence import JobStore
-    from cozmo.services.context import CozmoContext
-    from cozmo.services.execution import build_application_execution
+    from novi.jobs.job import Job
+    from novi.jobs.persistence import JobStore
+    from novi.services.context import NoviContext
+    from novi.services.execution import build_application_execution
 
     store = JobStore()
     store.save(Job(id="job-surface", task_id="task-surface",
                    status=JobStatus.RUNNING))
 
-    ctx = CozmoContext(cfg={"ollama": {"url": "http://x"}})
+    ctx = NoviContext(cfg={"ollama": {"url": "http://x"}})
     calls = []
 
     def spy(bus=None):

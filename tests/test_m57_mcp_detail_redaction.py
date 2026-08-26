@@ -12,7 +12,7 @@ Hermetic: fake MCP host, no real server, no subprocess, no network.
 import pytest
 from fastapi.testclient import TestClient
 
-import cozmo.webui_server as ws
+import novi.webui_server as ws
 
 
 class FakeHost:
@@ -43,8 +43,8 @@ class FakeHost:
 @pytest.fixture
 def seams(monkeypatch):
     """MCPStatus over a fake host, wired to a secret-bearing server config."""
-    from cozmo.runtime.mcp import MCPLifecycle, MCPStatus, MCPToolDiscovery
-    from cozmo.runtime.tool_registry import ToolRegistry
+    from novi.runtime.mcp import MCPLifecycle, MCPStatus, MCPToolDiscovery
+    from novi.runtime.tool_registry import ToolRegistry
 
     FakeHost.instances = []
     reg = ToolRegistry()
@@ -126,12 +126,12 @@ def test_safe_status_and_lifecycle_unchanged(seams):
 
 
 def test_api_server_detail_never_leaks_credentials(monkeypatch):
-    from cozmo.runtime.providers import mcp as mcp_mod
+    from novi.runtime.providers import mcp as mcp_mod
 
     FakeHost.instances = []
     monkeypatch.setattr(mcp_mod, "MCPHost", FakeHost)
 
-    from cozmo.runtime.tool_registry import ToolRegistry
+    from novi.runtime.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
     manager = mcp_mod.MCPManager(registry)

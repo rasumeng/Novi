@@ -1,7 +1,7 @@
 """Phase D — RelationshipStore (SQLite edges) tests."""
 
-from cozmo.brain.storage.relationship_store import RelationshipStore
-from cozmo.brain.types import EdgeKind, Relationship
+from novi.brain.storage.relationship_store import RelationshipStore
+from novi.brain.types import EdgeKind, Relationship
 
 
 def rel(source, target, kind=EdgeKind.DERIVED_FROM):

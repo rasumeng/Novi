@@ -1,7 +1,7 @@
 """Milestone 5 Phase 5E-2B — Telegram dependency boundary + adapter behavior.
 
 Covers:
-  - ``cozmo/telegram_bot.py`` stays importable WITHOUT python-telegram-bot
+  - ``novi/telegram_bot.py`` stays importable WITHOUT python-telegram-bot
     (no top-level SDK import).
   - ``_require_telegram_sdk`` distinguishes: SDK missing (install hint),
     conflicting ``telegram`` package shadowing (conflict message), and the
@@ -21,10 +21,10 @@ import types
 
 import pytest
 
-from cozmo.telegram_bot import TelegramBot, TelegramIntegrationError
-from cozmo.telegram_bot import _require_telegram_sdk
+from novi.telegram_bot import TelegramBot, TelegramIntegrationError
+from novi.telegram_bot import _require_telegram_sdk
 
-MODULE = "cozmo.telegram_bot"
+MODULE = "novi.telegram_bot"
 
 
 # ── fake SDK / transport ─────────────────────────────────────────────────────
@@ -153,7 +153,7 @@ def test_telegram_module_importable_without_sdk(monkeypatch):
 def test_telegram_module_has_no_top_level_sdk_import():
     import ast
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "cozmo" / "telegram_bot.py")
+    src = (Path(__file__).resolve().parent.parent / "novi" / "telegram_bot.py")
     tree = ast.parse(src.read_text("utf-8"))
     imports = []
     for node in tree.body:
@@ -171,7 +171,7 @@ def test_probe_raises_install_hint_when_sdk_missing(monkeypatch):
     sys.meta_path.insert(0, blocker)
     try:
         mod = importlib.import_module(MODULE)   # live module — identity-safe after reload
-        with pytest.raises(mod.TelegramIntegrationError, match="cozmo.*\\[telegram\\]"):
+        with pytest.raises(mod.TelegramIntegrationError, match="novi.*\\[telegram\\]"):
             mod._require_telegram_sdk()
     finally:
         sys.meta_path.remove(blocker)

@@ -12,9 +12,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.sources import (
+from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.sources import (
     FileRetrievalSource,
     IdentityRetrievalSource,
     KnowledgeRetrievalSource,
@@ -26,7 +26,7 @@ from cozmo.runtime.sources import (
     ScenarioRetrievalSource,
     WebRetrievalSource,
 )
-from cozmo.tools.search_pipeline import SearchResult
+from novi.tools.search_pipeline import SearchResult
 
 BUDGET = ContextAllocation()
 
@@ -200,7 +200,7 @@ class TestKnowledgeRetrievalSource:
         assert item.metadata["title"] == "Guide"
 
     def test_brain_backed_routes_through_brain_index(self):
-        from cozmo.brain import Brain
+        from novi.brain import Brain
 
         class _BrainIndex:
             def __init__(self, rows):
@@ -299,7 +299,7 @@ class TestProjectRetrievalSource:
         assert result.quality == RetrievalQuality.SUFFICIENT
 
     def test_brain_backed_routes_through_brain_project(self):
-        from cozmo.brain import Brain
+        from novi.brain import Brain
 
         class _BrainProject:
             def __init__(self, root, text):

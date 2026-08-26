@@ -14,18 +14,18 @@ checkpoints are driven purely from the plan/step events it emits.
 
 import pytest
 
-import cozmo.jobs.persistence as persistence
-from cozmo.jobs.job import Checkpoint, JobStatus
-from cozmo.jobs.manager import JobManager
-from cozmo.jobs.persistence import (
+import novi.jobs.persistence as persistence
+from novi.jobs.job import Checkpoint, JobStatus
+from novi.jobs.manager import JobManager
+from novi.jobs.persistence import (
     JobStore,
     find_interrupted_jobs,
     mark_interrupted,
 )
-from cozmo.orchestrator.task_types import Task
-from cozmo.runtime.event_bus import EventBus
-from cozmo.services.job_lifecycle import JobLifecycle
-from cozmo.timeline import (
+from novi.orchestrator.task_types import Task
+from novi.runtime.event_bus import EventBus
+from novi.services.job_lifecycle import JobLifecycle
+from novi.timeline import (
     JOB_CHECKPOINTED,
     JOB_COMPLETED,
     JOB_CREATED,
@@ -34,7 +34,7 @@ from cozmo.timeline import (
     JOB_STARTED,
     TimelineService,
 )
-from cozmo.timeline.timeline_store import TimelineStore
+from novi.timeline.timeline_store import TimelineStore
 
 
 # ── Store isolation ──────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ from cozmo.timeline.timeline_store import TimelineStore
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """JobStore writing to a temp dir."""
-    import cozmo.jobs.persistence as persistence
+    import novi.jobs.persistence as persistence
     monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
     return JobStore()
 

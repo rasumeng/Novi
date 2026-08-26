@@ -10,22 +10,22 @@ substitution, no derived evidence leaked into config).
 
 import pytest
 
-from cozmo.configuration.catalog import ModelFact
-from cozmo.configuration.hardware import (
+from novi.configuration.catalog import ModelFact
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
     HardwareProfile,
 )
-from cozmo.configuration.qualification import Qualification
-from cozmo.configuration.resolver import (
+from novi.configuration.qualification import Qualification
+from novi.configuration.resolver import (
     WORKLOADS,
     WORKLOAD_CAPABILITY,
     recommend,
     apply_selection,
 )
-from cozmo.configuration.bootstrap import build_registry, DEFAULT_CONFIG
-from cozmo.configuration.manager import Configuration
+from novi.configuration.bootstrap import build_registry, DEFAULT_CONFIG
+from novi.configuration.manager import Configuration
 
 
 def hw(gpu="", vram=None, gpu_conf=GpuConfidence.UNKNOWN, ram=None,
@@ -196,7 +196,7 @@ def test_low_hardware_is_provisional():
 
 def test_recommend_never_writes_config(tmp_path):
     reg = build_registry()
-    cfg = Configuration(reg, tmp_path / "cozmo.toml", defaults=DEFAULT_CONFIG)
+    cfg = Configuration(reg, tmp_path / "novi.toml", defaults=DEFAULT_CONFIG)
     cfg.initialize()
     before = cfg.snapshot()
     recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
@@ -218,7 +218,7 @@ def test_recommend_never_installs_or_downloads():
 
 def _make_cfg(tmp_path, bus=None):
     reg = build_registry()
-    cfg = Configuration(reg, tmp_path / "cozmo.toml", defaults=DEFAULT_CONFIG,
+    cfg = Configuration(reg, tmp_path / "novi.toml", defaults=DEFAULT_CONFIG,
                         bus=bus)
     cfg.initialize()
     return cfg
@@ -255,7 +255,7 @@ def test_apply_selection_empty_is_unset(tmp_path):
 
 
 def test_apply_selection_emits_config_event(tmp_path):
-    from cozmo.configuration.events import ConfigBus
+    from novi.configuration.events import ConfigBus
     bus = ConfigBus()
     paths = []
     bus.on_any(lambda ev: paths.append(ev.path))

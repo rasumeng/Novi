@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from cozmo.runtime.evidence import EvidenceBundle, RetrievalQuality
-from cozmo.runtime.retrieval import RetrievalExecutor
-from cozmo.runtime.retrieval_budget import ContextAllocation
-from cozmo.runtime.sources import KnowledgeRetrievalSource, WebRetrievalSource
-from cozmo.runtime.trace import ExecutionTrace
+from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
+from novi.runtime.retrieval import RetrievalExecutor
+from novi.runtime.retrieval_budget import ContextAllocation
+from novi.runtime.sources import KnowledgeRetrievalSource, WebRetrievalSource
+from novi.runtime.trace import ExecutionTrace
 
 
 class _FakeCollector:
@@ -83,7 +83,7 @@ class TestExecuteSearchWebRouting:
         """Default executor web path flows through the adapter's collector:
         patching the class method still reaches the adapter-owned instance and
         merged_text survives the round trip untouched."""
-        from cozmo.runtime.evidence import EvidenceCollector
+        from novi.runtime.evidence import EvidenceCollector
 
         exe = RetrievalExecutor(debug_trace=True)
 
@@ -213,8 +213,8 @@ class TestRetrieveKnowledgeRouting:
 
 class TestMemoryRoundTripHelper:
     def test_flat_shape_restored(self):
-        from cozmo.webui_server import _memory_items_to_dicts
-        from cozmo.runtime.sources import MemoryRetrievalSource
+        from novi.webui_server import _memory_items_to_dicts
+        from novi.runtime.sources import MemoryRetrievalSource
 
         class _FakeManager:
             def query(self, text, k=5, distance_threshold=0.5, memory_types=None):
@@ -239,8 +239,8 @@ class TestMemoryRoundTripHelper:
         }]
 
     def test_empty_result(self):
-        from cozmo.webui_server import _memory_items_to_dicts
-        from cozmo.runtime.sources import MemoryRetrievalSource
+        from novi.webui_server import _memory_items_to_dicts
+        from novi.runtime.sources import MemoryRetrievalSource
 
         class _FakeManager:
             def query(self, text, k=5, distance_threshold=0.5, memory_types=None):

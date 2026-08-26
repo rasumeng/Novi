@@ -1,8 +1,8 @@
 """Phase 9C — react_attempt retirement parity & architecture tests.
 
 Phase 9B extracted the ReAct loop body verbatim from
-``CozmoRuntime._run_agent_loop`` into
-``cozmo.runtime.react_attempt.run_react_attempt``. Phase 9C retired the
+``NoviRuntime._run_agent_loop`` into
+``novi.runtime.react_attempt.run_react_attempt``. Phase 9C retired the
 wrapper entirely: every consumer — sequential planned steps, the unplanned
 path, and the coding graph's ``run_loop`` collaborator — now drives the
 executor directly. These tests prove:
@@ -38,13 +38,13 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessageChunk, SystemMessage
 
-import cozmo.runtime.react_attempt as react_attempt
-import cozmo.runtime.runtime as runtime_module
-from cozmo.graphs import RuntimeWorkflowGraph
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.retrieval import RecoveryAction
-from cozmo.runtime.runtime import CozmoRuntime
-from cozmo.runtime.trace import ExecutionTrace
+import novi.runtime.react_attempt as react_attempt
+import novi.runtime.runtime as runtime_module
+from novi.graphs import RuntimeWorkflowGraph
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.retrieval import RecoveryAction
+from novi.runtime.runtime import NoviRuntime
+from novi.runtime.trace import ExecutionTrace
 
 
 _LOOP_DONE = react_attempt._LOOP_DONE
@@ -184,7 +184,7 @@ class _FakeRetrieval:
 
 
 def _make_rt(tool_executor, retrieval):
-    rt = CozmoRuntime(model_service=_M(),
+    rt = NoviRuntime(model_service=_M(),
                       cfg={"runtime": {"temperature": 0.2}})
     rt._skills = {}                      # deterministic: no host skill bleed
     tool_executor.tracer = rt.tracer     # Stage-10 trace recording parity
@@ -539,7 +539,7 @@ def test_closure_accumulates_signatures_across_attempts_stubbed():
     """Seam-following twin of the Phase 8F hardening test: the coding
     collaborator passes the accumulated signature set into the NEXT
     attempt's executor call."""
-    rt = CozmoRuntime(model_service=_M(),
+    rt = NoviRuntime(model_service=_M(),
                       cfg={"runtime": {"temperature": 0.2}})
     rt._skills = {}
     captured_seeds = []
@@ -555,7 +555,7 @@ def test_closure_accumulates_signatures_across_attempts_stubbed():
     try:
         fake_ctx = SimpleNamespace(analysis=None, retrieval_plan=None,
                                    resume_from=0)
-        builder = CozmoRuntime._coding_graph_state(rt, fake_ctx, None,
+        builder = NoviRuntime._coding_graph_state(rt, fake_ctx, None,
                                                    [], "fix", 3)
         list(builder["run_loop"]({}))
         list(builder["run_loop"]({}))
@@ -578,7 +578,7 @@ def test_closure_real_executor_blocks_repeat_across_attempts():
         [_tc("write_file", {"path": "a.py", "content": "x"}, "z1")],
         [_tc("write_file", {"path": "a.py", "content": "x"}, "z1")],
     ])
-    builder = CozmoRuntime._coding_graph_state(
+    builder = NoviRuntime._coding_graph_state(
         rt, fake_ctx, model, [SystemMessage(content="sys")], "fix it", 1)
 
     # Attempt 1: mutating call executes normally.
@@ -599,48 +599,48 @@ def test_closure_real_executor_blocks_repeat_across_attempts():
 # ── architecture guards ──────────────────────────────────────────────────────
 
 
-def _cozmo_package_sources():
+def _novi_package_sources():
     pkg_dir = Path(runtime_module.__file__).parent.parent
     for path in sorted(pkg_dir.rglob("*.py")):
         yield path, path.read_text(encoding="utf-8")
 
 
 def test_no_production_definition_of_run_agent_loop():
-    offenders = [str(p) for p, src in _cozmo_package_sources()
+    offenders = [str(p) for p, src in _novi_package_sources()
                  if re.search(r"def\s+_run_agent_loop\b", src)]
     assert offenders == [], (
         f"_run_agent_loop was retired in Phase 9C; defined again in {offenders}")
 
 
 def test_no_production_caller_references_run_agent_loop():
-    offenders = [str(p) for p, src in _cozmo_package_sources()
+    offenders = [str(p) for p, src in _novi_package_sources()
                  if re.search(r"\._run_agent_loop\(|\brun_agent_loop\(", src)
                  and "_run_agent_loop entry point was retired" not in src]
     assert offenders == [], (
         f"_run_agent_loop callers must not exist post-Phase 9C: {offenders}")
 
 
-def test_cozmo_runtime_has_no_run_agent_loop_attribute():
-    assert not hasattr(CozmoRuntime, "_run_agent_loop"), (
-        "the legacy wrapper attribute must be gone from CozmoRuntime")
+def test_novi_runtime_has_no_run_agent_loop_attribute():
+    assert not hasattr(NoviRuntime, "_run_agent_loop"), (
+        "the legacy wrapper attribute must be gone from NoviRuntime")
 
 
 def test_run_react_attempt_is_the_sole_react_loop():
     assert inspect.isgeneratorfunction(react_attempt.run_react_attempt)
-    loops = [p.name for p, src in _cozmo_package_sources()
+    loops = [p.name for p, src in _novi_package_sources()
              if re.search(r"for\s+outer_step\s+in\s+range\(", src)]
     assert loops == ["react_attempt.py"], (
         f"exactly ONE generic ReAct loop may exist, found in {loops}")
 
 
 def test_all_three_production_sites_drive_the_executor_with_same_collaborators():
-    run_stream_src = inspect.getsource(CozmoRuntime.run_stream)
+    run_stream_src = inspect.getsource(NoviRuntime.run_stream)
     for kwarg in _COLLABORATOR_KWARGS:
         found = run_stream_src.count(kwarg)
         assert found >= 2, (
             f"both run_stream call sites must pass {kwarg!r}; found {found}")
     # The coding closure wires the same collaborators.
-    closure_src = inspect.getsource(CozmoRuntime._coding_graph_state)
+    closure_src = inspect.getsource(NoviRuntime._coding_graph_state)
     for kwarg in _COLLABORATOR_KWARGS:
         assert kwarg in closure_src, (
             f"coding run_loop must pass {kwarg!r} to the executor")
@@ -661,7 +661,7 @@ def test_executor_never_imports_graph_layer_or_storage():
 def test_coding_state_targets_executor_not_wrapper():
     src = "\n".join(
         ln for ln in
-        inspect.getsource(CozmoRuntime._coding_graph_state).splitlines()
+        inspect.getsource(NoviRuntime._coding_graph_state).splitlines()
         if not ln.lstrip().startswith("#"))
     assert "run_react_attempt(" in src
     assert "_run_agent_loop" not in src, (

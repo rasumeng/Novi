@@ -1,7 +1,7 @@
 # Brain Integration & Assistant Identity — Architecture
 
-Milestone 4 foundation. Turns Cozmo's invisible intelligence layer into a
-persistent-assistant surface (a **Timeline** and **What Cozmo knows**) without
+Milestone 4 foundation. Turns Novi's invisible intelligence layer into a
+persistent-assistant surface (a **Timeline** and **What Novi knows**) without
 rewriting the Brain, its retrieval, or its runtime.
 
 ## 1. Principle
@@ -22,9 +22,9 @@ Hard rules:
 
 ## 2. Current Brain event architecture
 
-The Brain is wired in `cozmo/services/context.py` with a **private** EventBus
+The Brain is wired in `novi/services/context.py` with a **private** EventBus
 (`_brain_event_bus`) passed as `event_bus=` to `Brain(...)`. After a durable
-write, the Brain emits exactly three domain events (`cozmo/brain/events.py`):
+write, the Brain emits exactly three domain events (`novi/brain/events.py`):
 
 | Event | Emitted | Payload (Brain-canonical) |
 |---|---|---|
@@ -53,15 +53,15 @@ Brain (owns _brain_event_bus)                 WebUI HTTP layer
         │       knowledge.extracted,               │  TimelineStore (JSONL)
         │       knowledge.promoted)               │
         ▼                                        ▼
-  CozmoContext.brain_event_bus  (read-only accessor)
+  NoviContext.brain_event_bus  (read-only accessor)
         │
         ▼
-  TimelineService (cozmo/timeline)
+  TimelineService (novi/timeline)
         ├─ shape → TimelineEntry              ──▶ TimelineStore.append
         └─ on_entry callback                  ──▶ _broadcast_sync({"type":"assistant_event", ...})
 ```
 
-- `CozmoContext.brain_event_bus` is a **read-only accessor**. It lazily ensures
+- `NoviContext.brain_event_bus` is a **read-only accessor**. It lazily ensures
   the brain is built, then returns the existing bus reference. It never takes
   ownership, never mutates Brain state.
 - `TimelineService` subscribes with the fabric existing `EventBus.on`/`on_any`
@@ -109,7 +109,7 @@ count sentence for promotions). Counts (not scores) are allowed on
 
 ## 5. Knowledge Overview philosophy
 
-Replace the "vector memories" mental model with **what Cozmo knows**.
+Replace the "vector memories" mental model with **what Novi knows**.
 `brain.inspect_memory()` already returns a per-category projection
 (`projection.py` `_CATEGORY_TAGS`): preference, goal, skill, project, event,
 relationship, identity.
@@ -132,15 +132,15 @@ stays a maintenance/troubleshooting feature.
 
 **Backend owns:**
 - The brain bridge and the 3 brain events → `assistant_event` WS feed.
-- `TimelineStore` persistence (bounded JSONL under `~/.cozmo/timeline`).
+- `TimelineStore` persistence (bounded JSONL under `~/.novi/timeline`).
 - `GET /api/timeline` (stored feed history).
 - `GET /api/knowledge/overview` (user-shaped knowledge projection).
 - Privacy: never ship internal identifiers/scores/vectors to these surfaces.
 
 **Frontend owns:**
 - Rendering. Extends the `ServerEvent` union and adds API service methods.
-- `useCozmoChat` keeps a `timeline` slice (live feed + mount-time REST fetch).
-- Timeline feed rendering (`TimelinePage`) and the "What Cozmo knows" view
+- `useNoviChat` keeps a `timeline` slice (live feed + mount-time REST fetch).
+- Timeline feed rendering (`TimelinePage`) and the "What Novi knows" view
   (`KnowledgeOverview`) consume those two sources only — see Phases B/C.
 
 Frontend never calls backend memory internals directly — it consumes the two
@@ -153,7 +153,7 @@ user-facing endpoints / the `assistant_event` messages only.
    are OK (they are timeline addresses, not brain ids).
 2. **No vector internals.** No embeddings, distances, similarity/vector
    scores, or matching percentages on any user-facing endpoint.
-3. **No storage paths.** Never expose `~/.cozmo/memory`, `~/.../brain`, index
+3. **No storage paths.** Never expose `~/.novi/memory`, `~/.../brain`, index
    dirs. Raw "path" debug endpoint remains a separate troubleshooting surface.
 4. **User-readable only.** `category`, `content`, `evidence` and count-based
    prose only.
@@ -169,7 +169,7 @@ user-facing endpoints / the `assistant_event` messages only.
   events with REST history (per-row `id` dedupe), groups by day, and rows with
   a `conversation_id` open the referenced conversation via the existing
   notification-open pattern.
-- **Phase C:** "What Cozmo knows" page; demoted raw Memory Browser. The memory
+- **Phase C:** "What Novi knows" page; demoted raw Memory Browser. The memory
   settings surface now defaults to a product-facing Knowledge Overview
   (evidence-labelled categories); vector internals remain only under a
   Developer tab, and the Landing Page previews real recent activity + learned

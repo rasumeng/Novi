@@ -11,13 +11,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cozmo.orchestrator.task_types import (
+from novi.orchestrator.task_types import (
     ComplexityScore, EvidenceAnalysis, EvidenceRequirements, EvidenceSignal,
     ExecutionStrategy, GroundingDecision, IntentType, TaskAnalysis,
 )
-from cozmo.runtime.execution_context import ExecutionContext
-from cozmo.runtime.runtime import CozmoRuntime
-from cozmo.runtime.trace import (
+from novi.runtime.execution_context import ExecutionContext
+from novi.runtime.runtime import NoviRuntime
+from novi.runtime.trace import (
     DebugTraceEvent, ExecutionTrace, TraceAction, TraceActionMetadata,
     TraceEvent, TRACE_ACTION_METADATA,
 )
@@ -27,7 +27,7 @@ from cozmo.runtime.trace import (
 def _no_network(monkeypatch):
     """Trace boundary tests target trace events, not search results.
     Stub the live search so RESEARCH analyses run deterministically."""
-    monkeypatch.setattr("cozmo.tools.search_pipeline._search_searxng", lambda *a, **k: ([], None))
+    monkeypatch.setattr("novi.tools.search_pipeline._search_searxng", lambda *a, **k: ([], None))
 
 
 class TestTraceActionEnum:
@@ -79,7 +79,7 @@ class TestTraceEventContract:
             assert not hasattr(event, a), f"TraceEvent should not have attribute: {a}"
 
     def test_summary_contains_no_internal_terms(self):
-        runtime = CozmoRuntime()
+        runtime = NoviRuntime()
         ctx = ExecutionContext(user_input="hello")
         list(runtime.run_stream(context=ctx))
         forbidden = {"confidence", "heuristic", "keyword", "regex", "signal",
@@ -98,7 +98,7 @@ class TestDebugTraceEventGating:
     """DebugTraceEvent must only be created when debug_trace=True."""
 
     def test_no_debug_events_when_debug_false(self):
-        runtime = CozmoRuntime()
+        runtime = NoviRuntime()
         analysis = TaskAnalysis(
             intent=IntentType.RESEARCH,
             strategy=ExecutionStrategy.RESEARCH,
@@ -123,7 +123,7 @@ class TestDebugTraceEventGating:
         )
 
     def test_debug_events_created_when_debug_true(self):
-        runtime = CozmoRuntime(debug_trace=True)
+        runtime = NoviRuntime(debug_trace=True)
         analysis = TaskAnalysis(
             intent=IntentType.RESEARCH,
             strategy=ExecutionStrategy.RESEARCH,
@@ -155,7 +155,7 @@ class TestDebugEventContent:
     """DebugTraceEvent should contain internal implementation details."""
 
     def test_debug_events_contain_internal_state(self):
-        runtime = CozmoRuntime(debug_trace=True)
+        runtime = NoviRuntime(debug_trace=True)
         analysis = TaskAnalysis(
             intent=IntentType.RESEARCH,
             strategy=ExecutionStrategy.RESEARCH,
@@ -195,7 +195,7 @@ class TestUserEventContent:
     """TraceEvent must NOT contain internal state."""
 
     def test_user_events_have_no_internal_state(self):
-        runtime = CozmoRuntime(debug_trace=True)
+        runtime = NoviRuntime(debug_trace=True)
         analysis = TaskAnalysis(
             intent=IntentType.RESEARCH,
             strategy=ExecutionStrategy.RESEARCH,
@@ -230,7 +230,7 @@ class TestTraceActionUsage:
     """Every TraceEvent must carry a valid action."""
 
     def test_all_user_events_have_valid_action(self):
-        runtime = CozmoRuntime(debug_trace=True)
+        runtime = NoviRuntime(debug_trace=True)
         ctx = ExecutionContext(user_input="hello")
         list(runtime.run_stream(context=ctx))
         for event in ctx.trace.user_events:
@@ -242,7 +242,7 @@ class TestTraceActionUsage:
             )
 
     def test_user_events_use_distinct_actions(self):
-        runtime = CozmoRuntime(debug_trace=True)
+        runtime = NoviRuntime(debug_trace=True)
         analysis = TaskAnalysis(
             intent=IntentType.RESEARCH,
             strategy=ExecutionStrategy.RESEARCH,
@@ -290,7 +290,7 @@ class TestWebUITracePayload:
 
     def test_grounding_decision_not_serialized_to_webui(self):
         import os
-        webui_path = os.path.join(os.path.dirname(__file__), "..", "cozmo", "webui_server.py")
+        webui_path = os.path.join(os.path.dirname(__file__), "..", "novi", "webui_server.py")
         with open(webui_path, encoding="utf-8") as f:
             content = f.read()
         for token in ("GroundingDecision", "EvidenceAnalysis", "evidence_summary", "debug_trace", "DebugTraceEvent"):
@@ -305,7 +305,7 @@ class TestTraceActionFrontendMapping:
     def test_webui_trace_handler_emits_action(self):
         import os
         import re
-        webui_path = os.path.join(os.path.dirname(__file__), "..", "cozmo", "webui_server.py")
+        webui_path = os.path.join(os.path.dirname(__file__), "..", "novi", "webui_server.py")
         with open(webui_path, encoding="utf-8") as f:
             content = f.read()
         assert '"action":' in content or "'action':" in content, (
@@ -424,7 +424,7 @@ class TestExecutionTraceStructure:
 
 
 class TestSummaryContracts:
-    """Summaries explain what Cozmo is doing, not how."""
+    """Summaries explain what Novi is doing, not how."""
 
     ALLOWED_SUMMARIES = {
         "Determining how to process this question.",
@@ -435,7 +435,7 @@ class TestSummaryContracts:
     }
 
     def test_all_user_event_summaries_are_known(self):
-        runtime = CozmoRuntime()
+        runtime = NoviRuntime()
         ctx = ExecutionContext(user_input="hello")
         list(runtime.run_stream(context=ctx))
         for event in ctx.trace.user_events:
@@ -445,7 +445,7 @@ class TestSummaryContracts:
             )
 
     def test_summaries_describe_actions_not_implementation(self):
-        runtime = CozmoRuntime(debug_trace=True)
+        runtime = NoviRuntime(debug_trace=True)
         analysis = TaskAnalysis(
             intent=IntentType.RESEARCH,
             strategy=ExecutionStrategy.RESEARCH,

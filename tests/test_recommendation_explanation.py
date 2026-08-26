@@ -15,21 +15,21 @@ Key contracts:
 
 import pytest
 
-from cozmo.configuration.bootstrap import build_registry, DEFAULT_CONFIG
-from cozmo.configuration.hardware import (
+from novi.configuration.bootstrap import build_registry, DEFAULT_CONFIG
+from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
     GpuInfo,
     HardwareProfile,
 )
-from cozmo.configuration.manager import Configuration
-from cozmo.configuration.model_records import (
+from novi.configuration.manager import Configuration
+from novi.configuration.model_records import (
     CapabilityEvidence,
     ModelRecord,
     ModelStatus,
 )
-from cozmo.configuration.qualification import Qualification
-from cozmo.configuration.resolver import WORKLOADS, recommend
+from novi.configuration.qualification import Qualification
+from novi.configuration.resolver import WORKLOADS, recommend
 
 
 def hw(gpu="", vram=None, gpu_conf=GpuConfidence.UNKNOWN, ram=None,
@@ -231,7 +231,7 @@ def test_recommend_remains_pure_and_deterministic():
 
 def test_explanation_generation_never_writes_configuration(tmp_path):
     reg = build_registry()
-    cfg = Configuration(reg, tmp_path / "cozmo.toml", defaults=DEFAULT_CONFIG)
+    cfg = Configuration(reg, tmp_path / "novi.toml", defaults=DEFAULT_CONFIG)
     cfg.initialize()
     before = cfg.snapshot()
     installed = [seed_record("qwen3:8b", Qualification.TRUSTED,
