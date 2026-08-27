@@ -24,3 +24,35 @@ body::before {
   background: linear-gradient(90deg, #24262c 0%, #32343c 50%, #24262c 100%);
   background-size: 800px 100%;
 }
+
+/* Novi markdown + KaTeX polish */
+.novi-markdown {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.novi-markdown .katex-display {
+  margin: 0.75em 0;
+  padding: 0.5em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+.novi-markdown .katex-display > .katex {
+  white-space: nowrap;
+}
+.novi-markdown .katex {
+  font-size: 1.05em;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.novi-markdown a {
+  overflow-wrap: anywhere;
+}
+.novi-markdown table {
+  display: table;
+}
+.novi-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+}

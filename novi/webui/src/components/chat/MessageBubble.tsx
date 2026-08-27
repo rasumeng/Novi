@@ -1,12 +1,10 @@
 import { motion } from 'framer-motion'
 import clsx from 'clsx'
 import { useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { FileText, Brain, ChevronDown, ChevronRight } from 'lucide-react'
 import { ChatMessage } from '@/types'
-import { CodeBlock } from './CodeBlock'
 import { ModelBadge } from '@/components/common/ModelBadge'
+import { MessageContent } from './MessageContent'
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -65,31 +63,17 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
       {!isUser && message.thought && <ThoughtBlock message={message} />}
       <div
         className={clsx(
-          'rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[85%]',
+          'rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[85%] overflow-hidden',
           isUser
             ? 'bg-accent text-white'
             : 'bg-base-850 text-base-100 shadow-panel'
         )}
         >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code({ className, children, ...props }) {
-                const match = /language-(\w+)/.exec(className || '')
-                if (match) {
-                  return <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} />
-                }
-                return (
-                  <code className="bg-base-800 px-1.5 py-0.5 rounded text-accent-soft text-[13px]" {...props}>
-                    {children}
-                  </code>
-                )
-              },
-              p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+          {isUser ? (
+            <p className="whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>
+          ) : (
+            <MessageContent content={message.content} streaming={message.streaming} />
+          )}
           {message.attachments?.map(att => (
             <div key={att.id} className="mt-2 first:mt-0">
               {att.type === 'image' ? (
