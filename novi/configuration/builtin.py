@@ -298,6 +298,51 @@ def register_defaults(reg: ConfigRegistry):
     ))
 
     reg.register_group(SettingGroup(
+        key="search",
+        label="Web Search",
+        category=Category.CONNECTORS,
+        owner="search",
+        description="Which provider Novi uses for web search.",
+        settings=[
+            Setting(
+                id="search.backend",
+                label="Search provider",
+                description="Brave Search works without Docker. SearXNG is a self-hosted instance.",
+                category=Category.CONNECTORS,
+                owner="search",
+                type=SettingType.ENUM,
+                default="",
+                options=[
+                    Option("", "Not configured", "Web search disabled"),
+                    Option("brave", "Brave Search", "Official Brave Search API (needs an API key)"),
+                    Option("searxng", "SearXNG", "Self-hosted SearXNG endpoint"),
+                ],
+                visibility=Visibility.USER,
+            ),
+            Setting(
+                id="search.brave_api_key",
+                label="Brave API key",
+                description="Subscription token from the Brave Search API dashboard.",
+                category=Category.CONNECTORS,
+                owner="search",
+                type=SettingType.SECRET,
+                default="",
+                visibility=Visibility.USER,
+            ),
+            Setting(
+                id="search.url",
+                label="SearXNG endpoint",
+                description="Base URL of your SearXNG instance (JSON format must be enabled).",
+                category=Category.CONNECTORS,
+                owner="search",
+                type=SettingType.STRING,
+                default="http://localhost:8080",
+                visibility=Visibility.USER,
+            ),
+        ],
+    ))
+
+    reg.register_group(SettingGroup(
         key="integrations",
         label="Connectors",
         category=Category.CONNECTORS,

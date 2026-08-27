@@ -23,6 +23,145 @@ interface Props {
   setDirty: (d: boolean) => void
 }
 
+interface SearchConfigShape {
+  backend?: string
+  brave_api_key?: string
+  url?: string
+}
+
+type SearchTestState = { state: string; message: string }
+
+const SEARCH_STATE_STYLE: Record<string, { pill: string; label: string }> = {
+  connected: { pill: 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/20', label: 'Connected' },
+  auth_failed: { pill: 'text-red-400 bg-red-500/10 border border-red-500/20', label: 'Authentication failed' },
+  unavailable: { pill: 'text-red-400 bg-red-500/10 border border-red-500/20', label: 'Unavailable' },
+  rate_limited: { pill: 'text-amber-400 bg-amber-500/10 border border-amber-500/20', label: 'Rate limited' },
+  not_configured: { pill: 'text-base-400 bg-base-800 border border-base-600', label: 'Not configured' },
+  unknown_error: { pill: 'text-red-400 bg-red-500/10 border border-red-500/20', label: 'Unknown error' },
+}
+
+/** Web Search provider card — Brave or self-hosted SearXNG. */
+export function WebSearchCard({ config, setConfig, setDirty }: Props) {
+  const search: SearchConfigShape = ((config as any)?.search ?? {}) as SearchConfigShape
+  const [testing, setTesting] = useState(false)
+  const [result, setResult] = useState<SearchTestState | null>(null)
+
+  const setSearchField = (key: keyof SearchConfigShape, value: string) => {
+    if (!config) return
+    const current = ((config as any).search ?? {}) as Record<string, unknown>
+    setConfig({ ...config, search: { ...current, [key]: value } } as SettingsData)
+    setDirty(true)
+  }
+
+  const runTest = async () => {
+    setTesting(true)
+    setResult(null)
+    try {
+      const r = await fetch(`${API_BASE}/api/search/test`, { method: 'POST' })
+      setResult(await r.json())
+    } catch {
+      setResult({ state: 'unknown_error', message: 'Could not reach the Novi server.' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const stateStyle = result ? SEARCH_STATE_STYLE[result.state] ?? SEARCH_STATE_STYLE.unknown_error : null
+
+  return (
+    <div className="p-4 rounded-xl border border-base-700/60 bg-base-900/30 space-y-3">
+      <div className="flex items-center gap-2">
+        <Search size={14} className="text-accent shrink-0" />
+        <p className="text-sm font-semibold text-base-100">Web Search</p>
+        <div className="flex-1" />
+        {stateStyle && (
+          <span className={`shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full ${stateStyle.pill}`}>
+            {stateStyle.label}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-base-500 -mt-1">
+        Provider Novi uses when it needs current information from the web.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <label className="block">
+          <span className="block text-[10px] text-base-500 mb-0.5">Provider</span>
+          <select
+            value={search.backend ?? ''}
+            onChange={(e) => setSearchField('backend', e.target.value)}
+            className="w-full bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-xs text-base-200 outline-none focus:border-accent/40"
+          >
+            <option value="">Not configured</option>
+            <option value="brave">Brave Search</option>
+            <option value="searxng">SearXNG</option>
+          </select>
+        </label>
+
+        {search.backend === 'brave' && (
+          <label className="block">
+            <span className="block text-[10px] text-base-500 mb-0.5">Brave API key</span>
+            <input
+              type="password"
+              value={search.brave_api_key ?? ''}
+              onChange={(e) => setSearchField('brave_api_key', e.target.value)}
+              placeholder="Brave Search API subscription token"
+              autoComplete="off"
+              className="w-full bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/40 font-mono"
+            />
+          </label>
+        )}
+
+        {search.backend === 'searxng' && (
+          <label className="block">
+            <span className="block text-[10px] text-base-500 mb-0.5">SearXNG endpoint</span>
+            <input
+              type="text"
+              value={search.url ?? ''}
+              onChange={(e) => setSearchField('url', e.target.value)}
+              placeholder="http://localhost:8080"
+              className="w-full bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/40 font-mono"
+            />
+          </label>
+        )}
+      </div>
+
+      {search.backend === 'searxng' && (
+        <p className="text-[10px] text-base-500">
+          Requires Docker or an existing SearXNG instance with JSON format enabled.
+        </p>
+      )}
+      {search.backend === 'brave' && !search.brave_api_key && (
+        <p className="text-[10px] text-amber-400">
+          Enter your Brave Search API key to enable web search. Get one at brave.com/search/api/.
+        </p>
+      )}
+
+      <div className="flex items-center gap-2 justify-end">
+        <button
+          onClick={runTest}
+          disabled={!search.backend || testing}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent hover:bg-accent/90 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <Power size={12} /> {testing ? 'Testing…' : 'Test Connection'}
+        </button>
+      </div>
+
+      {result && (
+        <div className={`px-3 py-2 rounded-lg text-xs ${
+          result.state === 'connected'
+            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+            : result.state === 'rate_limited'
+              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+              : 'bg-red-500/10 text-red-400 border border-red-500/30'
+        }`}>
+          {result.message}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
   const { confirm, dialog } = useConfirm()
   const [addOpen, setAddOpen] = useState(false)
@@ -213,6 +352,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
   return (
     <div className="space-y-4">
       {dialog}
+      <WebSearchCard config={config} setConfig={setConfig} setDirty={setDirty} />
       <div className="flex items-center justify-between">
         <p className="text-xs text-base-500">Connect Novi to external tools — databases, APIs, file systems, and more.</p>
         <div className="flex items-center gap-2 shrink-0">

@@ -1638,6 +1638,23 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             print(f"[novi] MCP test failed for '{name}': {e!r}")
             return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
+    # ── Web Search Test ─────────────────────────────────────────
+
+    @app.post("/api/search/test")
+    def test_search_connection():
+        """Probe the configured web-search provider for Settings → Connectors."""
+        import asyncio
+        from .search import WebSearchService
+
+        try:
+            return asyncio.run(WebSearchService().test_connection())
+        except Exception as e:
+            print(f"[novi] web search test failed: {e!r}")
+            return {
+                "state": "unknown_error",
+                "message": "Web search failed with an unexpected error.",
+            }
+
     # ── Attachments ────────────────────────────────────────────
 
     ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)

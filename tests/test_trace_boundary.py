@@ -27,7 +27,7 @@ from novi.runtime.trace import (
 def _no_network(monkeypatch):
     """Trace boundary tests target trace events, not search results.
     Stub the live search so RESEARCH analyses run deterministically."""
-    monkeypatch.setattr("novi.tools.search_pipeline._search_searxng", lambda *a, **k: ([], None))
+    monkeypatch.setattr("novi.tools.search_pipeline._search_multi", lambda *a, **k: ([], None))
 
 
 class TestTraceActionEnum:

@@ -1,85 +1,48 @@
 import re
-import json
 import logging
 import urllib.request
-import urllib.parse
 from datetime import datetime, timezone
 
+from ..search import SearchProviderError, WebSearchService
 from . import register_tool
 
 log = logging.getLogger("novi.search")
-
-
-_SEARXNG_TIME_MAP = {
-    "d": "day",
-    "w": "week",
-    "m": "month",
-    "y": "year",
-}
-
-
-def _search_searxng(query: str, max_results: int = 5, timelimit: str = None) -> list[dict]:
-    if not query or not query.strip():
-        return []
-    try:
-        from ..searxng_util import ensure_searxng
-        searxng_url = ensure_searxng()
-    except Exception:
-        return []
-
-    if not searxng_url:
-        return []
-
-    params = urllib.parse.urlencode({
-        "q": query,
-        "format": "json",
-        "language": "en",
-    })
-    if timelimit:
-        time_val = _SEARXNG_TIME_MAP.get(timelimit, timelimit)
-        params += f"&time_range={time_val}"
-
-    url = f"{searxng_url}/search?{params}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Novi/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-
-        results = []
-        for item in data.get("results", [])[:max_results]:
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": item.get("content", ""),
-            })
-        return results
-    except Exception as e:
-        log.warning("SearXNG search failed: %s", e)
-        return []
 
 
 @register_tool()
 def web_search(query: str, max_results: int = 5, timelimit: str = None) -> str:
     """Search the web for current information. Returns date-stamped results with title + snippet + URL.
 
-    Uses SearXNG (self-hosted) for all searches.
+    Routes through Novi's configured search provider (Settings → Connectors → Web Search).
 
     Args:
         query: Search query
         max_results: Number of results (default 5)
         timelimit: Time filter - 'd' (day), 'w' (week), 'm' (month), 'y' (year). Default: None (all time)
     """
-    search_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if not query or not query.strip():
+        return "No search query provided."
 
-    results = _search_searxng(query, max_results, timelimit)
-    if not results:
-        return "Web search unavailable: SearXNG returned no results (is the SearXNG container running?)"
+    try:
+        response = WebSearchService().search_sync(
+            query,
+            max_results=max_results,
+            time_range=timelimit,
+        )
+    except SearchProviderError as e:
+        # Typed provider failures surface verbatim — no silent fallback.
+        return f"Web search failed ({e.provider}): {e.message}"
+    except Exception as e:
+        log.warning("web_search unexpected failure: %s", e, exc_info=True)
+        return "Web search failed with an unexpected error."
+
+    if not response.results:
+        return f"No results found for '{query}'."
+
+    search_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [f"Search performed: {search_date}"]
-    for i, r in enumerate(results, 1):
-        title = r.get("title", r.get("title", ""))
-        snippet = r.get("snippet", r.get("body", ""))
-        href = r.get("url", r.get("href", ""))
-        lines.append(f"{i}. **{title}**\n   {snippet}\n   {href}")
+    for i, r in enumerate(response.results, 1):
+        lines.append(f"{i}. **{r.title}**\n   {r.snippet}\n   {r.url}")
     return "\n\n".join(lines)
 
 

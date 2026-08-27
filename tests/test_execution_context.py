@@ -418,7 +418,7 @@ def test_full_research_pipeline_trace_ownership():
     ctx = ExecutionContext(user_input="what is the best pve build in SHindo Life", analysis=analysis)
     # Deterministic: stub the live search; assertions target trace/routing state,
     # not search results.
-    with patch("novi.tools.search_pipeline._search_searxng", return_value=([], None)):
+    with patch("novi.tools.search_pipeline._search_multi", return_value=([], None)):
         events = list(runtime.run_stream(context=ctx))
 
     # Trace must exist and be fully owned by ctx

@@ -39,7 +39,9 @@ DEFAULT_CONFIG: dict = {
     "memory": {"max_turns_before_summary": 5, "max_short_term_pairs": 10},
     "workspace": {"path": "~/.novi/workspace", "knowledge": "~/.novi/knowledge", "git_repo": ""},
     "personality": "",
-    "search": {"url": "http://localhost:8080", "backend": "searxng"},
+    # Web search is opt-in for beta: empty backend = "not configured". Novi
+    # runs fully without Docker; SearXNG remains an optional developer provider.
+    "search": {"url": "http://localhost:8080", "backend": "", "brave_api_key": ""},
     "mcp": {"servers": {}},
     "runtime": {
         "max_history": 10,
@@ -137,6 +139,9 @@ def _bind_apply_hooks(cfg: Configuration):
     cfg.registry.require_owner("mcp", mcp_apply)
     cfg.registry.require_owner("providers", lambda p, v, prev: None)
     cfg.registry.require_owner("tools", lambda p, v, prev: None)
+    # Search provider selection is read live per call (WebSearchService); no
+    # apply hook needed beyond ownership registration.
+    cfg.registry.require_owner("search", lambda p, v, prev: None)
     # connectors/integrations apply hooks arrive with M5 (Telegram lifecycle
     # seam). Bound here so settings under this owner persist + propagate live.
     cfg.registry.require_owner("integrations", integrations_apply)

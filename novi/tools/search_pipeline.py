@@ -1,8 +1,8 @@
 """
-Search Pipeline - SearXNG search with fetch, clean, and rerank.
+Search Pipeline - provider-routed web search with fetch, clean, and rerank.
 
 Pipeline:
-1. Search - SearXNG (self-hosted, the only backend)
+1. Search - via WebSearchService (Brave or SearXNG, per configuration)
 2. Fetch Full Pages - Get full article content
 3. Clean Content - Extract main text, remove boilerplate
 4. Rerank - Prioritize by freshness, authority, relevance
@@ -10,7 +10,6 @@ Pipeline:
 The runtime handles any downstream synthesis from the raw facts.
 """
 
-import json
 import logging
 import re
 from datetime import datetime
@@ -19,6 +18,7 @@ from typing import Optional
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from ..search import SearchProviderError, WebSearchService
 from . import register_tool
 
 log = logging.getLogger("novi.search")
@@ -37,22 +37,18 @@ class SearchResult:
 
 @dataclass
 class SearchConfig:
-    backend: str = "searxng"  # SearXNG is the only supported backend
-    searxng_url: str = "http://localhost:8080"
     max_results: int = 10
     max_fetch: int = 3
     fetch_timeout: int = 15
-    timelimit: str = None  # "d", "w", "m", "y"
+    timelimit: str = None  # "d", "w", "m", "y" (normalized by the search layer)
 
 
 def _get_config() -> SearchConfig:
-    """Load search config from the configuration framework."""
+    """Load search pipeline tuning from the configuration framework."""
     try:
         from ..configuration.bootstrap import get_configuration
         cfg = get_configuration()
         return SearchConfig(
-            backend=cfg.get("search.backend", "searxng"),
-            searxng_url=cfg.get("search.url", "http://localhost:8080"),
             max_results=cfg.get("search.max_results", 10),
             max_fetch=cfg.get("search.max_fetch", 3),
             fetch_timeout=cfg.get("search.fetch_timeout", 15),
@@ -63,83 +59,44 @@ def _get_config() -> SearchConfig:
         return SearchConfig()
 
 
-def _ensure_searxng() -> str:
-    """Ensure SearXNG is running, auto-start if Docker available."""
-    try:
-        from ..searxng_util import ensure_searxng
-        return ensure_searxng()
-    except Exception as e:
-        log.warning("Failed to ensure SearXNG is running: %s", e)
-        return ""
-
-
-# ─── Phase 1: Multi-Source Search ─────────────────────────────────────────────
-
-_SEARXNG_TIME_MAP = {
-    "d": "day",
-    "w": "week",
-    "m": "month",
-    "y": "year",
-}
-
-
-def _search_searxng(query: str, config: SearchConfig) -> tuple[list[SearchResult], str | None]:
-    if not query or not query.strip():
-        return [], None
-    import urllib.request
-    import urllib.parse
-    import urllib.error
-
-    searxng_url = _ensure_searxng()
-    if not searxng_url:
-        searxng_url = config.searxng_url
-
-    params = urllib.parse.urlencode({
-        "q": query,
-        "format": "json",
-        "language": "en",
-    })
-    if config.timelimit:
-        time_val = _SEARXNG_TIME_MAP.get(config.timelimit, config.timelimit)
-        params += f"&time_range={time_val}"
-
-    url = f"{searxng_url}/search?{params}"
-
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Novi/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-
-        results = []
-        for item in data.get("results", [])[:config.max_results]:
-            results.append(SearchResult(
-                title=item.get("title", ""),
-                url=item.get("url", ""),
-                snippet=item.get("content", ""),
-                source="searxng",
-                freshness=item.get("publishedDate", ""),
-            ))
-        return results, None
-    except urllib.error.HTTPError as e:
-        log.warning("SearXNG search failed (HTTP %d): %s", e.code, e.reason)
-        return [], f"HTTP {e.code}: {e.reason}"
-    except Exception as e:
-        log.warning("SearXNG search failed: %s", e)
-        return [], str(e)
+# ─── Phase 1: Provider-Routed Search ──────────────────────────────────────────
 
 
 def _search_multi(query: str, config: SearchConfig) -> tuple[list[SearchResult], str | None]:
-    """Search SearXNG and deduplicate results. Returns (results, error)."""
-    all_results, err = _search_searxng(query, config)
-    if err:
-        return [], err
+    """Search via the configured WebSearchService provider and deduplicate.
+
+    Returns (results, error). Error is a user-safe message; provider failures
+    are never hidden and never fall back to another backend.
+    """
+    if not query or not query.strip():
+        return [], None
+
+    try:
+        response = WebSearchService().search_sync(
+            query,
+            max_results=config.max_results,
+            time_range=config.timelimit,
+        )
+    except SearchProviderError as e:
+        log.warning("web search failed via %s: %s", e.provider, e.message)
+        return [], e.message
+    except Exception as e:
+        log.warning("web search failed: %s", e, exc_info=True)
+        return [], f"Web search failed with an unexpected error."
 
     seen_urls = set()
     unique = []
-    for r in all_results:
-        if r.url not in seen_urls:
-            seen_urls.add(r.url)
-            unique.append(r)
+    for r in response.results:
+        if r.url in seen_urls:
+            continue
+        seen_urls.add(r.url)
+        unique.append(SearchResult(
+            title=r.title,
+            url=r.url,
+            snippet=r.snippet,
+            source=response.provider or r.source,
+            freshness=r.published_at or "",
+        ))
 
     return unique[:config.max_results], None
 
