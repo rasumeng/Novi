@@ -125,7 +125,7 @@ export function ProjectsPanel({
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDeleteProject(p) }}
-                  className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-base-400 hover:text-err hover:bg-base-800 transition-all"
+                  className="shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-base-400 hover:text-err hover:bg-base-800 transition-all focus-visible:ring-2 focus-visible:ring-accent/20"
                   aria-label={`Delete project ${p.name}`}
                   title="Delete project"
                 >

@@ -81,8 +81,8 @@ export function SidebarItem({
             onClick={(e) => { e.stopPropagation(); onPin(conversation.id) }}
             aria-label={conversation.pinned ? `Unpin ${conversation.title}` : `Pin ${conversation.title}`}
             className={clsx(
-              'shrink-0 transition-opacity',
-              conversation.pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              'shrink-0 transition-opacity focus-visible:ring-2 focus-visible:ring-accent/20 rounded',
+              conversation.pinned ? 'opacity-100' : 'opacity-100 md:opacity-0 md:group-hover:opacity-100'
             )}
             title={conversation.pinned ? 'Unpin' : 'Pin'}
           >
@@ -111,7 +111,7 @@ export function SidebarItem({
             onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen) }}
             aria-label={`More actions for ${conversation.title}`}
             aria-expanded={menuOpen}
-            className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded text-base-400 hover:text-base-100"
+            className="shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded text-base-400 hover:text-base-100 focus-visible:ring-2 focus-visible:ring-accent/20"
           >
             <MoreHorizontal size={14} />
           </button>

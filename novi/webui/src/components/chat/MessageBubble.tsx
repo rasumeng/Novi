@@ -19,22 +19,26 @@ function formatThoughtDuration(ms?: number): string {
 
 function ThoughtBlock({ message }: { message: ChatMessage }) {
   const [open, setOpen] = useState(false)
+  const peek = message.thought ? message.thought.split('\n').find((l) => l.trim())?.slice(0, 88) : ''
   return (
     <div className="w-full max-w-[85%]">
       <button
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
         className={clsx(
-          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors',
+          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors focus-visible:ring-2 focus-visible:ring-accent/20',
           open ? 'bg-base-850 text-base-200' : 'text-base-500 hover:text-base-300 hover:bg-base-850/60'
         )}
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Brain size={12} className={message.streaming ? 'text-accent animate-pulse' : ''} />
-        <span className="font-medium">Thought for {formatThoughtDuration(message.thoughtElapsedMs)}</span>
+        <Brain size={12} className={message.streaming ? 'text-accent animate-pulse' : 'text-base-500'} />
+        <span className="font-medium">{open ? `Thought for ${formatThoughtDuration(message.thoughtElapsedMs)} — hide` : `Thought for ${formatThoughtDuration(message.thoughtElapsedMs)} — show`}</span>
       </button>
+      {!open && peek && (
+        <p className="ml-6 mt-1 text-[11px] leading-relaxed text-base-500 truncate max-w-[90%]">{peek}</p>
+      )}
       {open && (
-        <div className="mt-1 rounded-xl border border-base-800 bg-base-900/70 px-3.5 py-2.5 max-h-72 overflow-y-auto">
+        <div className="mt-1.5 rounded-xl border border-base-800 bg-base-900/60 px-3.5 py-2.5 max-h-72 overflow-y-auto">
           <pre className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-base-400 font-sans">
             {message.thought}
           </pre>

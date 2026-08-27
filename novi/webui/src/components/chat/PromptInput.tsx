@@ -395,7 +395,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 px-4 pb-2">
           {attachments.map(att => (
-            <span key={att.id} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-base-800 text-xs text-base-200">
+            <span key={att.id} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-base-800 border border-base-700/50 text-xs text-base-200">
               {att.type === 'image' ? (
                 <img
                   src={att.thumbnail || att.url}
@@ -403,10 +403,10 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
                   className="w-6 h-6 rounded object-cover"
                 />
               ) : (
-                <Paperclip size={12} />
+                <Paperclip size={12} className="text-base-400" />
               )}
-              <span className="truncate max-w-[120px]">{att.name}</span>
-              <button onClick={() => removeAttachment(att.id)} aria-label={`Remove attachment ${att.name}`} className="text-base-400 hover:text-base-100 ml-0.5">
+              <span className="truncate max-w-[160px]">{att.name}</span>
+              <button onClick={() => removeAttachment(att.id)} aria-label={`Remove attachment ${att.name}`} className="p-1 -mr-1 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-700 transition-colors">
                 <X size={12} />
               </button>
             </span>
@@ -417,11 +417,11 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         <div className="flex items-center gap-1">
           
           <div className="relative" ref={menuRef}>
-            <button
-              onClick={() => setMenuOpen((v) => !v)}
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
               aria-label="Attach files or folders"
               aria-expanded={menuOpen}
-              className="p-2 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
+              className="p-2 rounded-xl text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20"
             >
               <Plus size={16} />
             </button>
@@ -460,14 +460,16 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           <button
             onClick={toggleMic}
             aria-label={micState === 'idle' ? 'Voice input' : micState === 'listening' ? 'Stop listening' : 'Stop recording'}
-            className={`relative p-2 rounded-lg transition-colors ${
+            className={`relative p-2 rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 ${
               micState === 'idle'
                 ? 'text-base-400 hover:text-base-100 hover:bg-base-800'
-                : 'text-red-400 bg-red-500/10 shadow-[0_0_10px_rgba(239,68,68,0.35)]'
+                : micState === 'listening'
+                  ? 'text-amber-400 bg-amber-500/10 border border-amber-500/20'
+                  : 'text-red-400 bg-red-500/10 border border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.25)]'
             }`}
             title={
               micState === 'idle' ? 'Voice input' :
-              micState === 'listening' ? 'Stop listening' : 'Stop recording'
+              micState === 'listening' ? 'Listening — tap to stop' : 'Recording — tap to stop'
             }
           >
             <Mic size={16} className={micState !== 'idle' ? 'animate-pulse' : ''} />
@@ -479,14 +481,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
             <button
               onClick={onToggleDeepResearch}
               aria-pressed={!!deepResearch}
-              title="Deep Research mode — routes this conversation through the research workload (deep web + retrieval), not the general chat model"
-              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              title="Deep Research — routes this conversation through retrieval + web, not just chat"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium border transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 ${
                 deepResearch
-                  ? 'bg-accent/15 text-accent border border-accent/30'
-                  : 'text-base-400 hover:text-base-100 hover:bg-base-800 border border-transparent'
+                  ? 'bg-accent/15 text-accent border-accent/30'
+                  : 'text-base-400 hover:text-base-100 hover:bg-base-800 border-transparent'
               }`}
             >
-              <Search size={13} />
+              <Search size={12} />
               Deep Research
             </button>
           )}

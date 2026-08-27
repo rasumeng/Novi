@@ -25,7 +25,7 @@ body::before {
   background-size: 800px 100%;
 }
 
-/* Novi markdown + KaTeX polish */
+/* Novi markdown + KaTeX polish — Light Convo Path 6012a79 preserved 100% */
 .novi-markdown {
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -55,4 +55,19 @@ body::before {
 .novi-markdown pre {
   max-width: 100%;
   overflow-x: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Focus-visible: visible keyboard focus without hover noise */
+:focus-visible {
+  outline: 2px solid rgba(122, 110, 224, 0.45);
+  outline-offset: 2px;
 }

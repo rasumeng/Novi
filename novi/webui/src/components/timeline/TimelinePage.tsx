@@ -52,7 +52,7 @@ export function TimelinePage({ entries, onRefresh, onOpenConversation }: Props) 
           <div className="max-w-2xl mx-auto space-y-8">
             {groups.map((group) => (
               <section key={group.day} aria-label={group.label}>
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-base-500 mb-3">
+                <h3 className="sticky top-0 z-10 bg-base-950/80 backdrop-blur py-2 -mx-2 px-2 text-[11px] font-semibold tracking-widest uppercase text-base-500 mb-3">
                   {group.label}
                 </h3>
                 <div className="space-y-1.5">
