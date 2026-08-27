@@ -52,3 +52,6 @@ novi/webui/src-tauri/target
 novi/webui/src-tauri/gen
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+
+# Opencode
+.opencode/
