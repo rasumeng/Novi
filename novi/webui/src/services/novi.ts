@@ -194,6 +194,7 @@ export async function saveConversation(conv: Conversation): Promise<void> {
       id: conv.id,
       title: conv.title,
       pinned: conv.pinned,
+      projectId: (conv as any).projectId ?? null,
       messages: conv.messages.map((m) => ({ role: m.role, content: m.content, model: m.model, attachments: m.attachments })),
     }),
   })

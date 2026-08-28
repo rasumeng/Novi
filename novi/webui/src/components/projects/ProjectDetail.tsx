@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, ExternalLink, Edit3, Save, X } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Edit3, Save, X, Plus } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 
 interface Props {
@@ -9,9 +9,10 @@ interface Props {
   onUpdate: (id: string, data: Partial<Project>) => void
   onSelectConversation: (id: string) => void
   onRemoveConversation: (convId: string, projId: string) => void
+  onStartConversation?: () => void
 }
 
-export function ProjectDetail({ project, conversations, onBack, onUpdate, onSelectConversation, onRemoveConversation }: Props) {
+export function ProjectDetail({ project, conversations, onBack, onUpdate, onSelectConversation, onRemoveConversation, onStartConversation }: Props) {
   const [editingContext, setEditingContext] = useState(false)
   const [contextValue, setContextValue] = useState(project.sharedContext)
 
@@ -68,11 +69,18 @@ export function ProjectDetail({ project, conversations, onBack, onUpdate, onSele
         </section>
 
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-base-400 mb-2">
-            Conversations ({project.conversationIds.length})
-          </h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-base-400">
+              Conversations ({project.conversationIds.length})
+            </h3>
+            {onStartConversation && (
+              <button onClick={onStartConversation} className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-accent/20">
+                <Plus size={12} /> New chat
+              </button>
+            )}
+          </div>
           {project.conversationIds.length === 0 ? (
-            <p className="text-sm text-base-500 italic">No conversations linked to this project yet.</p>
+            <p className="text-sm text-base-500 italic">No conversations linked to this project yet — start one to work in this project’s context.</p>
           ) : (
             <div className="space-y-1">
               {project.conversationIds.map(cid => {

@@ -50,6 +50,12 @@ export default function App() {
     ? chat.generatingConversationTitle
     : null
 
+  const handleStartProjectConversation = useCallback((projectId: string) => {
+    chat.setActiveProjectId(projectId)
+    chat.newChat()
+    setActiveSection('conversations')
+  }, [chat])
+
   const renderSection = () => {
     switch (activeSection) {
       case 'projects':
@@ -63,6 +69,7 @@ export default function App() {
             onSelectConversation={(id) => { chat.setActiveId(id); setActiveSection('conversations') }}
             onRemoveConversation={chat.removeConversationFromProject}
             onSelectProject={chat.setActiveProjectId}
+            onStartProjectConversation={handleStartProjectConversation}
           />
         )
       case 'jobs':
@@ -145,6 +152,9 @@ export default function App() {
           onSectionChange={handleSectionChange}
           jobsCount={chat.backgroundRuns.length}
           generatingConversationId={chat.generatingConversationId}
+          projects={chat.projects}
+          activeProjectId={chat.activeProjectId}
+          onSelectProject={(id) => { chat.setActiveProjectId(id); setActiveSection('projects') }}
         />
 
         {renderSection()}

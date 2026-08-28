@@ -15,6 +15,7 @@ interface Props {
   onSelectConversation: (id: string) => void
   onRemoveConversation: (convId: string, projId: string) => void
   onSelectProject: (id: string | null) => void
+  onStartProjectConversation?: (projectId: string) => void
 }
 
 export function ProjectsPanel({
@@ -26,6 +27,7 @@ export function ProjectsPanel({
   onSelectConversation,
   onRemoveConversation,
   onSelectProject,
+  onStartProjectConversation,
 }: Props) {
   const { confirm, dialog } = useConfirm()
   const [showForm, setShowForm] = useState(false)
@@ -61,6 +63,7 @@ export function ProjectsPanel({
         onUpdate={onUpdateProject}
         onSelectConversation={onSelectConversation}
         onRemoveConversation={onRemoveConversation}
+        onStartConversation={onStartProjectConversation ? () => onStartProjectConversation(selectedProject.id) : undefined}
       />
     )
   }

@@ -30,6 +30,7 @@ export interface Conversation {
   updatedAt: string
   pinned: boolean
   messages: ChatMessage[]
+  projectId?: string | null
 }
 
 // Milestone 4 — assistant timeline + knowledge overview (user-facing shapes).

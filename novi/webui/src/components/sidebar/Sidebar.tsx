@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { PanelLeftClose, PanelLeftOpen, Plus, Search } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Plus, Search, FolderKanban } from 'lucide-react'
 import { Conversation, Project } from '@/types'
 import { SidebarItem } from './SidebarItem'
 import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
@@ -17,6 +17,8 @@ interface Props {
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
   projects?: Project[]
+  activeProjectId?: string | null
+  onSelectProject?: (id: string) => void
   activeSection: NavItemId
   onSectionChange: (id: NavItemId) => void
   jobsCount?: number
@@ -24,7 +26,7 @@ interface Props {
   generatingConversationId?: string | null
 }
 
-export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, onSelect, onNewChat, onPin, onRename, onDelete, projects, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null }: Props) {
+export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, onSelect, onNewChat, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null }: Props) {
   const [searchOpen, setSearchOpen] = useState(false)
 
   const pinned = useMemo(() => conversations.filter((c) => c.pinned), [conversations])
@@ -74,12 +76,37 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                   {jobsCount}
                 </span>
               )}
+              {!collapsed && id === 'projects' && (projects?.length ?? 0) > 0 && (
+                <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-base-700 text-base-300">
+                  {projects?.length}
+                </span>
+              )}
             </button>
           )
         })}
       </div>
 
       <div className="flex flex-col min-h-0 flex-1">
+        {!collapsed && activeSection === 'projects' && (
+          <div className="flex-1 overflow-y-auto mt-3 px-2 space-y-1">
+            <p className="px-2.5 text-[11px] uppercase tracking-wider text-base-500 mb-1">Projects</p>
+            {(projects ?? []).length === 0 ? (
+              <p className="px-2.5 text-xs text-base-600 py-2">No projects yet</p>
+            ) : (
+              (projects ?? []).map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => onSelectProject?.(p.id)}
+                  className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-sm transition-colors text-left ${activeProjectId === p.id ? 'bg-base-800 text-base-100' : 'text-base-400 hover:text-base-200 hover:bg-base-800/50'}`}
+                >
+                  <FolderKanban size={14} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} />
+                  <span className="flex-1 truncate">{p.name}</span>
+                  <span className="text-[11px] text-base-500">{p.conversationIds.length}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
         {!collapsed && activeSection === 'conversations' && (
           <>
             <button

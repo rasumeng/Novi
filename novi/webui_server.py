@@ -724,6 +724,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 "title": c["title"],
                 "updatedAt": c.get("updatedAt", ""),
                 "pinned": c.get("pinned", False),
+                "projectId": c.get("projectId"),
                 "messages": _load_messages(c["id"]),
             }
             for c in idx.get("conversations", [])
@@ -785,6 +786,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         conv_id = body.get("id", "").strip()
         title = body.get("title", "Untitled")
         pinned = body.get("pinned", False)
+        project_id = body.get("projectId")
         messages = body.get("messages", [])
 
         if not conv_id:
@@ -805,11 +807,14 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             entry["title"] = title
             entry["pinned"] = pinned
             entry["updatedAt"] = ts
+            if project_id is not None:
+                entry["projectId"] = project_id
         else:
             entry = {
                 "id": conv_id,
                 "title": title,
                 "pinned": pinned,
+                "projectId": project_id,
                 "createdAt": ts,
                 "updatedAt": ts,
             }
@@ -852,6 +857,19 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         idx = _conversations_idx()
         idx["conversations"] = [c for c in idx["conversations"] if c["id"] != conv_id]
         _save_idx(idx)
+        # prune from projects conversationIds
+        try:
+            p_idx = _projects_idx()
+            changed = False
+            for p in p_idx.get("projects", []):
+                if conv_id in p.get("conversationIds", []):
+                    p["conversationIds"] = [cid for cid in p["conversationIds"] if cid != conv_id]
+                    p["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                    changed = True
+            if changed:
+                _save_projects_idx(p_idx)
+        except Exception:
+            pass
         try:
             md_path = _safe_child(CHATS_DIR, conv_id, ".md")
         except ValueError:
@@ -870,6 +888,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     "title": c["title"],
                     "updatedAt": c.get("updatedAt", ""),
                     "pinned": c.get("pinned", False),
+                    "projectId": c.get("projectId"),
                     "messages": _load_messages(c["id"]),
                 }
         return None

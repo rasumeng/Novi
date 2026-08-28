@@ -63,7 +63,9 @@ export function useNoviChat() {
   const [agentState, setAgentState] = useState<AgentStateInfo | null>(null)
   const [progress, setProgress] = useState<ProgressInfo | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
+    try { return localStorage.getItem('novi_active_project_id') || null } catch { return null }
+  })
   // Milestone 4: assistant timeline feed. Live entries prepend from
   // `assistant_event`; history is hydrated via REST on mount.
   const [timeline, setTimeline] = useState<TimelineEntry[]>([])
@@ -105,6 +107,41 @@ export function useNoviChat() {
   }, [showError])
 
   useEffect(() => clearStopFallback, [])
+
+  // persist activeProjectId
+  useEffect(() => {
+    try {
+      if (activeProjectId) localStorage.setItem('novi_active_project_id', activeProjectId)
+      else localStorage.removeItem('novi_active_project_id')
+    } catch {}
+  }, [activeProjectId])
+
+  // backfill: ensure chats with projectId are reflected in projects conversationIds (migration)
+  useEffect(() => {
+    if (!projects.length || !conversations.length) return
+    let changed = false
+    const projMap = new Map(projects.map(p => [p.id, p] as const))
+    for (const c of conversations) {
+      const pid = (c as any).projectId
+      if (pid && projMap.has(pid)) {
+        const proj = projMap.get(pid)!
+        if (!proj.conversationIds.includes(c.id)) {
+          proj.conversationIds = [...proj.conversationIds, c.id]
+          changed = true
+        }
+      }
+    }
+    if (changed) {
+      setProjects(Array.from(projMap.values()))
+      // also sync to server for affected projects
+      for (const p of projMap.values()) {
+        const orig = projects.find(o => o.id === p.id)
+        if (orig && orig.conversationIds.length !== p.conversationIds.length) {
+          updateProject(p.id, { conversationIds: p.conversationIds } as any).catch(()=>{})
+        }
+      }
+    }
+  }, [projects, conversations])
 
   // Milestone 4: hydrate the persisted assistant timeline on mount.
   useEffect(() => {
@@ -578,9 +615,11 @@ export function useNoviChat() {
       if (!trimmed && (!attachments || attachments.length === 0)) return
       const textToSend = trimmed || '(attachment)'
 
-      // Find the project this conversation belongs to
-      const convProject = projects.find(p => p.conversationIds.includes(resolvedActiveId))
-      const projectId = convProject?.id
+      // Find the project this conversation belongs to — convProject via conversationIds OR projectId field
+      const conv = conversations.find(c => c.id === resolvedActiveId) as any
+      const convProject = projects.find(p => p.conversationIds.includes(resolvedActiveId) || (conv?.projectId && conv.projectId === p.id))
+      const effectiveProjectId = convProject?.id ?? (resolvedActiveId === DRAFT_ID ? activeProjectId : null)
+      const projectId = effectiveProjectId ?? undefined
 
       if (resolvedActiveId === DRAFT_ID) {
         const newId = nextId()
@@ -589,11 +628,21 @@ export function useNoviChat() {
           title: trimmed.slice(0, 48) || 'Attachments',
           updatedAt: 'Just now',
           pinned: false,
+          projectId: effectiveProjectId,
           messages: [{ id: nextId(), role: 'user', content: textToSend, createdAt: now(), attachments }],
-        }
+        } as Conversation
         if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
         setConversations((convs) => [newConv, ...convs])
         setActiveId(newId)
+        // auto-link new conversation to active project
+        if (effectiveProjectId) {
+          const proj = projects.find(p => p.id === effectiveProjectId)
+          if (proj && !proj.conversationIds.includes(newId)) {
+            const updated = { ...proj, conversationIds: [...proj.conversationIds, newId] }
+            setProjects(prev => prev.map(p => p.id === effectiveProjectId ? updated : p))
+            updateProject(effectiveProjectId, { conversationIds: updated.conversationIds } as any).catch(()=>{})
+          }
+        }
         setOwner({ conversationId: newId })
         setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
         dirtyIdRef.current = newId
@@ -707,8 +756,16 @@ export function useNoviChat() {
       showError("Couldn't delete this conversation on the server — it may come back after a restart.")
     })
     setConversations((convs) => convs.filter((c) => c.id !== id))
+    // prune from projects conversationIds and keep projectId consistent
+    setProjects(prev => prev.map(p => p.conversationIds.includes(id) ? { ...p, conversationIds: p.conversationIds.filter(cid => cid !== id) } : p))
+    // sync pruned projects to server
+    for (const p of projects) {
+      if (p.conversationIds.includes(id)) {
+        updateProject(p.id, { conversationIds: p.conversationIds.filter(cid => cid !== id) } as any).catch(()=>{})
+      }
+    }
     setActiveId((prev) => prev === id ? DRAFT_ID : prev)
-  }, [showError])
+  }, [showError, projects])
 
   const addConversationToProject = useCallback((convId: string, projId: string) => {
     const proj = projects.find(p => p.id === projId)
@@ -734,6 +791,7 @@ export function useNoviChat() {
     const p = await createProject({ name, description, sharedContext })
     if (p) {
       setProjects(prev => [p, ...prev])
+      setActiveProjectId(p.id)
     } else {
       showError("Couldn't create the project.")
     }
@@ -760,14 +818,22 @@ export function useNoviChat() {
     if (activeProjectId === id) setActiveProjectId(null)
   }, [activeProjectId, showError])
 
-  // Resolve project shared context for the active conversation
-  const activeProject = activeProjectId
-    ? projects.find(p => p.id === activeProjectId) ?? null
-    : null
-
   const active: Conversation = resolvedActiveId === DRAFT_ID
-    ? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] }
-    : conversations.find((c) => c.id === resolvedActiveId) ?? conversations[0] ?? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] }
+    ? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
+    : conversations.find((c) => c.id === resolvedActiveId) ?? conversations[0] ?? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
+
+  // Project for active conversation — single source: conversation's projectId OR conversationIds membership, fallback to selected project for draft
+  const convProjectForActive = (() => {
+    if (resolvedActiveId === DRAFT_ID) return activeProjectId ? projects.find(p => p.id === activeProjectId) ?? null : null
+    const convPid = (active as any).projectId as string | undefined
+    if (convPid) {
+      const byPid = projects.find(p => p.id === convPid)
+      if (byPid) return byPid
+    }
+    return projects.find(p => p.conversationIds.includes(resolvedActiveId)) ?? null
+  })()
+  // Resolve project shared context for the active conversation — owning project wins, draft uses selected
+  const activeProject = convProjectForActive ?? (activeProjectId ? projects.find(p => p.id === activeProjectId) ?? null : null)
 
   // Whether the conversation currently on screen is the one actually
   // generating. Everything below is gated on this, not on `owner` alone —
