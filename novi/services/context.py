@@ -61,6 +61,7 @@ class NoviContext:
         self._job_lifecycle: object | None = None
         self._continuation: object | None = None
         self._recovered: bool = False
+        self._workspace_service: object | None = None
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -333,6 +334,13 @@ class NoviContext:
                 task_store=task_store,
             )
         return self._job_lifecycle
+
+    @property
+    def workspace_service(self):
+        from ..workspace.service import WorkspaceService
+        if self._workspace_service is None:
+            self._workspace_service = WorkspaceService()
+        return self._workspace_service
 
     @property
     def continuation(self):

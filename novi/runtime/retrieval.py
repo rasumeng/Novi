@@ -118,6 +118,7 @@ class RetrievalExecutor:
         max_project_results: int = 3,
         web_source: WebRetrievalSource | None = None,
         knowledge_source: KnowledgeRetrievalSource | None = None,
+        workspace_service=None,
     ):
         self.event_bus = event_bus
         self.debug_trace = debug_trace
@@ -133,6 +134,37 @@ class RetrievalExecutor:
         # index is a process-global resolved at composition time).
         self._web_source = web_source or WebRetrievalSource()
         self._knowledge_source = knowledge_source
+        self._workspace_service = workspace_service
+        # Project sharedContext retrieval — first-class, isolated by project_id
+        try:
+            from .sources.project_context import ProjectContextRetrievalSource
+            from pathlib import Path
+            import json as _json
+            from ..paths import home as _home
+            def _get_proj_ctx(pid: str):
+                try:
+                    idx_path = _home() / "projects" / "index.json"
+                    if not idx_path.exists():
+                        return None
+                    data = _json.loads(idx_path.read_text("utf-8"))
+                    for p in data.get("projects", []):
+                        if p["id"] == pid:
+                            return p.get("sharedContext", "")
+                    return None
+                except Exception:
+                    return None
+            self._project_context_source = ProjectContextRetrievalSource(_get_proj_ctx)
+        except Exception:
+            self._project_context_source = None
+        # Workspace retrieval — metadata/path + content search, extensible to vector
+        try:
+            from .sources.workspace import WorkspaceRetrievalSource
+            if self._workspace_service is not None:
+                self._workspace_source = WorkspaceRetrievalSource(self._workspace_service)
+            else:
+                self._workspace_source = None
+        except Exception:
+            self._workspace_source = None
 
     def set_project_index(self, project_index):
         """Update the project index (runtime set_config may swap it later).
@@ -504,6 +536,7 @@ class RetrievalExecutor:
         self._setup_coordinator(ctx)
         self._setup_memory_context(ctx, user_input)
         self._setup_project_context(ctx, user_input)
+        self._setup_workspace_context(ctx, user_input)
         self._recovery(ctx).quality = ctx.grounding_quality or ""
 
     # ── coordinator lifecycle (ownership moved from runtime, Phase 9 step 2) ──
@@ -633,12 +666,27 @@ class RetrievalExecutor:
         return "\n".join(sections) if sections else ""
 
     def _setup_project_context(self, ctx: ExecutionContext, user_input: str) -> None:
-        """Populate ``ctx.project_context`` for coding/work intents.
+        """Populate ``ctx.project_context`` — first-class Project, isolated by project_id.
 
-        Replaces runtime's inline ``ProjectIndex.query`` call. Participation is
-        plan-driven (Phase 9 step 5): project context is queried when the
-        policy's plan lists the project source.
+        Amendment: Project sharedContext is NOT mirrored into Brain/Knowledge.
+        This source is the single gate, budgeted and isolated. Vector/project
+        code index remains separate (handled via workspace).
         """
+        # First-class: use ProjectContextRetrievalSource when project_id present
+        pid = getattr(ctx, "project_id", "") or ""
+        if pid and getattr(self, "_project_context_source", None) is not None:
+            try:
+                result = self._project_context_source.retrieve(
+                    user_input,
+                    ContextAllocation(max_results=1, max_context_chars=2000),
+                    project_id=pid,
+                )
+                if result.quality == RetrievalQuality.SUFFICIENT and result.items:
+                    ctx.project_context = result.items[0].text
+                    return
+            except Exception:
+                pass
+        # Fallback legacy: plan-driven ProjectIndex (code) — keep for non-project runs
         if self._project_index is None and self._brain is None:
             return
         plan = self._retrieval_plan(ctx)
@@ -648,9 +696,6 @@ class RetrievalExecutor:
             should_query = ctx.intent_str in ("coding", "work")
         if not should_query:
             return
-        # Architecture Rule #6: the runtime asks the Brain for context. When a
-        # Brain is wired, the project source queries it (which owns the project
-        # index internally). Legacy ProjectIndex remains the no-brain fallback.
         store = self._brain if self._brain is not None else self._project_index
         source = ProjectRetrievalSource(store)
         result = source.retrieve(
@@ -658,7 +703,76 @@ class RetrievalExecutor:
             ContextAllocation(max_results=self.max_project_results),
         )
         if result.quality == RetrievalQuality.SUFFICIENT and result.items:
-            ctx.project_context = result.items[0].text
+            # don't overwrite first-class project_context if already set
+            if not getattr(ctx, "project_context", ""):
+                ctx.project_context = result.items[0].text
+
+    def _setup_workspace_context(self, ctx: ExecutionContext, user_input: str) -> None:
+        """Populate ``ctx.workspace_context`` — READ only, isolated, budgeted.
+
+        Beta: metadata/path + content search → candidate files → chunk
+        extraction. Vector optional later. Shows lifecycle via trace:
+        Searching workspace… → Reading N files… → Files used citation.
+        """
+        pid = getattr(ctx, "project_id", "") or ""
+        if not pid or getattr(self, "_workspace_source", None) is None:
+            return
+        # Check that project actually has a workspace attached (READ)
+        try:
+            svc = getattr(self, "_workspace_service", None)
+            if svc is None or svc.get_root(pid) is None:
+                return
+        except Exception:
+            return
+        # For beta, trigger workspace search for work/coding/research intents
+        # or when query looks file-like (contains path/file terms) — otherwise skip to save budget
+        should_query = False
+        if ctx.intent_str in ("coding", "work", "research"):
+            should_query = True
+        else:
+            low = user_input.lower()
+            if any(k in low for k in ["file", "where is", "find", "search", "locate", "model routing", "memory", "project is structured", "bug"]):
+                should_query = True
+        if not should_query:
+            return
+        # Lifecycle: Searching workspace…
+        try:
+            if ctx.trace is not None:
+                self._trace_event(
+                    action=getattr(__import__("novi.runtime.trace", fromlist=["TraceAction"]), "TraceAction").RETRIEVING,
+                    category="workspace",
+                    summary="Searching workspace…",
+                    trace=ctx.trace,
+                )
+        except Exception:
+            pass
+        result = self._workspace_source.retrieve(
+            user_input,
+            ContextAllocation(max_results=3, max_context_chars=6000),
+            project_id=pid,
+        )
+        if result.quality != RetrievalQuality.SUFFICIENT or not result.items:
+            return
+        # Build workspace_context with citations, respect budget
+        parts = []
+        files_used = []
+        for it in result.items:
+            path = it.metadata.get("path", it.id.replace("workspace:", ""))
+            files_used.append(path)
+            snippet = it.text.strip()[:1500]
+            parts.append(f"Source: {path}\n{snippet}")
+        ctx.workspace_context = "\n\n".join(parts)
+        ctx.workspace_files_used = files_used
+        if ctx.trace is not None:
+            try:
+                self._trace_event(
+                    action=getattr(__import__("novi.runtime.trace", fromlist=["TraceAction"]), "TraceAction").RETRIEVING,
+                    category="workspace",
+                    summary=f"Reading {len(files_used)} file{'s' if len(files_used)!=1 else ''}…",
+                    trace=ctx.trace,
+                )
+            except Exception:
+                pass
 
     # ── retrieval plan strategies (private) ──────────────────────────────
 

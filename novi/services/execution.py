@@ -60,6 +60,7 @@ class ExecutionCoordinator:
         return self._orchestrator
 
     def run_stream(self, runtime, user_input: str, *, conversation_id: str = "",
+                   project_id: str = "",
                    attachments: Optional[list] = None,
                    stop_check: Optional[Callable[[], bool]] = None,
                    metadata: Optional[dict] = None,
@@ -132,6 +133,7 @@ class ExecutionCoordinator:
             attachments=attachments,
             execution_plan=plan,
             conversation_id=conversation_id,
+            project_id=project_id,
             resume_from=resume_from,
         )
         try:

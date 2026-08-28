@@ -551,6 +551,7 @@ class Session:
 
     def start_run(self, user_input: str, attachments_meta: list[dict] | None = None,
                   project_context: str | None = None,
+                  project_id: str | None = None,
                   deep_research: bool = False):
         self.stop_flag.clear()
         resolved_atts = self._resolve_attachments(attachments_meta) if attachments_meta else None
@@ -562,6 +563,7 @@ class Session:
                     runtime=self.runtime,
                     user_input=user_input,
                     conversation_id=self.current_conv_id,
+                    project_id=project_id or "",
                     attachments=resolved_atts,
                     stop_check=self.stop_flag.is_set,
                     force_intent="research" if deep_research else None,
@@ -1414,6 +1416,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             "description": (body.get("description") or "").strip(),
             "conversationIds": [],
             "sharedContext": (body.get("sharedContext") or "").strip(),
+            "workspace": None,
             "createdAt": ts,
             "updatedAt": ts,
         }
@@ -1435,6 +1438,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     p["sharedContext"] = body["sharedContext"].strip()
                 if "conversationIds" in body:
                     p["conversationIds"] = body["conversationIds"]
+                if "workspace" in body:
+                    p["workspace"] = body["workspace"]
                 p["updatedAt"] = datetime.now(timezone.utc).isoformat()
                 _save_projects_idx(idx)
                 return p
@@ -1447,6 +1452,93 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         idx["projects"] = [p for p in idx["projects"] if p["id"] != proj_id]
         _save_projects_idx(idx)
         return {"ok": True}
+
+    # ── Workspace (READ only for beta, extensible to WRITE/EXECUTE) ──────
+    from novi.workspace.service import WorkspaceService as _WorkspaceService
+    _workspace_service = _WorkspaceService()
+
+    @app.put("/api/projects/{proj_id}/workspace")
+    def set_project_workspace(proj_id: str, body: dict):
+        root = (body.get("root") or "").strip()
+        capability = (body.get("capability") or "READ").strip().upper()
+        if not root:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "root required"}, status_code=400)
+        if capability != "READ":
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "only READ enabled for beta"}, status_code=400)
+        idx = _projects_idx()
+        for p in idx["projects"]:
+            if p["id"] == proj_id:
+                try:
+                    result = _workspace_service.attach(proj_id, root, capability)
+                except ValueError as e:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse({"error": str(e)}, status_code=400)
+                p["workspace"] = {
+                    "root": result["root"],
+                    "capability": result["capability"],
+                    "indexedAt": datetime.now(timezone.utc).isoformat(),
+                    "stats": result["stats"],
+                }
+                p["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                _save_projects_idx(idx)
+                return p
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    @app.get("/api/projects/{proj_id}/workspace")
+    def get_project_workspace(proj_id: str):
+        idx = _projects_idx()
+        for p in idx["projects"]:
+            if p["id"] == proj_id:
+                ws = p.get("workspace")
+                if not ws:
+                    return {"attached": False}
+                # refresh stats
+                try:
+                    svc_root = _workspace_service.get_root(proj_id)
+                    if svc_root and Path(svc_root).exists():
+                        from novi.workspace.index import WorkspaceIndex
+                        idx_stats = WorkspaceIndex(_workspace_service._index_path(proj_id)).list_files()
+                        ws["fileCount"] = len(idx_stats)
+                except Exception:
+                    pass
+                return {"attached": True, "workspace": ws}
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    @app.post("/api/workspaces/{proj_id}/search")
+    def search_workspace(proj_id: str, body: dict):
+        query = (body.get("query") or "").strip()
+        if not query:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "query required"}, status_code=400)
+        # isolation: only this project's workspace
+        idx = _projects_idx()
+        proj = next((p for p in idx["projects"] if p["id"] == proj_id), None)
+        if not proj or not proj.get("workspace"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "workspace not attached"}, status_code=400)
+        try:
+            hits = _workspace_service.search(proj_id, query, k=int(body.get("k", 10)))
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+        return {"hits": hits}
+
+    @app.get("/api/workspaces/{proj_id}/read")
+    def read_workspace_file(proj_id: str, path: str):
+        idx = _projects_idx()
+        proj = next((p for p in idx["projects"] if p["id"] == proj_id), None)
+        if not proj or not proj.get("workspace"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "workspace not attached"}, status_code=400)
+        text = _workspace_service.read(proj_id, path)
+        if text is None:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "not found or not readable"}, status_code=404)
+        return {"path": path, "content": text}
 
     @app.get("/api/projects/{proj_id}/conversations")
     def get_project_conversations(proj_id: str):
@@ -1856,6 +1948,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         log.warning("client sent 'mode' field — ignored in unified pipeline")
                     deep_research = bool(msg.get("deep_research"))
                     session.start_run(content, attachments_meta, project_context,
+                                      project_id=project_id,
                                       deep_research=deep_research)
                 elif mtype == "agent_config":
                     session.agent_config = {k: v for k, v in msg.items() if k not in ("type",)}

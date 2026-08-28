@@ -68,6 +68,7 @@ export interface Project {
   description: string
   conversationIds: string[]
   sharedContext: string
+  workspace?: { root: string; capability: string; indexedAt?: string; stats?: { total: number } } | null
   createdAt: string
   updatedAt: string
 }

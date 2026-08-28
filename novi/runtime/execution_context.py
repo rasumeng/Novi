@@ -120,6 +120,17 @@ class ExecutionContext:
 
     # ── Project ──────────────────────────────────────────────────────────
     project_context: str = ""
+    project_id: str = ""
+    """Owning project for isolation — only this project's context/workspace may be retrieved."""
+
+    # ── Workspace ────────────────────────────────────────────────────────
+    workspace_context: str = ""
+    workspace_files_used: list[str] = field(default_factory=list)
+    """Paths cited in the answer — shown as 'Files used'."""
+
+    # ── Capability ───────────────────────────────────────────────────────
+    workspace_capability: str = "READ"
+    """READ | WRITE | EXECUTE — beta only READ is enabled."""
 
     # ── Planning ─────────────────────────────────────────────────────────
     plan_context: str = ""

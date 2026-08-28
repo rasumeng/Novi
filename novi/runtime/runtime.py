@@ -202,6 +202,15 @@ class NoviRuntime:
         self._agent_system_extra: str = ""
         self.debug_trace = debug_trace
         self.lesson_store = LessonStore()
+        # Workspace service (READ only for beta, extensible)
+        workspace_svc = None
+        try:
+            from ..workspace.service import WorkspaceService
+            from pathlib import Path as _P
+            # lazy: only create if needed, but keep reference for retrieval
+            workspace_svc = WorkspaceService()
+        except Exception:
+            workspace_svc = None
         self.retrieval_executor = RetrievalExecutor(
             event_bus=event_bus,
             debug_trace=debug_trace,
@@ -216,6 +225,7 @@ class NoviRuntime:
                 if brain is not None
                 else KnowledgeRetrievalSource(get_knowledge_index())
             ),
+            workspace_service=workspace_svc,
         )
         self._capability_registry = CapabilityRegistry()
         register_builtin_capabilities(self._capability_registry)
@@ -310,7 +320,9 @@ class NoviRuntime:
                        analysis=None,
                        trace=None,
                        memory_context: str = "",
-                       project_context: str = "") -> str:
+                       project_context: str = "",
+                       workspace_context: str = "",
+                       workspace_files: list[str] | None = None) -> str:
         parts = [_IDENTITY.format(date=datetime.now().strftime("%A, %B %d, %Y"))]
         if self._agent_system_extra:
             parts.append(f"AGENT INSTRUCTIONS:\n{self._agent_system_extra}")
@@ -342,7 +354,14 @@ class NoviRuntime:
         if project_context:
             parts.append(f"\nRelevant project context:\n{project_context}")
         if getattr(self, '_project_context', None):
-            parts.append(f"\nProject context:\n{self._project_context}")
+            # legacy raw inject — kept for backward compat, but first-class
+            # project_context from ExecutionContext is preferred and already budgeted
+            if not project_context or self._project_context.strip() != project_context.strip():
+                parts.append(f"\nProject context:\n{self._project_context}")
+        if workspace_context:
+            parts.append(f"\nRelevant workspace files:\n{workspace_context}")
+            if workspace_files:
+                parts.append(f"\nFiles used: {', '.join(workspace_files[:5])}")
         if grounding:
             parts.append(f"\nSearch results (use as primary source — prioritize over internal knowledge):\n{grounding}\n")
         elif grounding_error:
@@ -414,6 +433,7 @@ class NoviRuntime:
                    execution_plan: object | None = None,
                    context: ExecutionContext | None = None,
                    conversation_id: str | None = None,
+                   project_id: str | None = None,
                    resume_from: int | None = None):
         """Yield (kind, text) tuples from the agentic loop."""
         intent_str = "conversation"
@@ -430,6 +450,8 @@ class NoviRuntime:
                 )
             if conversation_id:
                 ctx.conversation_id = conversation_id
+            if project_id:
+                ctx.project_id = project_id
             if resume_from is not None:
                 ctx.resume_from = resume_from
             if execution_plan is not None:
@@ -615,7 +637,9 @@ class NoviRuntime:
                 grounding_error=ctx.grounding_error,
                 attachments=ctx.attachments, activated_skills=ctx.activated_skills,
                 allowed_tools=ctx.allowed_tools, analysis=ctx.analysis, trace=ctx.trace,
-                memory_context=ctx.memory_context, project_context=ctx.project_context))]
+                memory_context=ctx.memory_context, project_context=ctx.project_context,
+                workspace_context=getattr(ctx, "workspace_context", ""),
+                workspace_files=getattr(ctx, "workspace_files_used", None)))]
             coord = ctx.retrieval_coordinator
             if coord is not None and coord.budget.max_web_searches > 0:
                 base_msgs.append(SystemMessage(
