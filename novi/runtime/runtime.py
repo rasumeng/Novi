@@ -558,6 +558,19 @@ class NoviRuntime:
                 yield (_LOOP_DONE, str(e), "error", False)
                 return
 
+            # ── ContextManager gatekeeper (agent-wide, before model)
+            try:
+                from .context_manager import ContextManager
+                cm = ContextManager(model_name=ctx.model_name)
+                level = cm.should_compact(ctx)
+                if level in ("compact", "emergency"):
+                    cm.compact_history(ctx)
+                    # persist budget breakdown for diagnostics
+                    if ctx.trace is not None:
+                        ctx.trace.metadata["context_compacted"] = level
+            except Exception:
+                pass
+
             if ctx.execution_plan is None and intent_str == "vision":
                 ctx.model_supports_tools = False
 

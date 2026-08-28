@@ -357,11 +357,17 @@ class ToolExecutor:
 
     def _sanitize(self, text: str) -> str:
         if len(text) > self.max_tool_output:
+            # L1: preserve important paths/errors, not blind head/tail
+            important = [l for l in text.splitlines() if any(k in l.lower() for k in ["error", "failed", "path:", "file:", ".py", ".ts", ".js", "/", "count:", "total"])]
             head = self.max_tool_output // 3
-            tail = self.max_tool_output - head
+            tail = self.max_tool_output - head - 500
+            preserved = "\n".join(important[:5])
+            if preserved:
+                tail = max(0, tail - len(preserved))
             text = (
                 text[:head]
-                + f"\n... [{len(text) - self.max_tool_output} chars truncated] ...\n"
+                + f"\n... [{len(text) - self.max_tool_output} chars truncated — {len(important)} important lines kept] ...\n"
+                + (preserved + "\n" if preserved else "")
                 + text[-tail:]
             )
         return text
