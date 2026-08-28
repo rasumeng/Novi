@@ -31,6 +31,7 @@ class JobStatus(str, Enum):
     COMPLETED = "done"  # alias of DONE — a successful attempt is "done"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    NEEDS_CONTINUATION = "needs_continuation"
 
     @property
     def is_terminal(self) -> bool:
@@ -77,6 +78,7 @@ class Checkpoint:
     task_id: str = ""
     plan_id: str = ""
     completed_steps: list = field(default_factory=list)
+    stable: dict = field(default_factory=dict)
     created_at: str = ""
 
     def __post_init__(self):
@@ -92,6 +94,7 @@ class Checkpoint:
             "task_id": self.task_id,
             "plan_id": self.plan_id,
             "completed_steps": list(self.completed_steps),
+            "stable": dict(self.stable),
             "created_at": self.created_at,
         }
 
