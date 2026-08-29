@@ -69,6 +69,7 @@ export interface Project {
   conversationIds: string[]
   sharedContext: string
   workspace?: { root: string; capability: string; indexedAt?: string; stats?: { total: number } } | null
+  pinned?: boolean
   createdAt: string
   updatedAt: string
 }

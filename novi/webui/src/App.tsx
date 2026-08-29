@@ -51,8 +51,7 @@ export default function App() {
     : null
 
   const handleStartProjectConversation = useCallback((projectId: string) => {
-    chat.setActiveProjectId(projectId)
-    chat.newChat()
+    chat.newChat(projectId)
     setActiveSection('conversations')
   }, [chat])
 
@@ -144,7 +143,8 @@ export default function App() {
           conversations={chat.conversations}
           activeId={chat.activeId}
           onSelect={chat.setActiveId}
-          onNewChat={() => { chat.newChat(); setActiveSection('conversations') }}
+          onNewChat={() => { chat.newChat(null); setActiveSection('conversations') }}
+          onNewChatInProject={handleStartProjectConversation}
           onPin={chat.pinConversation}
           onRename={chat.renameConversation}
           onDelete={chat.deleteConversation}
@@ -155,6 +155,9 @@ export default function App() {
           projects={chat.projects}
           activeProjectId={chat.activeProjectId}
           onSelectProject={(id) => { chat.setActiveProjectId(id); setActiveSection('projects') }}
+          onCreateProject={chat.createProject}
+          onUpdateProject={chat.updateProject}
+          onDeleteProject={chat.deleteProject}
         />
 
         {renderSection()}

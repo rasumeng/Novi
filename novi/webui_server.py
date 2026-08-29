@@ -1417,6 +1417,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             "conversationIds": [],
             "sharedContext": (body.get("sharedContext") or "").strip(),
             "workspace": None,
+            "pinned": bool(body.get("pinned", False)),
             "createdAt": ts,
             "updatedAt": ts,
         }
@@ -1440,6 +1441,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     p["conversationIds"] = body["conversationIds"]
                 if "workspace" in body:
                     p["workspace"] = body["workspace"]
+                if "pinned" in body:
+                    p["pinned"] = bool(body["pinned"])
                 p["updatedAt"] = datetime.now(timezone.utc).isoformat()
                 _save_projects_idx(idx)
                 return p

@@ -719,10 +719,22 @@ export function useNoviChat() {
     clientRef.current?.listBackgroundRuns()
   }, [])
 
-  const newChat = useCallback(() => {
+  const newChat = useCallback((projectId?: string | null) => {
     if (owner) return
     clientRef.current?.reset()
     setActiveId(DRAFT_ID)
+    // Explicit project scope: set to that project, else clear for global unassigned chat
+    if (projectId === undefined) {
+      // legacy call without arg — clear global project scope so new chat is unassigned
+      setActiveProjectId(null)
+      try { localStorage.removeItem('novi_active_project_id') } catch {}
+    } else if (projectId === null) {
+      setActiveProjectId(null)
+      try { localStorage.removeItem('novi_active_project_id') } catch {}
+    } else {
+      setActiveProjectId(projectId)
+      try { localStorage.setItem('novi_active_project_id', projectId) } catch {}
+    }
     setInlineSteps([])
     setThinking(false)
     setLiveThought('')
@@ -791,7 +803,8 @@ export function useNoviChat() {
     const p = await createProject({ name, description, sharedContext })
     if (p) {
       setProjects(prev => [p, ...prev])
-      setActiveProjectId(p.id)
+      // Do NOT auto-set activeProjectId — global New chat must stay unassigned.
+      // Active project is set explicitly via + New chat in project or selecting project.
     } else {
       showError("Couldn't create the project.")
     }
