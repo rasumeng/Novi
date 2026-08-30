@@ -393,9 +393,12 @@ def test_literal_duplicate_call_gets_legacy_message_and_skips_execution():
 
 
 def test_literal_max_steps_wording_and_reason():
+    # Goal-oriented: max_steps is safety rail → needs_continuation with StableState, not error wording.
     events, _, _ = _drive(SCENARIOS["max_steps"])
-    assert events[-1] == (_LOOP_DONE, _MAX_STEPS_WORDING, "max_steps", False)
-    assert ("token", _MAX_STEPS_WORDING) in events
+    assert events[-1][0] == _LOOP_DONE
+    assert events[-1][2] == "needs_continuation"
+    assert events[-1][3] is True
+    assert _MAX_STEPS_WORDING not in [e[1] for e in events if e[0] == "token"]
     assert len([e for e in events if e[0] == "tool_result"]) == 2
 
 
