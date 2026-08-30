@@ -15,7 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from novi.runtime.execution_state import StableState
 
 
 class JobStatus(str, Enum):
@@ -97,6 +100,25 @@ class Checkpoint:
             "stable": dict(self.stable),
             "created_at": self.created_at,
         }
+
+    @property
+    def stable_state(self) -> Optional["StableState"]:
+        """Typed accessor for Checkpoint.stable dict (StableState.to_dict())."""
+        if not self.stable:
+            return None
+        try:
+            from novi.runtime.execution_state import StableState
+
+            return StableState.from_dict(self.stable)
+        except Exception:
+            return None
+
+    @stable_state.setter
+    def stable_state(self, value: Optional["StableState"]) -> None:
+        if value is None:
+            self.stable = {}
+        else:
+            self.stable = value.to_dict()  # type: ignore[attr-defined]
 
 
 @dataclass

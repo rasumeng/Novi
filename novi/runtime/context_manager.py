@@ -11,52 +11,12 @@ Answers: "Given goal, execution state, model budget, and available sources, what
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
-
 from .context_budget import ContextBudgetManager, BudgetBreakdown, estimate_tokens
 from .execution_context import ExecutionContext
+from .execution_state import StableState
 
-
-@dataclass
-class StableState:
-    """Compact structured state — checkpoint's stable, not message dump."""
-    goal: str = ""
-    current_objective: str = ""
-    plan: str = ""  # serialized plan steps
-    completed: list[str] = field(default_factory=list)
-    current_step: int = 0
-    discoveries: list[str] = field(default_factory=list)
-    important_files: list[str] = field(default_factory=list)
-    workspace_paths: list[str] = field(default_factory=list)
-    decisions: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    unresolved: list[str] = field(default_factory=list)
-    next_action: str = ""
-    memory_refs: list[str] = field(default_factory=list)
-    budget_breakdown: dict = field(default_factory=dict)
-    project_id: str = ""
-
-    def to_text(self, max_chars: int = 1200) -> str:
-        parts = []
-        if self.goal:
-            parts.append(f"Goal: {self.goal}")
-        if self.current_objective:
-            parts.append(f"Current objective: {self.current_objective}")
-        if self.completed:
-            parts.append(f"Completed: {'; '.join(self.completed[:5])}")
-        if self.discoveries:
-            parts.append(f"Discoveries: {'; '.join(self.discoveries[:5])}")
-        if self.important_files:
-            parts.append(f"Important files: {', '.join(self.important_files[:8])}")
-        if self.errors:
-            parts.append(f"Errors: {'; '.join(self.errors[:3])}")
-        if self.unresolved:
-            parts.append(f"Unresolved: {'; '.join(self.unresolved[:3])}")
-        if self.next_action:
-            parts.append(f"Next: {self.next_action}")
-        text = "\n".join(parts)
-        return text[:max_chars]
+# Re-export for backward compat: `from novi.runtime.context_manager import StableState`
+__all__ = ["StableState", "ContextManager"]
 
 
 class ContextManager:
@@ -145,9 +105,10 @@ class ContextManager:
             discoveries=getattr(ctx, "workspace_files_used", [])[:8],
             important_files=getattr(ctx, "workspace_files_used", [])[:8],
             workspace_paths=[getattr(ctx, "project_id", "")] if getattr(ctx, "project_id", "") else [],
-            errors=getattr(ctx, "metadata", {}).get("errors", [])[:3],
+            errors=list((getattr(ctx, "metadata", {}).get("errors", []) or [])[:3]),
             next_action=getattr(ctx, "metadata", {}).get("next_action", "continue"),
             memory_refs=[],
             budget_breakdown=getattr(ctx, "metadata", {}).get("budget_breakdown", {}),
             project_id=getattr(ctx, "project_id", "") or "",
+            conversation_id=getattr(ctx, "conversation_id", "") or "",
         )
