@@ -7,7 +7,15 @@
 ::-webkit-scrollbar-thumb { background: #32343c; border-radius: 8px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(229, 7%, 29%); }
 
-::selection { background: rgba(122, 110, 224, 0.25); }
+::selection { background: rgba(122, 110, 224, 0.30); }
+
+/* User bubble (bg-accent #7A6EE0) — purple selection is invisible on purple.
+   Use translucent white so highlight pops on white text. Descendant selector
+   covers <p> inside the bubble; direct selector covers the bubble itself. */
+.bg-accent ::selection { background: rgba(255, 255, 255, 0.38); color: white; }
+.bg-accent::selection { background: rgba(255, 255, 255, 0.38); color: white; }
+.bg-accent ::-moz-selection { background: rgba(255, 255, 255, 0.38); color: white; }
+.bg-accent::-moz-selection { background: rgba(255, 255, 255, 0.38); color: white; }
 
 body::before {
   content: '';

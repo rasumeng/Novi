@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, FolderKanban, Trash2, Box } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { ProjectForm } from './ProjectForm'
@@ -16,6 +16,7 @@ interface Props {
   onRemoveConversation: (convId: string, projId: string) => void
   onSelectProject: (id: string | null) => void
   onStartProjectConversation?: (projectId: string) => void
+  activeProjectId?: string | null
 }
 
 export function ProjectsPanel({
@@ -28,10 +29,21 @@ export function ProjectsPanel({
   onRemoveConversation,
   onSelectProject,
   onStartProjectConversation,
+  activeProjectId,
 }: Props) {
   const { confirm, dialog } = useConfirm()
   const [showForm, setShowForm] = useState(false)
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(activeProjectId ?? null)
+
+  // Sync sidebar-driven navigation (Settings → open detail) and clear on project delete
+  useEffect(() => {
+    if (activeProjectId && projects.some(p => p.id === activeProjectId)) {
+      setSelectedProjectId(activeProjectId)
+    } else if (!activeProjectId) {
+      // don't auto-clear when user is browsing detail; only clear if current selection was deleted externally
+      if (selectedProjectId && !projects.some(p => p.id === selectedProjectId)) setSelectedProjectId(null)
+    }
+  }, [activeProjectId, projects])
 
   const handleDeleteProject = async (project: Project) => {
     const ok = await confirm({

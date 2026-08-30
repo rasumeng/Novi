@@ -69,6 +69,7 @@ export default function App() {
             onRemoveConversation={chat.removeConversationFromProject}
             onSelectProject={chat.setActiveProjectId}
             onStartProjectConversation={handleStartProjectConversation}
+            activeProjectId={chat.activeProjectId}
           />
         )
       case 'jobs':

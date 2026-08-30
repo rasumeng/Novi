@@ -69,8 +69,8 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         className={clsx(
           'rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[85%] overflow-hidden',
           isUser
-            ? 'bg-accent text-white'
-            : 'bg-base-850 text-base-100 shadow-panel'
+            ? 'bg-accent text-white selection:bg-white/40 selection:text-white'
+            : 'bg-base-850 text-base-100 shadow-panel selection:bg-accent/30'
         )}
         >
           {isUser ? (

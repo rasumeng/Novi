@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { PanelLeftClose, PanelLeftOpen, Plus, Search, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { PanelLeftClose, PanelLeftOpen, Plus, Search, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown } from 'lucide-react'
 import { Conversation, Project } from '@/types'
 import { SidebarItem } from './SidebarItem'
 import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
 import { SearchModal } from '@/components/search/SearchModal'
+import { ProjectForm } from '@/components/projects/ProjectForm'
 
 interface Props {
   collapsed: boolean
@@ -47,7 +48,10 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null)
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState("")
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const headerMenuRef = useRef<HTMLDivElement>(null)
 
   const pinnedConvos = useMemo(() => conversations.filter((c) => c.pinned), [conversations])
   const pinnedProjects = useMemo(() => (projects ?? []).filter((p) => (p as any).pinned).sort((a,b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")), [projects])
@@ -112,18 +116,29 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [projectMenuId])
-  const handleCreateProject = async () => {
-    const name = window.prompt("Project name:")
-    if (!name?.trim()) return
-    const p = await onCreateProject?.(name.trim())
-    if (p) setExpandedIds(prev => new Set([...prev, p.id]))
+  useEffect(() => {
+    if (!headerMenuOpen) return
+    const close = (e: MouseEvent) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)) setHeaderMenuOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [headerMenuOpen])
+  const handleCreateProject = () => setNewProjectOpen(true)
+  const handleNewProjectSubmit = async (data: { name: string; description: string; sharedContext: string }) => {
+    const p = await onCreateProject?.(data.name, data.description, data.sharedContext)
+    if (p) {
+      setExpandedIds(prev => new Set([...prev, p.id]))
+      if (!projectsExpanded) toggleProjectsSection()
+    }
+    setNewProjectOpen(false)
   }
 
   return (
     <motion.aside
       animate={{ width: collapsed ? 64 : 264 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="h-full flex flex-col border-r border-base-800 bg-base-900 shrink-0"
+      className="h-full flex flex-col border-r border-base-800 bg-black shrink-0"
     >
       <div className="flex items-center justify-between px-3 h-14 shrink-0">
         <div className="flex items-center gap-2.5">
@@ -168,27 +183,8 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
         })}
       </div>
 
+        
       <div className="flex flex-col min-h-0 flex-1">
-        {!collapsed && activeSection === 'projects' && (
-          <div className="flex-1 overflow-y-auto mt-3 px-2 space-y-1">
-            <p className="px-2.5 text-[11px] uppercase tracking-wider text-base-500 mb-1">Projects</p>
-            {(projects ?? []).length === 0 ? (
-              <p className="px-2.5 text-xs text-base-600 py-2">No projects yet</p>
-            ) : (
-              (projects ?? []).map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => onSelectProject?.(p.id)}
-                  className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-sm transition-colors text-left ${activeProjectId === p.id ? 'bg-base-800 text-base-100' : 'text-base-400 hover:text-base-200 hover:bg-base-800/50'}`}
-                >
-                  <FolderKanban size={14} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} />
-                  <span className="flex-1 truncate">{p.name}</span>
-                  <span className="text-[11px] text-base-500">{p.conversationIds.length}</span>
-                </button>
-              ))
-            )}
-          </div>
-        )}
         {!collapsed && (
           <>
             <button
@@ -248,14 +244,65 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                   >
                     <Plus size={12} />
                   </button>
-                  <button
-                    onClick={() => onSectionChange('projects')}
-                    aria-label="View all projects"
-                    className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 rounded hover:bg-base-800 text-base-400 hover:text-base-100 transition-all focus-visible:ring-2 focus-visible:ring-accent/20"
-                    title="View all"
-                  >
-                    <MoreHorizontal size={12} />
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setHeaderMenuOpen(v => !v)}
+                      aria-label="Projects menu"
+                      aria-expanded={headerMenuOpen}
+                      className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 rounded hover:bg-base-800 text-base-400 hover:text-base-100 transition-all focus-visible:ring-2 focus-visible:ring-accent/20"
+                      title="Projects menu"
+                    >
+                      <MoreHorizontal size={12} />
+                    </button>
+                    {headerMenuOpen && (
+                      <div ref={headerMenuRef} className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-base-700 bg-base-850 shadow-lg z-50 py-1">
+                        <button
+                          onClick={() => { setHeaderMenuOpen(false); onSectionChange('projects') }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
+                        >
+                          <LayoutGrid size={13} /> View all projects
+                        </button>
+                        <button
+                          onClick={() => { setHeaderMenuOpen(false); setNewProjectOpen(true) }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
+                        >
+                          <Plus size={13} /> New project
+                        </button>
+                        <div className="border-t border-base-700 my-1" />
+                        <button
+                          onClick={() => {
+                            setHeaderMenuOpen(false)
+                            if (projectsExpanded) {
+                              setProjectsExpanded(false)
+                              try { localStorage.setItem('novi_sidebar_projects_expanded', 'false') } catch {}
+                            } else {
+                              setProjectsExpanded(true)
+                              try { localStorage.setItem('novi_sidebar_projects_expanded', 'true') } catch {}
+                            }
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
+                        >
+                          <ChevronsUpDown size={13} /> {projectsExpanded ? 'Collapse projects' : 'Expand projects'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setHeaderMenuOpen(false)
+                            const allIds = (projects ?? []).map(p => p.id)
+                            if (expandedIds.size === allIds.length && allIds.length > 0) {
+                              setExpandedIds(new Set())
+                              try { localStorage.setItem('novi_sidebar_expanded_projects', JSON.stringify([])) } catch {}
+                            } else {
+                              setExpandedIds(new Set(allIds))
+                              try { localStorage.setItem('novi_sidebar_expanded_projects', JSON.stringify(allIds)) } catch {}
+                            }
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
+                        >
+                          <ChevronDown size={13} /> {expandedIds.size > 0 && expandedIds.size === (projects?.length ?? 0) ? 'Collapse all' : 'Expand all'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {projectsExpanded && (
                   <div className="space-y-1 mt-1">
@@ -279,8 +326,9 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                                   {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                                 </button>
                                 <button
-                                  onClick={() => onSelectProject?.(p.id)}
+                                  onClick={() => toggleProject(p.id)}
                                   className="flex-1 flex items-center gap-1.5 text-left min-w-0"
+                                  aria-label={`${expanded ? 'Collapse' : 'Expand'} ${p.name}`}
                                 >
                                   <FolderKanban size={13} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} />
                                   <span className="truncate text-xs font-medium">{p.name}</span>
@@ -345,7 +393,16 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                                         {isPinned ? 'Unpin' : 'Pin'}
                                       </button>
                                       <button
-                                        onClick={() => { onSelectProject?.(p.id); setProjectMenuId(null) }}
+                                        onClick={() => {
+                                          setExpandedIds(prev => {
+                                            const next = new Set(prev)
+                                            next.add(p.id)
+                                            try { localStorage.setItem('novi_sidebar_expanded_projects', JSON.stringify([...next])) } catch {}
+                                            return next
+                                          })
+                                          onSelectProject?.(p.id)
+                                          setProjectMenuId(null)
+                                        }}
                                         className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
                                       >
                                         <Settings size={13} /> Settings
@@ -436,6 +493,29 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
       )}
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={onSelect} />
+
+      <AnimatePresence>
+        {newProjectOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => setNewProjectOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.97 }}
+              transition={{ duration: 0.14, ease: 'easeOut' }}
+              className="w-[480px] max-w-full rounded-2xl border border-base-700 bg-base-900 shadow-panel p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ProjectForm onSubmit={handleNewProjectSubmit} onCancel={() => setNewProjectOpen(false)} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.aside>
   )
 }

@@ -78,7 +78,7 @@ export function ActivityPanel({
             animate={{ width: 280, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="border-l border-base-800 bg-base-900 overflow-hidden shrink-0"
+            className="border-l border-base-800 bg-base-1000 overflow-hidden shrink-0"
           >
             <div className="w-[280px] h-full flex flex-col">
               <div className="flex items-center justify-between px-4 h-14 border-b border-base-800 shrink-0">

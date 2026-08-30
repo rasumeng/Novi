@@ -970,7 +970,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     # Startup: compute advisory recommendations once before the UI serves.
     # Never installs anything and never writes selection.
-    _after_models_changed()
+    # Run in background so create_app returns quickly even if Ollama is down.
+    threading.Thread(target=_after_models_changed, daemon=True).start()
 
     def _sanitize_config(cfg: dict) -> dict:
         safe = {}
