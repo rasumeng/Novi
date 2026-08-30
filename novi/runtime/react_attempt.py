@@ -53,6 +53,79 @@ from .trace import DebugTraceEvent, StepTrace
 _LOOP_DONE = "__plan_step_done__"
 
 
+def is_goal_complete(ctx, final: str = "") -> bool:
+    """Goal is stopping condition, max_steps is safety rail.
+
+    True if plan marked COMPLETED or final non-empty and no unresolved flag.
+    """
+    try:
+        if ctx is not None and getattr(ctx, "execution_plan", None) is not None:
+            plan = getattr(ctx.execution_plan, "plan", None)
+            if plan is not None:
+                status = getattr(plan, "status", None)
+                if status is not None:
+                    val = getattr(status, "value", str(status))
+                    if str(val).lower() == "completed" or str(status).lower().endswith("completed"):
+                        return True
+    except Exception:
+        pass
+    try:
+        if final and final.strip():
+            has_unresolved = ctx.metadata.get("has_unresolved") if hasattr(ctx, "metadata") else None
+            unresolved = ctx.metadata.get("unresolved") if hasattr(ctx, "metadata") else None
+            if has_unresolved or (isinstance(unresolved, list) and unresolved):
+                return False
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _checkpoint_needs_continuation(ctx, reason: str = "max_steps_safety") -> None:
+    """Persist StableState and continuation flags to ctx + trace metadata."""
+    try:
+        from .execution_state import StableState
+
+        stable = StableState.from_context(ctx)
+        ctx.metadata["stable_state"] = stable.to_dict()
+        ctx.metadata["needs_continuation"] = True
+        ctx.metadata["continuation_reason"] = reason
+        # also trace metadata for diagnostics
+        if getattr(ctx, "trace", None) is not None:
+            try:
+                tr = ctx.trace
+                if not hasattr(tr, "metadata") or not isinstance(getattr(tr, "metadata"), dict):
+                    tr.metadata = {}  # type: ignore[attr-defined]
+                tr.metadata["stable_state"] = ctx.metadata["stable_state"]  # type: ignore
+                tr.metadata["needs_continuation"] = True  # type: ignore
+                tr.metadata["continuation_reason"] = reason  # type: ignore
+            except Exception:
+                pass
+        # opportunistic compaction
+        try:
+            from .context_manager import ContextManager
+
+            cm = ContextManager(model_name=getattr(ctx, "model_name", None))
+            level = cm.should_compact(ctx)
+            if level in ("compact", "emergency"):
+                cm.compact_history(ctx)
+                if getattr(ctx, "trace", None) is not None:
+                    try:
+                        if not hasattr(ctx.trace, "metadata"):
+                            ctx.trace.metadata = {}  # type: ignore[attr-defined]
+                        ctx.trace.metadata["context_compacted"] = level  # type: ignore
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    except Exception:
+        try:
+            ctx.metadata["needs_continuation"] = True
+            ctx.metadata["continuation_reason"] = reason
+        except Exception:
+            pass
+
+
 def run_react_attempt(
     *,
     ctx,
@@ -117,6 +190,7 @@ def run_react_attempt(
             content=f"CURRENT STEP ({step.id}): {step.description}"
         ))
     seen_calls: set[str] = set(seed_seen or ())
+    sig_counts: dict[str, int] = {}
     final = ""
     try:
         for outer_step in range(step_budget):
@@ -201,6 +275,8 @@ def run_react_attempt(
                     yield (_LOOP_DONE, "", "stopped", False)
                     return
                 sig = f"{c['name']}:{args_sig}"
+                sig_counts[sig] = sig_counts.get(sig, 0) + 1
+                is_stall = sig_counts[sig] >= 3
                 call_id = f"call-{idx}-{c['name']}"
                 yield ("tool_call", c["name"], c["args"], call_id, tool_executor.tool_category(c["name"]))
                 if event_bus:
@@ -272,22 +348,48 @@ def run_react_attempt(
                     tracer.finalize(ctx.trace, "stopped")
                     yield (_LOOP_DONE, "", "stopped", False)
                     return
+                if is_stall:
+                    _checkpoint_needs_continuation(ctx, reason="stall")
+                    final = f"Stalled on {c['name']} repeated 3x without progress; checkpointing for continuation."
+                    yield (_LOOP_DONE, final, "needs_continuation", True)
+                    return
             yield ("thinking", "Thinking...", "Processing tool results and forming response", None)
         else:
-            final = ("I ran out of steps before finishing. Here's where I "
-                     "got to — ask me to continue if you want me to keep going.")
-            yield ("token", final)
+            # max_steps = safety rail, not completion boundary — checkpoint, compact, needs_continuation
+            if not is_goal_complete(ctx, final):
+                _checkpoint_needs_continuation(ctx, reason="max_steps_safety")
+                # stable text as final for continuation context, not error wording
+                try:
+                    stable_dict = ctx.metadata.get("stable_state", {})  # type: ignore
+                    if isinstance(stable_dict, dict) and stable_dict.get("goal"):
+                        final = stable_dict.get("goal", "")  # type: ignore
+                    else:
+                        final = ""
+                except Exception:
+                    final = ""
+                yield (_LOOP_DONE, final, "needs_continuation", True)
+                return
+            # goal already complete but exhausted loop without break — treat as completed
+            final = final or ""
+            if not final:
+                final = "(no response — the model returned empty output; try rephrasing)"
+                yield ("token", final)
+            yield (_LOOP_DONE, final, "completed", True)
+            return
 
         if not final:
             final = "(no response — the model returned empty output; try rephrasing)"
             yield ("token", final)
 
-        stop_reason = "completed"
-        if not final.strip():
-            stop_reason = "empty"
-        elif "ran out of steps" in final:
-            stop_reason = "max_steps"
-        success = stop_reason not in ("max_steps", "error")
+        # goal is stopping condition — normal completion or empty
+        if ctx.metadata.get("needs_continuation"):
+            stop_reason = "needs_continuation"
+            success = True
+        else:
+            stop_reason = "completed"
+            if not final.strip():
+                stop_reason = "empty"
+            success = stop_reason not in ("error",)
         yield (_LOOP_DONE, final, stop_reason, success)
     except Exception as e:
         final = f"I hit an error: {e}"
