@@ -1,5 +1,6 @@
 """ContextManager — single authoritative gatekeeper between execution state and model.
 
+Agent-wide, usable across conversation/coding/research/workspace/tools/memory/jobs.
 Agent-wide primitive, not workspace-specific. First consumer is Workspace,
 but same system manages Memory/Project/Web/Attachments/Tool results/Skills
 and long-running execution state.
@@ -34,6 +35,7 @@ class StableState:
     next_action: str = ""
     memory_refs: list[str] = field(default_factory=list)
     budget_breakdown: dict = field(default_factory=dict)
+    project_id: str = ""
 
     def to_text(self, max_chars: int = 1200) -> str:
         parts = []
@@ -58,7 +60,10 @@ class StableState:
 
 
 class ContextManager:
-    """Single gatekeeper. Consumes existing sources, no second memory."""
+    """Single gatekeeper. Consumes existing sources, no second memory.
+
+    Agent-wide, usable across conversation/coding/research/workspace/tools/memory/jobs
+    """
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name
@@ -144,4 +149,5 @@ class ContextManager:
             next_action=getattr(ctx, "metadata", {}).get("next_action", "continue"),
             memory_refs=[],
             budget_breakdown=getattr(ctx, "metadata", {}).get("budget_breakdown", {}),
+            project_id=getattr(ctx, "project_id", "") or "",
         )
