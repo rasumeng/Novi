@@ -172,3 +172,41 @@ class ModelRecord:
             "caveats": self.caveats,
             "stale": self.stale,
         }
+
+
+def load_model_record(model_name: str) -> Optional["ModelRecord"]:
+    """Load a ModelRecord by name without fabricating context_length.
+
+    Tries global registry via novi.models.registry.get_global_registry()
+    defensively — returns None if unavailable or record has no context_length.
+    Never fabricates: missing or None stays None.
+    """
+    if not model_name:
+        return None
+    # Try global registry if available
+    try:
+        from ..models.registry import get_global_registry  # type: ignore
+
+        reg = get_global_registry()
+        if reg is not None:
+            # Support both .get and .find APIs
+            rec = None
+            if hasattr(reg, "get"):
+                try:
+                    rec = reg.get(model_name)  # type: ignore
+                except Exception:
+                    rec = None
+            if rec is None and hasattr(reg, "find"):
+                try:
+                    rec = reg.find(model_name)  # type: ignore
+                except Exception:
+                    rec = None
+            if rec is not None and getattr(rec, "context_length", None) is not None:
+                # If it's ModelInfo without context_length, ignore
+                if isinstance(getattr(rec, "context_length", None), int):
+                    return rec  # type: ignore
+                # If record is ModelInfo and lacks field, treat as None
+                return None
+    except Exception:
+        pass
+    return None

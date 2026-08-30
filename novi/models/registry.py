@@ -44,3 +44,31 @@ class ModelRegistry:
 
     def __len__(self) -> int:
         return len(self._models)
+
+    # Alias for Task 1 spec: ModelRegistry.get(model_name) -> ModelRecord|ModelInfo|None
+    def get(self, model_name: str) -> Optional[ModelInfo]:
+        return self.find(model_name)
+
+
+# Global singleton for model-aware budget resolution
+_global_registry: Optional["ModelRegistry"] = None
+
+
+def get_global_registry() -> Optional["ModelRegistry"]:
+    """Return process-global ModelRegistry, or None if not initialized.
+
+    Never raises. Created lazily on first call.
+    """
+    global _global_registry
+    if _global_registry is None:
+        try:
+            _global_registry = ModelRegistry()
+        except Exception:
+            return None
+    return _global_registry
+
+
+def set_global_registry(reg: Optional["ModelRegistry"]) -> None:
+    """Test seam: replace global registry (pass None to clear)."""
+    global _global_registry
+    _global_registry = reg

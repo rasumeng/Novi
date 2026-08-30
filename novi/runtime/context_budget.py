@@ -48,41 +48,32 @@ class ContextBudgetManager:
 
     @staticmethod
     def get_context_window(model_name: str | None = None) -> tuple[int, str]:
-        """Return (window, source) for model, or conservative fallback."""
+        """Return (window, source) for model, or conservative fallback.
+
+        Resolution order:
+          1. Global ModelRegistry (get_global_registry().get)
+          2. load_model_record(model_name)
+          3. Conservative fallback (4096 small / 8192 default)
+        Never fabricates context_length — None stays None.
+        """
         if model_name:
             try:
-                from ..configuration.model_records import ModelRecord
-                from ..configuration.discovery import ModelDiscovery  # noqa
-                # Try to find ModelRecord via registry
-                from ..services.context import NoviContext  # lazy to avoid cycle
-                # Instead, try direct lookup via runtime_inventory cache
-                from ..configuration.runtime_inventory import _context_length_from_show  # noqa
-                # Fallback: try to load from persisted ModelRecord via ModelRegistry
-                # Use ModelService if available, but avoid hard dependency
-                pass
-            except Exception:
-                pass
-            # Attempt to read from ModelRecord store via file scan (light)
-            try:
-                from pathlib import Path
-                from ..paths import home as app_home
-                # ModelRecord persisted via ModelRegistry is not file-based; use discovery
-                from ..configuration.model_records import load_model_record  # type: ignore
-                rec = load_model_record(model_name)  # may not exist
-                if rec and getattr(rec, "context_length", None):
-                    return int(rec.context_length), "model_record"
-            except Exception:
-                pass
-            try:
-                # Direct ModelRegistry lookup if available globally
-                from ..models.registry import get_global_registry  # type: ignore
+                from ..models.registry import get_global_registry
+
                 reg = get_global_registry()
-                rec = reg.get(model_name)  # type: ignore
+                rec = reg.get(model_name) if reg else None  # type: ignore
                 if rec and getattr(rec, "context_length", None):
-                    return int(rec.context_length), "model_record"
+                    return int(rec.context_length), "model_record"  # type: ignore
             except Exception:
                 pass
-        # Conservative fallbacks
+            try:
+                from ..configuration.model_records import load_model_record
+
+                rec = load_model_record(model_name)  # type: ignore
+                if rec and getattr(rec, "context_length", None):
+                    return int(rec.context_length), "model_record"  # type: ignore
+            except Exception:
+                pass
         if model_name and any(s in model_name.lower() for s in ["7b", "3b", "mini", "small"]):
             return CONSERVATIVE_SMALL, "fallback_small"
         return CONSERVATIVE_DEFAULT, "fallback_default"
