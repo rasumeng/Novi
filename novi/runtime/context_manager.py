@@ -83,7 +83,7 @@ class ContextManager:
         tool_out = extra_tool or ""
         # system prompt est is fixed, but we include stable
         return ContextBudgetManager.compute(
-            self.model_name,
+            ctx.model_name or self.model_name,
             system_prompt="",
             stable_state=stable_text,
             recent_conversation=recent,
