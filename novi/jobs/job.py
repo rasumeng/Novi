@@ -12,10 +12,14 @@ Architecture:
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from novi.runtime.execution_state import StableState
@@ -110,7 +114,8 @@ class Checkpoint:
             from novi.runtime.execution_state import StableState
 
             return StableState.from_dict(self.stable)
-        except Exception:
+        except Exception as e:
+            logger.warning("failed to deserialize Checkpoint.stable for job %s: %s", self.job_id, e)
             return None
 
     @stable_state.setter

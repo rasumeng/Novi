@@ -76,16 +76,9 @@ class ContextManager:
 
     def compact_history(self, ctx: ExecutionContext) -> None:
         """L2: rolling compaction — preserve hierarchy, not just delete."""
-        # Build stable from ctx if not present
-        stable = StableState(
-            goal=ctx.user_input[:200],
-            current_objective=getattr(ctx.analysis, "intent", "") and str(ctx.analysis.intent) or ctx.intent_str,
-            completed=[s.label for s in getattr(ctx, "inlineSteps", [])[:5]] if hasattr(ctx, "inlineSteps") else [],
-            discoveries=getattr(ctx, "workspace_files_used", [])[:5],
-            important_files=getattr(ctx, "workspace_files_used", [])[:8],
-            next_action="continue",
-        )
-        # Create summary via simple_llm if available else extractive
+        # Canonical base — preserves project_id/conversation_id/plan/errors/budget_breakdown isolation
+        stable = StableState.from_context(ctx)
+        # Bounded summary for history compaction (from_context already truncates goal[:500], plan[:800])
         summary_text = stable.to_text()
         # Truncate history to last 6, keep summary
         if len(ctx.history) > 6:
@@ -96,19 +89,4 @@ class ContextManager:
 
     def checkpoint_stable(self, ctx: ExecutionContext) -> StableState:
         """L3: produce checkpoint stable state, not message dump."""
-        return StableState(
-            goal=ctx.user_input[:500],
-            current_objective=ctx.intent_str,
-            plan=str(getattr(ctx, "execution_plan", "") or "")[:800],
-            completed=[s for s in (getattr(ctx, "metadata", {}).get("completed", []) or [])],
-            current_step=getattr(ctx, "metadata", {}).get("current_step", 0),
-            discoveries=getattr(ctx, "workspace_files_used", [])[:8],
-            important_files=getattr(ctx, "workspace_files_used", [])[:8],
-            workspace_paths=[getattr(ctx, "project_id", "")] if getattr(ctx, "project_id", "") else [],
-            errors=list((getattr(ctx, "metadata", {}).get("errors", []) or [])[:3]),
-            next_action=getattr(ctx, "metadata", {}).get("next_action", "continue"),
-            memory_refs=[],
-            budget_breakdown=getattr(ctx, "metadata", {}).get("budget_breakdown", {}),
-            project_id=getattr(ctx, "project_id", "") or "",
-            conversation_id=getattr(ctx, "conversation_id", "") or "",
-        )
+        return StableState.from_context(ctx)
