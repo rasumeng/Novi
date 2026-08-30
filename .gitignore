@@ -53,5 +53,7 @@ novi/webui/src-tauri/gen
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
 
-# Opencode
+# Misc
 .opencode/
+.claude/
+.superpowers
