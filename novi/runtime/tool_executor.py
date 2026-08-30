@@ -356,6 +356,16 @@ class ToolExecutor:
         return False
 
     def _sanitize(self, text: str) -> str:
+        # L1: compress via ContextManager before generic truncation — keep paths/errors/counts
+        if len(text) > 4000:
+            try:
+                from .context_manager import ContextManager
+
+                cm = ContextManager()
+                # compress_tool_result keeps paths/errors/counts within 4000
+                text = cm.compress_tool_result(text, budget_chars=4000)
+            except Exception:
+                pass
         if len(text) > self.max_tool_output:
             # L1: preserve important paths/errors, not blind head/tail
             important = [l for l in text.splitlines() if any(k in l.lower() for k in ["error", "failed", "path:", "file:", ".py", ".ts", ".js", "/", "count:", "total"])]

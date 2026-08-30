@@ -322,7 +322,8 @@ class NoviRuntime:
                        memory_context: str = "",
                        project_context: str = "",
                        workspace_context: str = "",
-                       workspace_files: list[str] | None = None) -> str:
+                       workspace_files: list[str] | None = None,
+                       stable_state_text: str = "") -> str:
         parts = [_IDENTITY.format(date=datetime.now().strftime("%A, %B %d, %Y"))]
         if self._agent_system_extra:
             parts.append(f"AGENT INSTRUCTIONS:\n{self._agent_system_extra}")
@@ -346,6 +347,10 @@ class NoviRuntime:
             parts.append(f"\nUser attached files:\n{file_list}\nReference these when relevant. For images, you can see them directly.")
         if self._summary:
             parts.append(f"\nContext from earlier in this session:\n{self._summary}")
+        if stable_state_text:
+            parts.append(f"\nStable execution state (from prior compaction):\n{stable_state_text[:1200]}")
+        elif getattr(self, '_stable_state_text', None):
+            parts.append(f"\nStable execution state (from prior compaction):\n{self._stable_state_text[:1200]}")
         if memory_context:
             parts.append(f"\nRelevant memory from past sessions:{memory_context}")
         lessons = self.lesson_store.get_context(tool_names=allowed_tools if allowed_tools else None)
@@ -660,6 +665,27 @@ class NoviRuntime:
 
             full_grounding = ctx.grounding_text
 
+            # L2/L3: inject stable_state_text when history truncated (isolation preserved per project_id)
+            _stable_text = ""
+            try:
+                _meta = getattr(ctx, "metadata", {}) or {}
+                _st = _meta.get("stable_state")
+                _st_text = _meta.get("stable_state_text") or getattr(ctx, "summary", "")
+                if isinstance(_st, dict) and _st.get("project_id"):
+                    from novi.runtime.execution_state import StableState as _SSPrompt
+                    try:
+                        _stable_text = _SSPrompt.from_dict(_st).to_text()
+                    except Exception:
+                        _stable_text = str(_st)[:1200]
+                elif isinstance(_st, str) and _st:
+                    _stable_text = _st[:1200]
+                elif _st_text and getattr(ctx, "history", None) is not None and len(ctx.history) <= 6 and _meta.get("compacted"):
+                    _stable_text = str(_st_text)[:1200]
+                elif _meta.get("compacted") and _st_text:
+                    _stable_text = str(_st_text)[:1200]
+            except Exception:
+                _stable_text = ""
+
             base_msgs = [SystemMessage(content=self._system_prompt(
                 user_input, intent_str, full_grounding,
                 grounding_error=ctx.grounding_error,
@@ -667,7 +693,8 @@ class NoviRuntime:
                 allowed_tools=ctx.allowed_tools, analysis=ctx.analysis, trace=ctx.trace,
                 memory_context=ctx.memory_context, project_context=ctx.project_context,
                 workspace_context=getattr(ctx, "workspace_context", ""),
-                workspace_files=getattr(ctx, "workspace_files_used", None)))]
+                workspace_files=getattr(ctx, "workspace_files_used", None),
+                stable_state_text=_stable_text))]
             coord = ctx.retrieval_coordinator
             if coord is not None and coord.budget.max_web_searches > 0:
                 base_msgs.append(SystemMessage(
