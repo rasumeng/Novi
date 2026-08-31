@@ -60,6 +60,7 @@ class ComplexityEstimator:
         else:
             plan_level = 0
 
+        # max_steps is safety rail, not completion boundary — Novi works toward goal; step exhaustion is safety not completion.
         max_steps = min(3 + score, 15)
 
         estimated_tokens = length * 4 + 500

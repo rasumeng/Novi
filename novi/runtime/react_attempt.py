@@ -190,10 +190,47 @@ def run_react_attempt(
             content=f"CURRENT STEP ({step.id}): {step.description}"
         ))
     seen_calls: set[str] = set(seed_seen or ())
+    # progress_tracker: count consecutive tool calls with no new discoveries/important_files
+    # if 3 identical sigs -> mark stall, trigger compact+checkpoint (handled per-tool below)
     sig_counts: dict[str, int] = {}
     final = ""
     try:
         for outer_step in range(step_budget):
+            # context overflow safeguard: if utilization stays >90% after compact -> force needs_continuation context_overflow
+            try:
+                from .context_manager import ContextManager as _CMOverflow
+
+                _cm = _CMOverflow(model_name=getattr(ctx, "model_name", None))
+                _lvl = _cm.should_compact(ctx)
+                if _lvl == "emergency":
+                    _cm.compact_history(ctx)
+                    # compact_history sets needs_continuation/context_overflow if still >=90
+                    if ctx.metadata.get("needs_continuation") and ctx.metadata.get("continuation_reason") == "context_overflow":
+                        _checkpoint_needs_continuation(ctx, reason="context_overflow")
+                        # stable goal as final preserves continuation context
+                        try:
+                            _sd = ctx.metadata.get("stable_state", {})
+                            _goal = _sd.get("goal", "") if isinstance(_sd, dict) else ""
+                        except Exception:
+                            _goal = ""
+                        yield (_LOOP_DONE, _goal, "needs_continuation", True)
+                        return
+                    # re-check budget if still emergency after compact (fallback)
+                    try:
+                        _bd2 = _cm.budget_for(ctx)
+                        if _bd2.utilization_pct >= 90:
+                            _checkpoint_needs_continuation(ctx, reason="context_overflow")
+                            try:
+                                _sd2 = ctx.metadata.get("stable_state", {})
+                                _goal2 = _sd2.get("goal", "") if isinstance(_sd2, dict) else ""
+                            except Exception:
+                                _goal2 = ""
+                            yield (_LOOP_DONE, _goal2, "needs_continuation", True)
+                            return
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             idx = step_index_base + outer_step
             acc = None
             content_buf = ""
@@ -353,6 +390,34 @@ def run_react_attempt(
                     final = f"Stalled on {c['name']} repeated 3x without progress; checkpointing for continuation."
                     yield (_LOOP_DONE, final, "needs_continuation", True)
                     return
+                # context overflow mid-loop: compact already set flag if still >90% after compact
+                if ctx.metadata.get("needs_continuation") and ctx.metadata.get("continuation_reason") == "context_overflow":
+                    _checkpoint_needs_continuation(ctx, reason="context_overflow")
+                    try:
+                        _sd = ctx.metadata.get("stable_state", {})
+                        _goal = _sd.get("goal", "") if isinstance(_sd, dict) else ""
+                    except Exception:
+                        _goal = ""
+                    yield (_LOOP_DONE, _goal, "needs_continuation", True)
+                    return
+                # opportunistic mid-loop utilization check: if still emergency after tool append, compact+overflow
+                try:
+                    from .context_manager import ContextManager as _CMMid
+
+                    _cm_mid = _CMMid(model_name=getattr(ctx, "model_name", None))
+                    if _cm_mid.should_compact(ctx) == "emergency":
+                        _cm_mid.compact_history(ctx)
+                        if ctx.metadata.get("continuation_reason") == "context_overflow":
+                            _checkpoint_needs_continuation(ctx, reason="context_overflow")
+                            try:
+                                _sd2 = ctx.metadata.get("stable_state", {})
+                                _goal2 = _sd2.get("goal", "") if isinstance(_sd2, dict) else ""
+                            except Exception:
+                                _goal2 = ""
+                            yield (_LOOP_DONE, _goal2, "needs_continuation", True)
+                            return
+                except Exception:
+                    pass
             yield ("thinking", "Thinking...", "Processing tool results and forming response", None)
         else:
             # max_steps = safety rail, not completion boundary — checkpoint, compact, needs_continuation

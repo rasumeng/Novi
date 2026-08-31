@@ -135,6 +135,39 @@ class ContextManager:
         ctx.metadata["stable_state"] = stable.to_dict()
         ctx.metadata["stable_state_text"] = summary_text
         ctx.metadata["compacted"] = True
+        # Stall/context overflow safeguard: if utilization stays >90% after compact, force needs_continuation
+        # with reason context_overflow rather than growing prompt. Preserve goal-is-stopping-condition invariant.
+        try:
+            bd_after = self.budget_for(ctx)
+            # persist updated breakdown
+            try:
+                ctx.metadata["budget_breakdown"] = bd_after.__dict__
+                if getattr(ctx, "trace", None) is not None:
+                    ctx.trace.metadata["budget_breakdown"] = bd_after.__dict__  # type: ignore
+            except Exception:
+                pass
+            if bd_after.utilization_pct >= 90:
+                # Re-use execution_state helper for durable checkpointing
+                try:
+                    from .execution_state import StableState as _SSOverflow
+
+                    stable2 = _SSOverflow.from_context(ctx)
+                    ctx.metadata["stable_state"] = stable2.to_dict()
+                except Exception:
+                    pass
+                ctx.metadata["needs_continuation"] = True
+                ctx.metadata["continuation_reason"] = "context_overflow"
+                if getattr(ctx, "trace", None) is not None:
+                    try:
+                        if not hasattr(ctx.trace, "metadata"):
+                            ctx.trace.metadata = {}  # type: ignore[attr-defined]
+                        ctx.trace.metadata["needs_continuation"] = True  # type: ignore
+                        ctx.trace.metadata["continuation_reason"] = "context_overflow"  # type: ignore
+                        ctx.trace.metadata["context_compacted"] = "emergency"  # type: ignore
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def checkpoint_stable(self, ctx: ExecutionContext) -> StableState:
         """L3: produce checkpoint stable state, not message dump.
