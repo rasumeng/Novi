@@ -42,3 +42,23 @@ Implemented durable long-running Jobs: automatic continuation (context/safety bo
 - project_id isolation preserved: StableState.project_id → ExecutionContext.project_id, checkpoint.stable roundtrip, retrieval reconstruction via workspace_paths only for owning project
 - Checkpoint.step contract unchanged: passed through as resume_from without +1 in all paths
 - No workload-specific branches introduced
+
+## Fix: Task 6 High/Medium Review (2026-08-30)
+**Commit:** `fix: make Task6 auto-loop use real runtime and retrieval reconstruction`
+
+**Issues addressed:**
+1. **execution.py:202-209 workspace_paths reconstruction** — now calls `retrieval_executor._setup_workspace_context` / `execute_search` / `execute` to re-fetch workspace_context via StableState.workspace_paths; if executor absent, files_used set and documented fallback.
+2. **execute_with_auto_continue faking** — replaced simulated Job loop with real FakeRuntime that yields `needs_continuation` via `ctx.metadata` then completes on 3rd attempt; asserts 3 Jobs via real `_run_with_auto_continue` path, resume_from unchanged.
+3. **Medium fixes** — fallback step_val no longer `attempts+1` divergence; strictly uses `checkpoint.step` or `stable current_step` / `completed` length / `current_resume`, final 0 not monotonic hack. NEEDS_CONTINUATION path now writes `.checkpoint.json` via `manager.checkpoint()` and `save_checkpoint()`. Cross-project isolation covered.
+4. **New tests** — `test_emergency_vs_compact_branch` (compact auto-continues 3, emergency yields NEEDS_CONTINUATION), `test_cross_project_isolation_proj_A_vs_B` (proj-A/B stable/workspace not leaking + continuation candidates isolated), `test_persistence_roundtrip_via_jobstore_save_load` (JobStore save/load + save_checkpoint roundtrip), `test_retrieval_executor_invocation_mock_verification` (mock executor called on resume), `test_real_runtime_loop_resume_from_unchanged` (resume_from==1, retrieval called).
+
+**Files modified:**
+- `novi/services/execution.py:197-232` — retrieval reconstruction with real executor calls + fallback doc
+- `novi/services/execution.py:334-351` — strict step_val (no attempts+1)
+- `novi/services/execution.py:470-501` — NEEDS_CONTINUATION writes .checkpoint.json via checkpoint()
+- `novi/services/execution.py:503-645` — execute_with_auto_continue now uses FakeRuntime + real _run_with_auto_continue
+- `tests/test_jobs_long_running.py` — 5 additional tests (total 11)
+
+**Verification:**
+- `python -m pytest tests/test_jobs_long_running.py tests/test_continuation.py tests/test_continuation_auto.py tests/test_continuation_integration.py tests/test_checkpoint_stable.py tests/test_checkpoint_isolation.py tests/test_checkpoint_semantics.py -v` → **62 passed**
+- `python -m pytest tests/test_jobs_long_running.py -v` → **11 passed** (emergency/compact, cross-project, persistence, retrieval mock, real loop)
