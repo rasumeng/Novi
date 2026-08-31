@@ -564,15 +564,21 @@ class NoviRuntime:
                 return
 
             # ── ContextManager gatekeeper (agent-wide, before model) — pre-check
+            # L3 Checkpoint contract: ctx.metadata["stable_state"] (StableState.to_dict())
+            # is the canonical source for Checkpoint.stable. Job creation copies it via
+            # ContextManager.checkpoint_stable(ctx).to_dict() or directly from
+            # ctx.metadata["stable_state"]. We persist to ctx.trace.metadata here so
+            # the caller (JobManager / continuation) can create Checkpoint without re-deriving.
             try:
                 from .context_manager import ContextManager
                 from .execution_state import StableState
 
-                cm = ContextManager(model_name=ctx.model_name)
+                cm = ContextManager(model_name=ctx.model_name, simple_llm=self.simple_llm)
                 level = cm.should_compact(ctx)
                 if level in ("compact", "emergency"):
                     cm.compact_history(ctx)
-                    # persist budget breakdown + StableState for diagnostics BEFORE next model call
+                    # persist StableState for diagnostics BEFORE next model call
+                    # compact_history already stores stable_state dict+text; re-derive to ensure fresh
                     try:
                         stable = StableState.from_context(ctx)
                         ctx.metadata["stable_state"] = stable.to_dict()
@@ -666,12 +672,13 @@ class NoviRuntime:
             full_grounding = ctx.grounding_text
 
             # L2/L3: inject stable_state_text when history truncated (isolation preserved per project_id)
+            # Deduped: prefer canonical StableState dict -> to_text, fallback to compacted text
             _stable_text = ""
             try:
                 _meta = getattr(ctx, "metadata", {}) or {}
                 _st = _meta.get("stable_state")
                 _st_text = _meta.get("stable_state_text") or getattr(ctx, "summary", "")
-                if isinstance(_st, dict) and _st.get("project_id"):
+                if isinstance(_st, dict) and _st:
                     from novi.runtime.execution_state import StableState as _SSPrompt
                     try:
                         _stable_text = _SSPrompt.from_dict(_st).to_text()
@@ -679,8 +686,6 @@ class NoviRuntime:
                         _stable_text = str(_st)[:1200]
                 elif isinstance(_st, str) and _st:
                     _stable_text = _st[:1200]
-                elif _st_text and getattr(ctx, "history", None) is not None and len(ctx.history) <= 6 and _meta.get("compacted"):
-                    _stable_text = str(_st_text)[:1200]
                 elif _meta.get("compacted") and _st_text:
                     _stable_text = str(_st_text)[:1200]
             except Exception:
@@ -1005,12 +1010,13 @@ class NoviRuntime:
                                 step_tools.append(("tool_result", chunk))
                             yield chunk
                             # mid-loop ContextManager check: compact + stable persist BEFORE next model call
+                            # L3: ctx.metadata["stable_state"] is canonical for Checkpoint.stable (see pre-check contract)
                             if chunk[0] == "tool_result":
                                 try:
                                     from .context_manager import ContextManager as _CM2
                                     from .execution_state import StableState as _SS2
 
-                                    _cm2 = _CM2(model_name=ctx.model_name)
+                                    _cm2 = _CM2(model_name=ctx.model_name, simple_llm=self.simple_llm)
                                     _lvl = _cm2.should_compact(ctx)
                                     if _lvl in ("compact", "emergency"):
                                         _cm2.compact_history(ctx)
@@ -1100,12 +1106,13 @@ class NoviRuntime:
                     else:
                         yield chunk
                         # mid-loop ContextManager check: compact + stable persist BEFORE next model call
+                        # L3: ctx.metadata["stable_state"] is canonical for Checkpoint.stable (see pre-check contract)
                         if chunk[0] == "tool_result":
                             try:
                                 from .context_manager import ContextManager as _CM3
                                 from .execution_state import StableState as _SS3
 
-                                _cm3 = _CM3(model_name=ctx.model_name)
+                                _cm3 = _CM3(model_name=ctx.model_name, simple_llm=self.simple_llm)
                                 _lvl3 = _cm3.should_compact(ctx)
                                 if _lvl3 in ("compact", "emergency"):
                                     _cm3.compact_history(ctx)

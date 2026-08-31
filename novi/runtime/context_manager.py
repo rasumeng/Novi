@@ -68,22 +68,36 @@ class ContextManager:
 
         Threshold 75/85/90 handled by should_compact; L1 itself triggers at
         len > budget_chars (default 4000) and preserves isolation — never mixes
-        project contexts.
+        project contexts. Output is bounded to budget_chars.
         """
         if not text or len(text) <= budget_chars:
             return text
         # Keep head + tail with marker, preserve filenames
-        head = text[: budget_chars // 2]
-        tail = text[-(budget_chars // 2) :]
-        # Ensure we keep lines with paths/errors/counts — critical for isolation
+        # Reserve overhead for marker + keep section so final <= budget_chars
+        marker = f"\n…[truncated {len(text)-budget_chars} chars]…\n"
         important_lines = [
             l for l in text.splitlines()
             if any(k in l.lower() for k in ["error", "failed", "path:", "file:", ".py", ".ts", ".js", "/", "count:", "total"])
         ]
         keep = "\n".join(important_lines[:5])
+        # Bound to budget_chars while preserving important lines: keep first, then head/tail share remainder
+        if keep and len(marker) + len(keep) + 1 >= budget_chars:
+            # keep alone too large — truncate keep to leave room for minimal head/tail
+            keep = keep[: max(0, budget_chars - len(marker) - 200 - 1)]
+        available = budget_chars - len(marker) - (len(keep) + 1 if keep else 0)
+        if available < 0:
+            available = 0
+        head_len = available // 2
+        tail_len = available - head_len
+        head = text[:head_len] if head_len > 0 else ""
+        tail = text[-tail_len:] if tail_len > 0 else ""
         if keep:
-            return f"{head}\n…[truncated {len(text)-budget_chars} chars]…\n{keep}\n{tail}"
-        return f"{head}\n…[truncated {len(text)-budget_chars} chars]…\n{tail}"
+            out = f"{head}{marker}{keep}\n{tail}"
+        else:
+            out = f"{head}{marker}{tail}"
+        if len(out) > budget_chars:
+            out = out[:budget_chars]
+        return out
 
     def compact_history(self, ctx: ExecutionContext) -> None:
         """L2: rolling compaction — preserve hierarchy, not just delete.

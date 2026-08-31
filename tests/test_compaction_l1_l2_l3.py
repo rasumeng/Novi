@@ -32,7 +32,7 @@ def test_l1_compress_tool_result_keeps_paths_and_truncates():
     big = "file: proj-A/src/foo.py\n" + "x"*5000 + "\nError: failed to load /tmp/foo.py\ncount: 42\n" + "y"*5000
     out = cm.compress_tool_result(big, budget_chars=4000)
     assert len(out) < len(big)
-    assert len(out) <= 5000  # head+tail+keep within budget roughly
+    assert len(out) <= 4000  # bounded to budget_chars
     assert "foo.py" in out
     assert "Error" in out or "error" in out.lower()
     assert "count" in out.lower()
@@ -42,12 +42,39 @@ def test_l1_compress_tool_result_keeps_paths_and_truncates():
 
 
 def test_l1_wired_into_tool_executor():
-    # Verify ToolExecutor._sanitize calls compress_tool_result for >4000
-    import inspect
+    # Behavioral: actually call ToolExecutor._sanitize with >4000 input and assert compressed
     from novi.runtime.tool_executor import ToolExecutor
-    src = inspect.getsource(ToolExecutor._sanitize)
-    assert "compress_tool_result" in src
-    assert "4000" in src
+    from novi.runtime.tool_registry import ToolRegistry
+    from novi.runtime.permissions import PermissionResolver
+    from novi.runtime.lessons import LessonStore
+
+    registry = ToolRegistry()
+    registry.register("dummy", lambda: "ok", description="dummy")
+    perms = PermissionResolver(cfg={})
+    lessons = LessonStore()
+    executor = ToolExecutor(
+        registry=registry,
+        perms=perms,
+        lesson_store=lessons,
+        lc_tools=registry.as_lc_tools(),
+        tool_fallbacks={},
+        max_tool_output=8000,
+    )
+    big = "file: proj-A/src/foo.py\n" + "x" * 5000 + "\nError: failed to load /tmp/foo.py\ncount: 42\n" + "y" * 5000
+    assert len(big) > 4000
+    out = executor._sanitize(big)
+    # L1 compress happens: length <= max_tool_output and contains important lines
+    assert len(out) <= 8000
+    assert len(out) < len(big)
+    # must preserve paths/errors/counts via ContextManager.compress_tool_result (budget 4000)
+    assert "foo.py" in out
+    assert "error" in out.lower()
+    assert "count" in out.lower()
+    # Also verify via direct ContextManager that same input is bounded to 4000 before max truncation
+    from novi.runtime.context_manager import ContextManager
+    direct = ContextManager().compress_tool_result(big, budget_chars=4000)
+    assert len(direct) <= 4000
+    assert "foo.py" in direct
 
 
 def test_l2_history_truncation_and_stable_not_discarded():
@@ -73,25 +100,28 @@ def test_l2_thresholds_75_85_90():
     from novi.runtime.context_manager import ContextManager
     from novi.runtime.execution_context import ExecutionContext
     from novi.runtime.context_budget import ContextBudgetManager, BudgetBreakdown
-    # direct budget level checks via should_compact
+    # direct budget level checks via should_compact — specific level per utilization
     cm = ContextManager(model_name="test-8k")
-    # warning at ~75%
-    # craft utilization by extra_retrieved sizing
     ctx = ExecutionContext(user_input="hi", project_id="proj-A")
     ctx.history = [("u","x"*100)]*5
     bd = cm.budget_for(ctx)
     assert ContextBudgetManager.should_compact(bd) is None or bd.utilization_pct < 75
-    # force high utilization
+    # force high utilization — must be compact or emergency (>=85), not just warning
     ctx2 = ExecutionContext(user_input="Find routing", project_id="proj-A")
     ctx2.history = [("u","x"*2000)]*20
-    bd2 = cm.budget_for(ctx2, extra_retrieved="y"*12000)
+    bd2 = cm.budget_for(ctx2, extra_retrieved="y"*16000)
+    assert bd2.utilization_pct >= 85
     lvl = ContextBudgetManager.should_compact(bd2)
-    assert lvl in ("compact", "emergency", "warning")
-    # explicit breakdown boundaries
+    assert lvl in ("compact", "emergency")
+    assert lvl != "warning"
+    # explicit boundary assertions: each threshold maps to exact level
     assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,74.9)) is None
     assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,75.0)) == "warning"
+    assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,84.9)) == "warning"
     assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,85.0)) == "compact"
+    assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,89.9)) == "compact"
     assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,90.0)) == "emergency"
+    assert ContextBudgetManager.should_compact(BudgetBreakdown(8192, 800,1200,0,0,0,1024,512,0,95.0)) == "emergency"
 
 
 def test_l3_checkpoint_stable_persists_to_job_checkpoint():
@@ -115,10 +145,50 @@ def test_l3_checkpoint_stable_persists_to_job_checkpoint():
 
 
 def test_runtime_injects_stable_state_text_when_truncated():
-    import inspect
+    # Behavioral: create compacted context with stable_state_text and assert runtime injects it
+    from novi.runtime.context_manager import ContextManager
+    from novi.runtime.execution_context import ExecutionContext
     from novi.runtime.runtime import NoviRuntime
-    src = inspect.getsource(NoviRuntime._system_prompt)
-    assert "stable_state_text" in src.lower()
-    src2 = inspect.getsource(NoviRuntime.run_stream)
-    assert "stable_state" in src2.lower()
-    assert "compact" in src2.lower()
+
+    cm = ContextManager(model_name="test-8k")
+    ctx = ExecutionContext(user_input="Find routing", project_id="proj-A", conversation_id="conv-1")
+    ctx.history = [("u", "x" * 500)] * 10
+    ctx.workspace_files_used = ["proj-A/src/foo.py"]
+    cm.compact_history(ctx)
+    assert ctx.metadata.get("compacted") is True
+    stable_text = ctx.metadata.get("stable_state_text") or ctx.summary
+    assert stable_text
+    assert "proj-A" in stable_text
+
+    # Runtime should inject stable_state_text into system prompt via _system_prompt
+    runtime = NoviRuntime(
+        model_service=None,
+        memory=None,
+        registry=None,
+        project_index=None,
+        cfg={"runtime": {}},
+        simple_llm=None,
+    )
+    prompt = runtime._system_prompt(
+        "Find routing",
+        stable_state_text=stable_text,
+    )
+    assert "proj-A" in prompt
+    assert "Stable execution state" in prompt
+
+    # Also verify the run_stream injection path: ctx.metadata stable_state dict -> to_text
+    # Simulate what run_stream does for base_msgs construction
+    from novi.runtime.execution_state import StableState
+    ctx2 = ExecutionContext(user_input="Find routing", project_id="proj-A")
+    ctx2.history = [("u", "msg")] * 10
+    # compact to produce stable_state dict
+    cm2 = ContextManager(model_name="test-8k")
+    cm2.compact_history(ctx2)
+    assert "stable_state" in ctx2.metadata
+    # Re-derive text as runtime does
+    st_dict = ctx2.metadata["stable_state"]
+    injected = StableState.from_dict(st_dict).to_text()
+    assert "proj-A" in injected
+    prompt2 = runtime._system_prompt("hello", stable_state_text=injected)
+    assert "proj-A" in prompt2
+    assert "Stable execution state" in prompt2
