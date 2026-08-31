@@ -102,6 +102,7 @@ class JobStore:
                     task_id=cp_data.get("task_id", ""),
                     plan_id=cp_data.get("plan_id", ""),
                     completed_steps=cp_data.get("completed_steps", []),
+                    stable=cp_data.get("stable", {}),
                     created_at=cp_data.get("created_at", ""),
                 )
             return job
@@ -152,6 +153,7 @@ class JobStore:
                 "task_id": checkpoint.task_id,
                 "plan_id": checkpoint.plan_id,
                 "completed_steps": checkpoint.completed_steps,
+                "stable": checkpoint.stable,
                 "created_at": checkpoint.created_at,
             }
             _checkpoint_path(checkpoint.job_id).write_text(
@@ -177,6 +179,7 @@ class JobStore:
                 task_id=data.get("task_id", ""),
                 plan_id=data.get("plan_id", ""),
                 completed_steps=data.get("completed_steps", []),
+                stable=data.get("stable", {}),
                 created_at=data.get("created_at", ""),
             )
         except Exception as e:

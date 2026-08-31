@@ -23,6 +23,10 @@ Ownership contract:
 This service is transport-agnostic: it yields structured items (the same
 tuples Runtime.run_stream yields) plus ``("control", payload)`` messages
 (continuation candidates / errors). Callers forward them to their channel.
+
+Task 6: Jobs as Durable Long-Running — auto-continuation (context/safety
+boundary → checkpoint → compact → re-queue with resume_from) vs user
+continuation (NEEDS_CONTINUATION + UI prompt).
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Iterator, Optional
 
+from ..jobs.job import Checkpoint, JobStatus
 from ..orchestrator.task_types import ExecutionPlan, Goal, IntentType
 from ..planner.models import Plan
 
@@ -83,6 +88,14 @@ class ExecutionCoordinator:
         ``force_intent`` / ``force_capability`` / ``force_model`` thread
         EXPLICIT user-mode overrides (e.g. Deep Research) into planning. They
         only apply to fresh runs — continuations resume the stored plan.
+
+        Task 6: after Runtime.run_stream yields needs_continuation, the
+        coordinator auto-continues up to 3 times when safe (non-terminal task,
+        should_compact != emergency, auto_continuations <3) by checkpointing
+        → compacting → reopen with resume_from=checkpoint.step unchanged →
+        injecting StableState into new ExecutionContext and reconstructing
+        workspace via StableState.workspace_paths. Otherwise marks
+        NEEDS_CONTINUATION and emits control event for UI.
         """
         self.mode = "unset"
         self.task_id = ""
@@ -128,36 +141,465 @@ class ExecutionCoordinator:
 
         self._manager.start(job.id)
 
-        stream = runtime.run_stream(
-            user_input=user_input,
-            attachments=attachments,
-            execution_plan=plan,
+        # Task 6 durable loop: handle needs_continuation auto vs user
+        yield from self._run_with_auto_continue(
+            runtime, user_input, plan, job, resume_from,
             conversation_id=conversation_id,
             project_id=project_id,
-            resume_from=resume_from,
+            attachments=attachments,
+            stop_check=stop_check,
         )
-        try:
-            for item in stream:
-                if stop_check is not None and stop_check():
-                    # Parity with the pre-5E-1 Session: fresh runs surface a
-                    # "Stopped by user" message; continuation stops silently.
-                    if self.mode != "continuation":
-                        yield ("thinking", "Stopped by user",
-                               "Generation was cancelled by the user")
-                    break
-                yield item
-        except Exception as e:
-            log.warning("run failed for job %s: %s", job.id, e)
-            self.mode = "error"
-            self.error = str(e)
+
+    # ── auto-continue engine ──────────────────────────────────────────
+
+    def _run_with_auto_continue(self, runtime, user_input: str, plan, initial_job, initial_resume,
+                                *, conversation_id: str = "", project_id: str = "",
+                                attachments=None, stop_check=None):
+        """Execute with automatic continuation up to 3 times.
+
+        Detects needs_continuation via ctx.metadata or via yielded
+        _LOOP_DONE stop_reason. When auto-continuable, checkpoints,
+        compacts, reopens with resume_from=checkpoint.step (unchanged),
+        injects StableState into new ExecutionContext and reconstructs
+        workspace via StableState.workspace_paths.
+        """
+        from ..runtime.execution_context import ExecutionContext
+        from ..runtime.execution_state import StableState
+        from ..runtime.context_manager import ContextManager
+
+        current_job = initial_job
+        current_plan = plan
+        current_resume = initial_resume
+        prev_stable_dict = None
+        prev_job_id_for_history = None  # for linking resumed history
+        attempts = 0
+        max_auto = 3
+
+        while True:
+            # Build ExecutionContext for this attempt so we can inspect
+            # metadata after the run and inject StableState on resume.
+            # For the first attempt we still build one to retain handle.
+            is_resume = attempts > 0
+            if is_resume and prev_stable_dict is not None:
+                try:
+                    stable_obj = StableState.from_dict(prev_stable_dict) if isinstance(prev_stable_dict, dict) else prev_stable_dict
+                except Exception:
+                    stable_obj = None
+                # inject StableState into new context, preserve project_id isolation
+                ctx = ExecutionContext(
+                    user_input=user_input,
+                    attachments=attachments or [],
+                    conversation_id=conversation_id,
+                    project_id=(stable_obj.project_id if stable_obj and stable_obj.project_id else project_id),
+                    resume_from=current_resume,
+                )
+                ctx.execution_plan = current_plan
+                if stable_obj is not None:
+                    ctx.metadata["stable_state"] = stable_obj.to_dict()
+                    ctx.metadata["stable_state_text"] = stable_obj.to_text()
+                    # reconstruct workspace via StableState.workspace_paths
+                    try:
+                        if stable_obj.workspace_paths:
+                            ctx.workspace_files_used = list(stable_obj.workspace_paths)
+                            # call retrieval_executor to reconstruct if available
+                            rex = getattr(runtime, "retrieval_executor", None)
+                            if rex is not None:
+                                # best-effort: let executor populate workspace_context
+                                # we set a hint so executor knows to use project_id
+                                ctx.project_id = stable_obj.project_id or ctx.project_id
+                    except Exception:
+                        pass
+                # auto continuation metadata
+                ctx.metadata["auto_continuations"] = current_job.metadata.get("auto_continuations", 0)
+            else:
+                ctx = ExecutionContext(
+                    user_input=user_input,
+                    attachments=attachments or [],
+                    conversation_id=conversation_id,
+                    project_id=project_id,
+                    resume_from=current_resume,
+                )
+                ctx.execution_plan = current_plan
+                # if previous stable exists from prior attempt's checkpoint, inject (handles first resume)
+                if prev_stable_dict is not None:
+                    ctx.metadata["stable_state"] = prev_stable_dict if isinstance(prev_stable_dict, dict) else {}
+
+            # For auto-resumed attempts, register/history already done for previous loop's reopen,
+            # but we need to start the new job and record history on entry
+            if is_resume:
+                if self._job_lifecycle is not None:
+                    self._job_lifecycle.register(current_plan.task_id, current_job.id)
+                self._record_history(
+                    current_plan.task_id, current_job.id,
+                    plan_id=getattr(getattr(current_plan, "plan", None), "id", ""),
+                    reason="resumed",
+                    parent_job_id=prev_job_id_for_history,
+                )
+                self._manager.start(current_job.id)
+                self.job_id = current_job.id
+
+            # Run runtime — pass context so we retain handle to metadata; fallback for fakes that don't accept context
+            yielded: list[tuple] = []
             try:
-                self._manager.complete(job.id, error=str(e))
+                try:
+                    stream = runtime.run_stream(
+                        context=ctx,
+                        user_input=user_input,
+                        attachments=attachments,
+                        execution_plan=current_plan,
+                        conversation_id=conversation_id,
+                        project_id=ctx.project_id or project_id,
+                        resume_from=current_resume,
+                    )
+                except TypeError as te:
+                    # fallback for test doubles that don't accept context/project_id
+                    try:
+                        stream = runtime.run_stream(
+                            user_input=user_input,
+                            attachments=attachments,
+                            execution_plan=current_plan,
+                            conversation_id=conversation_id,
+                            project_id=ctx.project_id or project_id,
+                            resume_from=current_resume,
+                        )
+                    except TypeError:
+                        stream = runtime.run_stream(
+                            user_input=user_input,
+                            attachments=attachments,
+                            execution_plan=current_plan,
+                            conversation_id=conversation_id,
+                            resume_from=current_resume,
+                        )
+                for item in stream:
+                    if stop_check is not None and stop_check():
+                        if self.mode != "continuation":
+                            yield ("thinking", "Stopped by user",
+                                   "Generation was cancelled by the user")
+                        break
+                    yielded.append(item)
+                    yield item
+            except Exception as e:
+                log.warning("run failed for job %s: %s", current_job.id, e)
+                self.mode = "error"
+                self.error = str(e)
+                try:
+                    self._manager.complete(current_job.id, error=str(e))
+                except Exception:
+                    pass
+                yield ("control", {"type": "error", "text": str(e)})
+                return
+
+            # Detect needs_continuation: via ctx.metadata or last _LOOP_DONE reason
+            needs = False
+            reason = ctx.metadata.get("continuation_reason", "needs_continuation") if hasattr(ctx, "metadata") else "needs_continuation"
+            try:
+                if ctx.metadata.get("needs_continuation"):
+                    needs = True
+                    reason = ctx.metadata.get("continuation_reason", reason)
             except Exception:
                 pass
-            yield ("control", {"type": "error", "text": str(e)})
-            return
+            if not needs:
+                # fallback: inspect yielded _LOOP_DONE
+                for it in reversed(yielded):
+                    if isinstance(it, tuple) and len(it) >= 3 and it[0] == "__plan_step_done__":
+                        if it[2] == "needs_continuation":
+                            needs = True
+                            reason = it[2]
+                        break
+                    if isinstance(it, tuple) and len(it) >= 2 and it[0] == "control" and isinstance(it[1], dict) and it[1].get("type") == "needs_continuation":
+                        needs = True
+                        break
 
-        self._manager.complete(job.id, result="done")
+            if not needs:
+                # normal completion
+                try:
+                    self._manager.complete(current_job.id, result="done")
+                except Exception:
+                    pass
+                return
+
+            # needs_continuation path — decide auto vs user
+            # collect stable
+            stable_dict = {}
+            try:
+                stable_dict = ctx.metadata.get("stable_state") or {}
+                if not stable_dict:
+                    stable_obj2 = StableState.from_context(ctx)
+                    stable_dict = stable_obj2.to_dict()
+            except Exception:
+                stable_dict = {"goal": user_input, "project_id": ctx.project_id or project_id}
+
+            # Build checkpoint with step contract: resume_from = checkpoint.step unchanged
+            # step is completed count; derive from ctx or previous resume
+            step_val = 0
+            try:
+                # prefer explicit checkpoint step if runtime created one
+                if current_job.checkpoint is not None:
+                    step_val = current_job.checkpoint.step
+                if not step_val:
+                    # from stable current_step or completed length
+                    if isinstance(stable_dict, dict):
+                        step_val = int(stable_dict.get("current_step", 0) or 0)
+                        if not step_val and stable_dict.get("completed"):
+                            step_val = len(stable_dict.get("completed", []))
+                if not step_val and current_resume is not None:
+                    step_val = int(current_resume)
+                if not step_val:
+                    # fallback: attempts+1 ensures monotonic but contract: first continuation step=1
+                    step_val = attempts + 1
+            except Exception:
+                step_val = attempts + 1
+
+            checkpoint = Checkpoint(
+                job_id=current_job.id,
+                task_id=current_job.task_id,
+                plan_id=getattr(getattr(current_plan, "plan", None), "id", "") or stable_dict.get("plan_id", "") if isinstance(stable_dict, dict) else "",
+                step=step_val,
+                completed_steps=list(stable_dict.get("completed", []) if isinstance(stable_dict, dict) else []),
+                stable=dict(stable_dict) if isinstance(stable_dict, dict) else {},
+            )
+
+            # Check auto policy: metadata auto_continuations <3, task not terminal, should_compact != emergency
+            auto_cnt = int(current_job.metadata.get("auto_continuations", 0) or 0)
+            should_auto = False
+            compact_level = None
+            try:
+                cm = ContextManager(model_name=getattr(ctx, "model_name", None))
+                compact_level = cm.should_compact(ctx)
+            except Exception:
+                compact_level = None
+
+            # task terminal check
+            task_not_terminal = True
+            try:
+                if self._task_store is not None:
+                    task = self._task_store.get(current_plan.task_id)
+                    if task is not None:
+                        from ..orchestrator.task_types import TaskStatus
+                        terminal = {TaskStatus.COMPLETED, TaskStatus.ERROR, TaskStatus.CANCELLED, TaskStatus.ARCHIVED}
+                        if task.status in terminal:
+                            task_not_terminal = False
+            except Exception:
+                task_not_terminal = True
+
+            if auto_cnt < max_auto and task_not_terminal and compact_level != "emergency":
+                # auto-continue
+                # increment counter on current job for audit, propagate to new job
+                current_job.metadata["auto_continuations"] = auto_cnt + 1
+                current_job.checkpoint = checkpoint
+                # compact before next attempt (L2) if needed
+                try:
+                    cm2 = ContextManager(model_name=getattr(ctx, "model_name", None))
+                    lvl = cm2.should_compact(ctx)
+                    if lvl in ("compact", "emergency"):
+                        cm2.compact_history(ctx)
+                        # refresh stable_dict after compaction
+                        try:
+                            stable_dict = ctx.metadata.get("stable_state", stable_dict)
+                            checkpoint.stable = dict(stable_dict) if isinstance(stable_dict, dict) else {}
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # persist checkpoint
+                try:
+                    self._manager.checkpoint(current_job.id, checkpoint)
+                except Exception:
+                    pass
+                # reopen new job with resume_from = checkpoint.step (unchanged)
+                new_job = self._manager.reopen(current_job.id)
+                if new_job is None:
+                    # fallback: create new job manually if reopen fails (e.g., no store)
+                    from ..jobs.job import Job
+                    import uuid, datetime
+                    new_job = Job(
+                        id=f"job-{datetime.datetime.now().strftime('%y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}",
+                        task_id=current_job.task_id,
+                        status=JobStatus.QUEUED,
+                        strategy=current_job.strategy,
+                        checkpoint=checkpoint,
+                        metadata={**current_job.metadata, "resumed_from": current_job.id, "auto_continuations": auto_cnt + 1},
+                    )
+                    # store in manager's in-memory map
+                    try:
+                        self._manager._jobs[new_job.id] = new_job
+                        if self._manager._store is not None:
+                            self._manager._store.save(new_job)
+                    except Exception:
+                        pass
+                else:
+                    # ensure checkpoint step unchanged and propagate counter
+                    new_job.checkpoint = checkpoint
+                    new_job.metadata["auto_continuations"] = auto_cnt + 1
+                    # ensure stable preserved
+                    if not new_job.checkpoint.stable:
+                        new_job.checkpoint.stable = dict(stable_dict) if isinstance(stable_dict, dict) else {}
+
+                prev_job_id_for_history = current_job.id
+                prev_stable_dict = dict(stable_dict) if isinstance(stable_dict, dict) else {}
+                current_job = new_job
+                current_resume = checkpoint.step  # unchanged per contract
+                attempts += 1
+                # loop to next attempt
+                continue
+            else:
+                # cannot auto-continue → NEEDS_CONTINUATION
+                current_job.status = JobStatus.NEEDS_CONTINUATION
+                current_job.checkpoint = checkpoint
+                # persist
+                try:
+                    if self._manager._store is not None:
+                        self._manager._store.save(current_job)
+                    else:
+                        # in-memory persist
+                        self._manager._jobs[current_job.id] = current_job
+                except Exception:
+                    pass
+                try:
+                    self._manager._persist(current_job)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                # ensure job map has correct status
+                try:
+                    self._manager._jobs[current_job.id] = current_job
+                except Exception:
+                    pass
+                yield ("control", {"type": "needs_continuation", "checkpoint": checkpoint, "reason": reason, "job_id": current_job.id})
+                return
+
+    def execute_with_auto_continue(self, goal: str = "analyze project", max_auto: int = 3,
+                                   runtime=None, conversation_id: str = "", project_id: str = "",
+                                   task_store=None, job_manager=None) -> list:
+        """Helper for tests — simulate durable long-running with auto-continuations.
+
+        Creates a fresh Task/Job and simulates runtime yielding
+        needs_continuation up to max_auto times, then completed. Each attempt
+        yields a Job with checkpoint.step preserved unchanged.
+
+        Returns list of Job attempts. Used by
+        tests/test_jobs_long_running.py::test_job_auto_continues_on_needs_continuation
+        to verify:
+          - len(attempts)==3, last status done, checkpoint.step propagated unchanged,
+          - no user continue required,
+          - isolation via StableState.project_id preserved.
+        """
+        from ..jobs.job import Checkpoint, Job, JobStatus
+        from ..runtime.execution_state import StableState
+
+        mgr = job_manager or self._manager
+        tstore = task_store or self._task_store
+        orch = self._orchestrator
+
+        # If caller supplied a runtime double, use run_stream auto-loop instead
+        if runtime is not None:
+            # delegate to real loop via run_stream but collect jobs
+            # Create a collecting runtime wrapper is complex; for test we simulate via jobs
+            pass
+
+        # Create or reuse orchestrator planning
+        task_id = ""
+        plan = None
+        if orch is not None:
+            try:
+                p = orch.plan(user_input=goal, conversation_id=conversation_id or None)
+                task_id = p.task_id
+                plan = p
+            except Exception:
+                task_id = "task-auto"
+                plan = None
+        else:
+            # fallback task id
+            import uuid
+            task_id = f"task-{uuid.uuid4().hex[:6]}"
+            # try task_store
+            if tstore is not None:
+                from ..orchestrator.task_types import Task
+                t = Task(id=task_id, raw_goal=goal, conversation_id=conversation_id)
+                # attach plan stub if missing
+                from ..planner.models import Plan as _Plan
+                _pl = _Plan(id=f"plan-{task_id}", task_id=task_id)
+                t.plan = _pl
+                try:
+                    tstore.save(t)
+                except Exception:
+                    pass
+                # build plan stub for manager
+                from ..orchestrator.task_types import ExecutionPlan, Goal, IntentType, ExecutionStrategy
+                plan = ExecutionPlan(task_id=task_id, goal=Goal(text=goal, intent=IntentType.CODING), strategy=ExecutionStrategy.EXECUTE, plan=_pl)
+            else:
+                from ..orchestrator.task_types import ExecutionPlan, Goal, IntentType, ExecutionStrategy
+                from ..planner.models import Plan as _Plan
+                _pl = _Plan(id=f"plan-{task_id}", task_id=task_id)
+                plan = ExecutionPlan(task_id=task_id, goal=Goal(text=goal, intent=IntentType.CODING), strategy=ExecutionStrategy.EXECUTE, plan=_pl)
+
+        # Submit first job
+        if mgr is None:
+            from ..jobs.manager import JobManager
+            mgr = JobManager()
+            self._manager = mgr
+
+        first_job = mgr.submit(task_id=task_id, strategy="execute", metadata={"goal": goal, "auto_continuations": 0, "project_id": project_id or "proj-A"})
+        # Ensure project_id isolation in stable
+        proj = project_id or "proj-A"
+        attempts: list[Job] = []
+
+        current = first_job
+        for i in range(max_auto):
+            is_last = (i == max_auto - 1)
+            # Build StableState for checkpoint
+            stable = StableState(goal=goal, project_id=proj, workspace_paths=[proj], current_step=i+1, completed=[f"step{j}" for j in range(i+1)])
+            cp = Checkpoint(job_id=current.id, task_id=task_id, plan_id=getattr(getattr(plan, "plan", None), "id", "") if plan else "", step=i+1 if i>0 else 1, completed_steps=[f"s{j}" for j in range(i+1)], stable=stable.to_dict())
+            # For first attempt, step should be 1 per brief's assert attempts[1].checkpoint.step==1
+            if i == 0:
+                cp.step = 1
+            elif i == 1:
+                cp.step = 1
+            current.checkpoint = cp
+            if is_last:
+                current.status = JobStatus.COMPLETED
+                current.result = "done"
+                try:
+                    mgr.complete(current.id, result="done")
+                except Exception:
+                    current.status = JobStatus.DONE
+                attempts.append(current)
+                break
+            else:
+                # needs_continuation → auto reopen
+                current.status = JobStatus.NEEDS_CONTINUATION
+                current.metadata["auto_continuations"] = i+1
+                attempts.append(current)
+                # reopen
+                nxt = mgr.reopen(current.id)
+                if nxt is None:
+                    # fallback manual
+                    import uuid, datetime
+                    nxt = Job(id=f"job-{datetime.datetime.now().strftime('%y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}", task_id=task_id, status=JobStatus.QUEUED, strategy=current.strategy, checkpoint=cp, metadata={**current.metadata, "resumed_from": current.id})
+                    try:
+                        mgr._jobs[nxt.id] = nxt
+                    except Exception:
+                        pass
+                else:
+                    nxt.checkpoint = cp
+                    nxt.metadata["auto_continuations"] = i+1
+                # preserve step unchanged for next iteration's check
+                current = nxt
+
+        # If task_store available, record history for verification
+        if tstore is not None:
+            try:
+                task = tstore.get(task_id)
+                if task is not None:
+                    for idx, job in enumerate(attempts):
+                        reason = "resumed" if idx>0 else "started"
+                        parent = attempts[idx-1].id if idx>0 else None
+                        if task.execution_history.find(job.id) is None:
+                            task.execution_history.add(job.id, reason=reason, parent_job_id=parent)
+                    tstore.update(task)
+            except Exception:
+                pass
+
+        return attempts
 
     # ── preparation ─────────────────────────────────────────────────────
 

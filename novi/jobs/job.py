@@ -178,7 +178,7 @@ class Job:
 
     @property
     def can_resume(self) -> bool:
-        return self.status == JobStatus.PAUSED and self.checkpoint is not None
+        return self.status in (JobStatus.PAUSED, JobStatus.NEEDS_CONTINUATION) and self.checkpoint is not None
 
     def to_dict(self) -> dict:
         return {

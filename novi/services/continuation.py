@@ -52,6 +52,7 @@ _RESUME_JOB_STATUSES = frozenset(
         JobStatus.RUNNING,      # crashed mid-run, pre mark_interrupted
         JobStatus.PAUSED,       # paused + checkpoint (can_resume)
         JobStatus.INTERRUPTED,  # startup recovery marked it
+        JobStatus.NEEDS_CONTINUATION,  # durable long-running (Task 6 auto/user)
     }
 )
 
@@ -82,6 +83,7 @@ class ResumeTarget:
     started_at: str = ""
     completed_steps: list = field(default_factory=list)
     progress: str = ""
+    project_id: str = ""  # preserved from Checkpoint.stable for isolation (Task 6)
 
     def to_dict(self) -> dict:
         return {
@@ -97,6 +99,7 @@ class ResumeTarget:
             "completed": len(self.completed_steps),
             "progress": self.progress,
             "has_checkpoint": self.checkpoint is not None,
+            "project_id": self.project_id,
         }
 
 
@@ -213,6 +216,17 @@ class ContinuationService:
             total = task.plan.step_count
         progress = f"{len(completed)}/{total}" if total else ""
 
+        # Preserve StableState.project_id for isolation — resume must not leak other project's index
+        proj_id = ""
+        try:
+            if cp is not None and cp.stable:
+                proj_id = str(cp.stable.get("project_id", "") or "")
+                # fallback via typed accessor
+                if not proj_id and cp.stable_state is not None:
+                    proj_id = cp.stable_state.project_id or ""
+        except Exception:
+            proj_id = ""
+
         return ResumeTarget(
             task_id=task.id,
             job_id=job.id,
@@ -226,4 +240,5 @@ class ContinuationService:
             started_at=job.started_at or "",
             completed_steps=completed,
             progress=progress,
+            project_id=proj_id,
         )
