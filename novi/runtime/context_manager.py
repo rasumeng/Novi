@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .context_budget import ContextBudgetManager, BudgetBreakdown, estimate_tokens
 from .execution_context import ExecutionContext
-from .execution_state import StableState
+from novi.common.execution_state import StableState
 
 # Re-export for backward compat: `from novi.runtime.context_manager import StableState`
 __all__ = ["StableState", "ContextManager"]
@@ -149,7 +149,7 @@ class ContextManager:
             if bd_after.utilization_pct >= 90:
                 # Re-use execution_state helper for durable checkpointing
                 try:
-                    from .execution_state import StableState as _SSOverflow
+                    from novi.common.execution_state import StableState as _SSOverflow
 
                     stable2 = _SSOverflow.from_context(ctx)
                     ctx.metadata["stable_state"] = stable2.to_dict()

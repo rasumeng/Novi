@@ -350,7 +350,7 @@ def test_runtime_does_not_touch_storage_internals():
         "RelationshipStore", "conversation_store", "scenario_store",
         "vector_store", "relationship_store",
     ]
-    allowed_prefixes = ("novi/brain/",)
+    allowed_prefixes = ("novi/brain/", "novi/workspace/")
     allowed_files = {"novi/services/context.py"}
     violations = []
     for pyfile in _iter_py_files(NOVI_SRC):

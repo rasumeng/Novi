@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Optional
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from novi.runtime.execution_state import StableState
+    from novi.common.execution_state import StableState
 
 
 class JobStatus(str, Enum):
@@ -111,7 +111,7 @@ class Checkpoint:
         if not self.stable:
             return None
         try:
-            from novi.runtime.execution_state import StableState
+            from novi.common.execution_state import StableState
 
             return StableState.from_dict(self.stable)
         except Exception as e:

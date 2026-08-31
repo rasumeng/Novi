@@ -164,7 +164,7 @@ class ExecutionCoordinator:
         workspace via StableState.workspace_paths.
         """
         from ..runtime.execution_context import ExecutionContext
-        from ..runtime.execution_state import StableState
+        from novi.common.execution_state import StableState
         from ..runtime.context_manager import ContextManager
 
         current_job = initial_job

@@ -84,7 +84,7 @@ def is_goal_complete(ctx, final: str = "") -> bool:
 def _checkpoint_needs_continuation(ctx, reason: str = "max_steps_safety") -> None:
     """Persist StableState and continuation flags to ctx + trace metadata."""
     try:
-        from .execution_state import StableState
+        from novi.common.execution_state import StableState
 
         stable = StableState.from_context(ctx)
         ctx.metadata["stable_state"] = stable.to_dict()

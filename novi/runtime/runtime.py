@@ -568,10 +568,10 @@ class NoviRuntime:
             # is the canonical source for Checkpoint.stable. Job creation copies it via
             # ContextManager.checkpoint_stable(ctx).to_dict() or directly from
             # ctx.metadata["stable_state"]. We persist to ctx.trace.metadata here so
-            # the caller (JobManager / continuation) can create Checkpoint without re-deriving.
+            # the caller can create Checkpoint without re-deriving.
             try:
                 from .context_manager import ContextManager
-                from .execution_state import StableState
+                from novi.common.execution_state import StableState
 
                 cm = ContextManager(model_name=ctx.model_name, simple_llm=self.simple_llm)
                 level = cm.should_compact(ctx)
@@ -679,7 +679,7 @@ class NoviRuntime:
                 _st = _meta.get("stable_state")
                 _st_text = _meta.get("stable_state_text") or getattr(ctx, "summary", "")
                 if isinstance(_st, dict) and _st:
-                    from novi.runtime.execution_state import StableState as _SSPrompt
+                    from novi.common.execution_state import StableState as _SSPrompt
                     try:
                         _stable_text = _SSPrompt.from_dict(_st).to_text()
                     except Exception:
@@ -1569,7 +1569,7 @@ class NoviRuntime:
         """
         try:
             from .context_manager import ContextManager
-            from .execution_state import StableState
+            from novi.common.execution_state import StableState
 
             cm = ContextManager(model_name=ctx.model_name, simple_llm=self.simple_llm)
             lvl = cm.should_compact(ctx)
