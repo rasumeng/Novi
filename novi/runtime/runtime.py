@@ -1009,29 +1009,8 @@ class NoviRuntime:
                             elif chunk[0] == "tool_result" and len(chunk) >= 4:
                                 step_tools.append(("tool_result", chunk))
                             yield chunk
-                            # mid-loop ContextManager check: compact + stable persist BEFORE next model call
-                            # L3: ctx.metadata["stable_state"] is canonical for Checkpoint.stable (see pre-check contract)
                             if chunk[0] == "tool_result":
-                                try:
-                                    from .context_manager import ContextManager as _CM2
-                                    from .execution_state import StableState as _SS2
-
-                                    _cm2 = _CM2(model_name=ctx.model_name, simple_llm=self.simple_llm)
-                                    _lvl = _cm2.should_compact(ctx)
-                                    if _lvl in ("compact", "emergency"):
-                                        _cm2.compact_history(ctx)
-                                        try:
-                                            _st = _SS2.from_context(ctx)
-                                            ctx.metadata["stable_state"] = _st.to_dict()
-                                            if ctx.trace is not None:
-                                                if not hasattr(ctx.trace, "metadata"):
-                                                    ctx.trace.metadata = {}  # type: ignore[attr-defined]
-                                                ctx.trace.metadata["context_compacted"] = _lvl  # type: ignore
-                                                ctx.trace.metadata["stable_state"] = ctx.metadata["stable_state"]  # type: ignore
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    pass
+                                self._maybe_compact_and_checkpoint(ctx)
 
                     tools_payload = self._build_step_tool_payload(step_tools)
                     if step_ok:
@@ -1105,29 +1084,8 @@ class NoviRuntime:
                         final, stop_reason, _ = chunk[1], chunk[2], chunk[3]
                     else:
                         yield chunk
-                        # mid-loop ContextManager check: compact + stable persist BEFORE next model call
-                        # L3: ctx.metadata["stable_state"] is canonical for Checkpoint.stable (see pre-check contract)
                         if chunk[0] == "tool_result":
-                            try:
-                                from .context_manager import ContextManager as _CM3
-                                from .execution_state import StableState as _SS3
-
-                                _cm3 = _CM3(model_name=ctx.model_name, simple_llm=self.simple_llm)
-                                _lvl3 = _cm3.should_compact(ctx)
-                                if _lvl3 in ("compact", "emergency"):
-                                    _cm3.compact_history(ctx)
-                                    try:
-                                        _st3 = _SS3.from_context(ctx)
-                                        ctx.metadata["stable_state"] = _st3.to_dict()
-                                        if ctx.trace is not None:
-                                            if not hasattr(ctx.trace, "metadata"):
-                                                ctx.trace.metadata = {}  # type: ignore[attr-defined]
-                                            ctx.trace.metadata["context_compacted"] = _lvl3  # type: ignore
-                                            ctx.trace.metadata["stable_state"] = ctx.metadata["stable_state"]  # type: ignore
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
+                            self._maybe_compact_and_checkpoint(ctx)
 
             if self.stop_event and self.stop_event.is_set():
                 self.tracer.finalize(ctx.trace, "stopped")
@@ -1600,6 +1558,36 @@ class NoviRuntime:
                 ))
             except Exception:
                 pass
+    def _maybe_compact_and_checkpoint(self, ctx) -> None:
+        """Mid-loop ContextManager check: compact + stable persist BEFORE next model call.
+
+        L3: ctx.metadata["stable_state"] is canonical for Checkpoint.stable
+        (see pre-check contract). Checks should_compact, compacts history
+        when compact/emergency, persists stable dict to trace/metadata,
+        handles overflow via ContextManager.compact_history's internal budget
+        re-check.
+        """
+        try:
+            from .context_manager import ContextManager
+            from .execution_state import StableState
+
+            cm = ContextManager(model_name=ctx.model_name, simple_llm=self.simple_llm)
+            lvl = cm.should_compact(ctx)
+            if lvl in ("compact", "emergency"):
+                cm.compact_history(ctx)
+                try:
+                    st = StableState.from_context(ctx)
+                    ctx.metadata["stable_state"] = st.to_dict()
+                    if ctx.trace is not None:
+                        if not hasattr(ctx.trace, "metadata"):
+                            ctx.trace.metadata = {}  # type: ignore[attr-defined]
+                        ctx.trace.metadata["context_compacted"] = lvl  # type: ignore
+                        ctx.trace.metadata["stable_state"] = ctx.metadata["stable_state"]  # type: ignore
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _compact(self):
         keep = self.max_history // 2
         old, self.history = self.history[:-keep], self.history[-keep:]

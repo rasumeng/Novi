@@ -13,6 +13,8 @@ from novi.orchestrator.task_store import TaskStore
 from novi.orchestrator.task_types import Task, TaskStatus
 from novi.services.execution import ExecutionCoordinator
 from novi.planner.models import Plan, PlanStep
+# Test-only helper moved from production (novi/services/execution.py:503)
+import tests.helpers.execution_test_helpers  # noqa: F401 — patches ExecutionCoordinator for backward compat
 
 
 def _harness_orchestrator(task_store):
