@@ -65,23 +65,23 @@ export function ActivityPanel({
         onClick={onToggle}
         aria-label={open ? 'Hide activity' : 'Show activity'}
         aria-expanded={open}
-        className="shrink-0 w-8 flex items-center justify-center border-l border-base-800 text-base-400 hover:text-base-100 hover:bg-base-850 transition-colors"
+        className="hidden shrink-0 w-7 flex items-center justify-center border-l border-base-800/30 text-base-400 hover:text-base-100 hover:bg-base-850/50 transition-colors"
         title={open ? 'Hide activity' : 'Show activity'}
       >
-        {open ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+        {open ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
       </button>
 
       <AnimatePresence>
         {open && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 280, opacity: 1 }}
+            animate={{ width: 286, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="border-l border-base-800 bg-base-1000 overflow-hidden shrink-0"
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="border-l border-base-800/30 bg-base-950 overflow-hidden shrink-0"
           >
-            <div className="w-[280px] h-full flex flex-col">
-              <div className="flex items-center justify-between px-4 h-14 border-b border-base-800 shrink-0">
+            <div className="w-[286px] h-full flex flex-col">
+              <div className="flex items-center justify-between px-4 h-11 shrink-0">
                 <div className="flex items-center gap-2 text-sm font-medium text-base-200">
                   <Activity size={14} className="text-accent" />
                   Activity

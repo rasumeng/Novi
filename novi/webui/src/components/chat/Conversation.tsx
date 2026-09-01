@@ -24,9 +24,7 @@ interface Props {
   generating: boolean
   busyReason?: string | null
   inlineSteps: InlineStep[]
-  /** True while the model is streaming a reasoning trace before the answer. */
   thinking: boolean
-  /** Live accumulated reasoning trace shown while `thinking`. */
   liveThought: string
   plan: PlanData | null
   permission: PermissionRequest | null
@@ -36,21 +34,18 @@ interface Props {
   backgroundRuns: BackgroundRunInfo[]
   onSend: (content: string, attachments?: Attachment[], deepResearch?: boolean) => void
   onStop: () => void
-  /** Deep Research mode for the active conversation (explicit user mode). */
   deepResearch?: boolean
   onToggleDeepResearch?: () => void
   onApprovePlan: () => void
   onRejectPlan: () => void
   onAnswerPermission: (allowed: boolean, requestId?: string) => void
   onOpenSettings?: (section: SectionId) => void
-  /** Title of whichever conversation owns the current generation, or null when idle. */
   workingActivityTitle?: string | null
-  /** Full conversation list for the landing dashboard's "continue" section. */
   conversations?: ConversationType[]
-  /** Open another conversation from the landing page. */
   onOpenConversation?: (id: string) => void
-  /** Assistant timeline feed for the landing summary. */
   timeline?: TimelineEntry[]
+  activityOpen?: boolean
+  onToggleActivity?: () => void
 }
 
 export function Conversation({
@@ -79,12 +74,12 @@ export function Conversation({
   conversations,
   onOpenConversation,
   timeline,
+  activityOpen: controlledActivityOpen,
+  onToggleActivity: controlledToggle,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
-  const [activityOpen, setActivityOpen] = useState(() => {
-    // Fall back to the pre-rebrand 'cozmo_activity_panel' key so existing
-    // users keep their panel preference.
+  const [internalActivityOpen, setInternalActivityOpen] = useState(() => {
     try {
       const current = localStorage.getItem('novi_activity_panel')
       if (current !== null) return current === 'true'
@@ -98,11 +93,12 @@ export function Conversation({
     return false
   })
 
-  const toggleActivity = () => {
-    const next = !activityOpen
-    setActivityOpen(next)
+  const activityOpen = controlledActivityOpen ?? internalActivityOpen
+  const toggleActivity = controlledToggle ?? (() => {
+    const next = !internalActivityOpen
+    setInternalActivityOpen(next)
     try { localStorage.setItem('novi_activity_panel', String(next)) } catch {}
-  }
+  })
 
   // stick to bottom as tokens stream in
   useEffect(() => {
@@ -167,7 +163,7 @@ export function Conversation({
         </div>
       </div>
 
-      <div className=" border-base-800 bg-base-950/80 backdrop-blur px-6 py-4">
+      <div className="border-t border-base-800/20 bg-base-950/60 backdrop-blur-sm px-6 py-3">
         <div className="max-w-3xl mx-auto">
           {busyReason && (
             <div className="mb-2 text-[11px] text-base-500 px-1">{busyReason}</div>

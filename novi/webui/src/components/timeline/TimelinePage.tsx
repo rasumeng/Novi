@@ -29,15 +29,14 @@ export function TimelinePage({ entries, onRefresh, onOpenConversation }: Props) 
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-base-950">
-      <header className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-base-800">
-        <h2 className="text-sm font-medium text-base-100">Timeline</h2>
+      <header className="h-11 shrink-0 flex items-center justify-end px-4">
         <button
           onClick={onRefresh}
           aria-label="Refresh timeline"
           title="Refresh"
-          className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
+          className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800/50 transition-colors"
         >
-          <RefreshCw size={15} />
+          <RefreshCw size={14} />
         </button>
       </header>
 

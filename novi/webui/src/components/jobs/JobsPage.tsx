@@ -76,25 +76,22 @@ export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-base-950">
-      <header className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-base-800">
-        <h2 className="text-sm font-medium text-base-100">Jobs</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onRefresh}
-            aria-label="Refresh jobs"
-            className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
-            title="Refresh"
-          >
-            <RefreshCw size={15} />
-          </button>
-          <button
-            onClick={() => setShowNew(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
-          >
-            <Play size={13} />
-            New Job
-          </button>
-        </div>
+      <header className="h-11 shrink-0 flex items-center justify-end px-4 gap-2">
+        <button
+          onClick={onRefresh}
+          aria-label="Refresh jobs"
+          className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800/50 transition-colors"
+          title="Refresh"
+        >
+          <RefreshCw size={14} />
+        </button>
+        <button
+          onClick={() => setShowNew(v => !v)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+        >
+          <Play size={13} />
+          New Job
+        </button>
       </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-6">

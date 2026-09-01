@@ -4,18 +4,28 @@ import { Conversation } from '@/components/chat/Conversation'
 import { ProjectsPanel } from '@/components/projects/ProjectsPanel'
 import { JobsPage } from '@/components/jobs/JobsPage'
 import { TimelinePage } from '@/components/timeline/TimelinePage'
+import { SearchModal } from '@/components/search/SearchModal'
 
 import { SettingsModal, SectionId } from '@/components/settings/SettingsModal'
 import { useNoviChat } from '@/hooks/useNoviChat'
 import { TitleBar } from '@/components/common/TitleBar'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
-import { NAV_ITEMS } from '@/components/sidebar/workspaceModes'
 
 export default function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<NavItemId>('conversations')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SectionId>('general')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(() => {
+    try {
+      const cur = localStorage.getItem('novi_activity_panel')
+      if (cur !== null) return cur === 'true'
+      const legacy = localStorage.getItem('cozmo_activity_panel')
+      if (legacy !== null) return legacy === 'true'
+    } catch {}
+    return false
+  })
   const chat = useNoviChat()
 
   const handleSectionChange = useCallback((id: NavItemId) => {
@@ -37,15 +47,19 @@ export default function App() {
     setSettingsOpen(true)
   }, [])
 
-  // Item 2: navigate to a conversation from the notification center. Reuses
-  // the existing conversation state directly — no duplicated navigation logic.
   const handleSelectConversation = useCallback((id: string) => {
     chat.setActiveId(id)
     setActiveSection('conversations')
   }, [chat])
 
-  // Item 1: source for the global activity pill — whichever conversation owns
-  // the in-flight generation, not the one on screen.
+  const handleToggleActivity = useCallback(() => {
+    setActivityOpen(v => {
+      const next = !v
+      try { localStorage.setItem('novi_activity_panel', String(next)) } catch {}
+      return next
+    })
+  }, [])
+
   const workingActivityTitle = chat.generatingConversationId
     ? chat.generatingConversationTitle
     : null
@@ -115,8 +129,10 @@ export default function App() {
             onOpenSettings={handleOpenSettings}
             workingActivityTitle={workingActivityTitle}
             conversations={chat.conversations}
-            onOpenConversation={chat.setActiveId}
+            onOpenConversation={handleSelectConversation}
             timeline={chat.timeline}
+            activityOpen={activityOpen}
+            onToggleActivity={handleToggleActivity}
           />
         )
     }
@@ -130,20 +146,20 @@ export default function App() {
         workingActivityTitle={workingActivityTitle}
         isActiveConversation={activeSection === 'conversations' && chat.generating}
         onSelectConversation={handleSelectConversation}
-        contextTitle={
-          activeSection === 'conversations'
-            ? chat.active.title
-            : NAV_ITEMS[activeSection].label
-        }
+        collapsed={collapsed}
+        onToggleSidebar={() => setCollapsed(v => !v)}
+        activityOpen={activityOpen}
+        onToggleActivity={handleToggleActivity}
+        onSearch={() => setSearchOpen(true)}
+        onOpenSettings={() => handleOpenSettings()}
       />
 
       <div className="relative z-10 flex flex-1 min-h-0">
         <Sidebar
           collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((v) => !v)}
           conversations={chat.conversations}
           activeId={chat.activeId}
-          onSelect={chat.setActiveId}
+          onSelect={handleSelectConversation}
           onNewChat={() => { chat.newChat(null); setActiveSection('conversations') }}
           onNewChatInProject={handleStartProjectConversation}
           onPin={chat.pinConversation}
@@ -164,6 +180,7 @@ export default function App() {
         {renderSection()}
       </div>
 
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={handleSelectConversation} />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

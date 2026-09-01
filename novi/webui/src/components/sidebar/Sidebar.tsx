@@ -1,15 +1,13 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { PanelLeftClose, PanelLeftOpen, Plus, Search, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown } from 'lucide-react'
+import { Plus, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown } from 'lucide-react'
 import { Conversation, Project } from '@/types'
 import { SidebarItem } from './SidebarItem'
 import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
-import { SearchModal } from '@/components/search/SearchModal'
 import { ProjectForm } from '@/components/projects/ProjectForm'
 
 interface Props {
   collapsed: boolean
-  onToggleCollapse: () => void
   conversations: Conversation[]
   activeId: string
   onSelect: (id: string) => void
@@ -30,8 +28,7 @@ interface Props {
   generatingConversationId?: string | null
 }
 
-export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null }: Props) {
-  const [searchOpen, setSearchOpen] = useState(false)
+export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem('novi_sidebar_expanded_projects')
@@ -55,7 +52,6 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
 
   const pinnedConvos = useMemo(() => conversations.filter((c) => c.pinned), [conversations])
   const pinnedProjects = useMemo(() => (projects ?? []).filter((p) => (p as any).pinned).sort((a,b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")), [projects])
-  const pinned = pinnedConvos
   const sortedProjects = useMemo(() => {
     const list = [...(projects ?? [])]
     list.sort((a,b) => {
@@ -134,85 +130,98 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
     setNewProjectOpen(false)
   }
 
+  const uniformItem = (active: boolean) =>
+    `w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-normal transition-colors ${
+      active ? 'bg-base-800 text-base-100' : 'text-base-400 hover:text-base-100 hover:bg-base-800/40'
+    }`
+
   return (
     <motion.aside
-      animate={{ width: collapsed ? 64 : 264 }}
+      animate={{ width: collapsed ? 56 : 260 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="h-full flex flex-col border-r border-base-800 bg-black shrink-0"
+      className="h-full flex flex-col bg-base-950 border-r border-base-800/30 shrink-0"
     >
-      <div className="flex items-center justify-between px-3 h-14 shrink-0">
-        <div className="flex items-center gap-2.5">
-          <img src="/assets/Novi-sprite.svg" alt="Novi" className="w-auto h-8" style={{ imageRendering: 'pixelated' }} />
-          {!collapsed && (
-            <span className="font-semibold tracking-tight text-base-100 leading-tight">Novi</span>
-          )}
-        </div>
-        <button
-          onClick={onToggleCollapse}
-          className="p-1.5 rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800 transition-colors"
-        >
-          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-        </button>
-      </div>
-
-      <div className="px-2 space-y-1">
-        {NAV_ORDER.filter((id) => id !== 'settings' && id !== 'conversations' && id !== 'projects').map((id) => {
-          const item = NAV_ITEMS[id]
-          const Icon = item.icon
-          return (
-            <button
-              key={id}
-              onClick={() => onSectionChange(id)}
-              className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-sm font-medium transition-colors ${
-                activeSection === id
-                  ? 'bg-base-800 text-base-100'
-                  : 'text-base-400 hover:text-base-200 hover:bg-base-800/50'
-              }`}
-            >
-              <Icon size={15} />
-              {!collapsed && (
-                <span className="flex-1 text-left">{item.label}</span>
-              )}
-              {!collapsed && id === 'jobs' && jobsCount > 0 && (
-                <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-accent/20 text-accent">
-                  {jobsCount}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-
-        
-      <div className="flex flex-col min-h-0 flex-1">
-        {!collapsed && (
-          <>
+      <div className="flex flex-col flex-1 min-h-0">
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-1 px-1.5 py-2">
             <button
               onClick={onNewChat}
-              className="mx-2 mt-2 flex items-center gap-2 px-2.5 py-2 rounded-xl text-sm font-medium text-base-300 hover:text-base-100 hover:bg-base-800/50 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
+              aria-label="New chat"
+              title="New chat"
+              className="w-8 h-8 flex items-center justify-center rounded-lg text-base-400 hover:text-base-100 hover:bg-base-800/60 transition-colors"
             >
-              <Plus size={14} />
-              New chat
+              <Plus size={15} />
             </button>
-
+            {NAV_ORDER.filter((id) => id !== 'settings' && id !== 'conversations' && id !== 'projects').map((id) => {
+              const item = NAV_ITEMS[id]
+              const Icon = item.icon
+              const active = activeSection === id
+              return (
+                <button
+                  key={id}
+                  onClick={() => onSectionChange(id)}
+                  aria-label={item.label}
+                  title={item.label}
+                  className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${active ? 'bg-base-800 text-base-100' : 'text-base-400 hover:text-base-100 hover:bg-base-800/40'}`}
+                >
+                  <Icon size={15} />
+                </button>
+              )
+            })}
+            {(pinnedProjects.length > 0 || pinnedConvos.length > 0) && (
+              <div className="w-6 border-t border-base-800/30 my-1" />
+            )}
             <button
-              onClick={() => setSearchOpen(true)}
-              className="mx-2 mt-1 flex items-center gap-2 px-2.5 py-2 rounded-xl text-base-300 hover:bg-base-800 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
+              onClick={() => onSectionChange('projects')}
+              aria-label="Projects"
+              title="Projects"
+              className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${activeSection === 'projects' ? 'bg-base-800 text-base-100' : 'text-base-400 hover:text-base-100 hover:bg-base-800/40'}`}
             >
-              <Search size={14} />
-              Search
+              <FolderKanban size={15} />
             </button>
+          </div>
+        ) : (
+          <>
+            <div className="px-1.5 py-2">
+              <button
+                onClick={onNewChat}
+                className={uniformItem(false)}
+              >
+                <Plus size={14} className="shrink-0" />
+                <span className="flex-1 text-left">New chat</span>
+              </button>
+              {NAV_ORDER.filter((id) => id !== 'settings' && id !== 'conversations' && id !== 'projects').map((id) => {
+                const item = NAV_ITEMS[id]
+                const Icon = item.icon
+                const active = activeSection === id
+                return (
+                  <button
+                    key={id}
+                    onClick={() => onSectionChange(id)}
+                    className={uniformItem(active)}
+                  >
+                    <Icon size={14} className="shrink-0" />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    {id === 'jobs' && jobsCount > 0 && (
+                      <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-accent/15 text-accent">
+                        {jobsCount}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
 
-            <div className="flex-1 overflow-y-auto mt-3 px-2 space-y-3">
+            <div className="flex-1 overflow-y-auto px-1.5 space-y-4 mt-2">
               {(pinnedProjects.length > 0 || pinnedConvos.length > 0) && (
                 <div>
-                  <p className="px-2.5 text-[11px] uppercase tracking-wider text-accent mb-1">Pinned</p>
+                  <p className="px-2.5 text-[10px] uppercase tracking-widest text-base-500 mb-1.5">Pinned</p>
                   <div className="space-y-1">
                     {pinnedProjects.map((p) => (
                       <button
                         key={`pinned-proj-${p.id}`}
                         onClick={() => onSelectProject?.(p.id)}
-                        className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-sm text-left ${activeProjectId === p.id ? 'bg-base-800 text-base-100' : 'text-base-300 hover:bg-base-800/50 hover:text-base-100'}`}
+                        className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[13px] text-left ${activeProjectId === p.id ? 'bg-base-800 text-base-100' : 'text-base-400 hover:bg-base-800/40 hover:text-base-100'}`}
                       >
                         <Pin size={11} className="text-accent shrink-0" />
                         <FolderKanban size={13} className="text-base-500 shrink-0" />
@@ -233,8 +242,8 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                     className="flex items-center gap-1.5 flex-1 text-left focus-visible:ring-2 focus-visible:ring-accent/20 rounded"
                   >
                     {projectsExpanded ? <ChevronDown size={12} className="text-base-500" /> : <ChevronRight size={12} className="text-base-500" />}
-                    <span className="text-[11px] uppercase tracking-wider text-base-500 font-medium">Projects</span>
-                    {(projects?.length ?? 0) > 0 && <span className="text-[11px] text-base-600">- {projects?.length}</span>}
+                    <span className="text-[10px] uppercase tracking-widest text-base-500 font-medium">Projects</span>
+                    {(projects?.length ?? 0) > 0 && <span className="text-[10px] text-base-600">- {projects?.length}</span>}
                   </button>
                   <button
                     onClick={handleCreateProject}
@@ -316,7 +325,7 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                           const isPinned = !!(p as any).pinned
                           return (
                             <div key={p.id} className="group/project">
-                              <div className={`group flex items-center gap-1 px-2.5 py-1.5 rounded-xl ${activeProjectId === p.id ? 'bg-base-800 text-base-100' : 'text-base-400 hover:bg-base-800/50 hover:text-base-200'} transition-colors`}>
+                              <div className={`group flex items-center gap-1 px-2.5 py-1.5 rounded-lg ${activeProjectId === p.id ? 'bg-base-800 text-base-100' : 'text-base-400 hover:bg-base-800/40 hover:text-base-200'} transition-colors`}>
                                 <button
                                   onClick={() => toggleProject(p.id)}
                                   aria-expanded={expanded}
@@ -331,7 +340,7 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                                   aria-label={`${expanded ? 'Collapse' : 'Expand'} ${p.name}`}
                                 >
                                   <FolderKanban size={13} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} />
-                                  <span className="truncate text-xs font-medium">{p.name}</span>
+                                  <span className="truncate text-[13px] font-normal">{p.name}</span>
                                   <span className="text-[11px] text-base-500">{chats.length}</span>
                                   {isPinned && <Pin size={10} className="text-accent shrink-0" />}
                                 </button>
@@ -419,7 +428,7 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                                 </div>
                               </div>
                               {expanded && chats.length > 0 && (
-                                <div className="ml-3 mt-1 space-y-0.5 border-l border-base-800 pl-2">
+                                <div className="ml-3 mt-1 space-y-0.5 border-l border-base-800/50 pl-2">
                                   {chats.map((c) => (
                                     <SidebarItem key={c.id} conversation={c} active={c.id === activeId} generating={c.id === generatingConversationId} onClick={() => onSelect(c.id)} onPin={onPin} onRename={onRename} onDelete={onDelete} />
                                   ))}
@@ -448,11 +457,11 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
                 <button
                   onClick={toggleChatsSection}
                   aria-expanded={chatsExpanded}
-                  className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-base-400 hover:text-base-200 hover:bg-base-800/50 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
+                  className="w-full flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-base-400 hover:text-base-200 hover:bg-base-800/40 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
                 >
                   {chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  <span className="text-[11px] uppercase tracking-wider font-medium">Chats</span>
-                  <span className="text-[11px] text-base-600">- {unassigned.length}</span>
+                  <span className="text-[10px] uppercase tracking-widest font-medium">Chats</span>
+                  <span className="text-[10px] text-base-600">- {unassigned.length}</span>
                 </button>
                 {chatsExpanded && (
                   <div className="mt-1 px-2 space-y-0.5">
@@ -470,29 +479,6 @@ export function Sidebar({ collapsed, onToggleCollapse, conversations, activeId, 
           </>
         )}
       </div>
-
-      {!collapsed && (
-        <div className="px-2 pb-3 border-base-800 pt-2">
-          {(() => {
-            const Icon = NAV_ITEMS.settings.icon
-            return (
-              <button
-                onClick={() => onSectionChange('settings')}
-                className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-sm font-medium transition-colors ${
-                  activeSection === 'settings'
-                    ? 'bg-base-800 text-base-100'
-                    : 'text-base-400 hover:text-base-200 hover:bg-base-800/50'
-                }`}
-              >
-                <Icon size={15} />
-                <span className="flex-1 text-left">{NAV_ITEMS.settings.label}</span>
-              </button>
-            )
-          })()}
-        </div>
-      )}
-
-      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={onSelect} />
 
       <AnimatePresence>
         {newProjectOpen && (

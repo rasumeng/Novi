@@ -83,11 +83,10 @@ export function ProjectsPanel({
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-base-950">
       {dialog}
-      <header className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-base-800">
-        <h2 className="text-sm font-medium text-base-100">Projects</h2>
+      <header className="h-11 shrink-0 flex items-center justify-end px-4">
         <button
           onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
         >
           <Plus size={14} />
           New Project
