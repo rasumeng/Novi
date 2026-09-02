@@ -1,8 +1,9 @@
-import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle, Eye } from 'lucide-react'
+import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle } from 'lucide-react'
 import type { DiscoveryPayload, SchemaResponse } from './api'
 import type { SectionId } from './types'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { workloadsFromDiscovery } from './workloads'
+import { CapabilityChips, capsFromWorkloadMap } from '@/components/common/CapabilityChips'
 
 interface Props {
   discovery: DiscoveryPayload | null
@@ -67,15 +68,12 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
             {WORKLOADS.map((w) => {
               const model = workloads[w.key] ?? ''
               if (!model) return null
+              const caps = capsFromWorkloadMap(discovery.workload_capabilities as any, w.key, discovery.models.find((m) => m.name === model))
               return (
                 <div key={w.key} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-base-900/40 border border-base-700/40">
-                  <span className="flex items-center gap-1.5 text-xs text-base-400">
+                  <span className="flex items-center gap-2 text-xs text-base-400">
                     {w.label}
-                    {w.key === 'general' && discovery.vision_capable && (
-                      <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                        <Eye size={10} /> Vision
-                      </span>
-                    )}
+                    {caps && <CapabilityChips caps={caps} />}
                   </span>
                   <span className="text-xs text-base-200 font-mono">{model}</span>
                 </div>

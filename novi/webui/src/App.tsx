@@ -69,6 +69,22 @@ export default function App() {
     setActiveSection('conversations')
   }, [chat])
 
+  const handleSendInProject = useCallback((projectId: string, content: string) => {
+    const activeInProject = chat.projects.find(p => p.id === projectId)?.conversationIds.includes(chat.activeId)
+    if (activeInProject) {
+      chat.sendMessage(content)
+    } else {
+      // create new conversation explicitly scoped to this project, stay in Projects view
+      chat.setActiveProjectId(projectId)
+      ;(chat.sendMessage as any)(content, undefined, undefined, projectId)
+    }
+  }, [chat])
+
+  const handleSelectConversationInProject = useCallback((id: string) => {
+    chat.setActiveId(id)
+    // stay in projects section — user sees thread inside project
+  }, [chat])
+
   const renderSection = () => {
     switch (activeSection) {
       case 'projects':
@@ -79,11 +95,17 @@ export default function App() {
             onCreateProject={chat.createProject}
             onUpdateProject={chat.updateProject}
             onDeleteProject={chat.deleteProject}
-            onSelectConversation={(id) => { chat.setActiveId(id); setActiveSection('conversations') }}
+            onSelectConversation={handleSelectConversationInProject}
             onRemoveConversation={chat.removeConversationFromProject}
             onSelectProject={chat.setActiveProjectId}
             onStartProjectConversation={handleStartProjectConversation}
             activeProjectId={chat.activeProjectId}
+            onSendInProject={handleSendInProject}
+            activeConversationId={chat.activeId}
+            connection={chat.connection}
+            generating={chat.generating}
+            onStop={chat.stop}
+            onOpenFull={handleSelectConversation}
           />
         )
       case 'jobs':

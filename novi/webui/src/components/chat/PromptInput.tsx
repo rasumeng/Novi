@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
-import { Paperclip, ArrowUp, Square, Mic, Plus, Folder, X, Search } from 'lucide-react'
+import { Paperclip, ArrowUp, Square, Mic, Plus, Folder, X, Search, AlertTriangle } from 'lucide-react'
 import { Attachment } from '@/types'
 import type { SectionId } from '@/components/settings/SettingsModal'
 
@@ -91,6 +91,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   const prefixRef = useRef('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(false)
+  const [workloadCaps, setWorkloadCaps] = useState<Record<string, { vision: boolean; tools: boolean; reasoning: boolean; thinking: boolean; audio: boolean; coding: boolean }> | null>(null)
 
   const transcribeAudio = useCallback(async (blob: Blob): Promise<string | null> => {
     const form = new FormData()
@@ -258,6 +259,35 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
     fetch(`${API_BASE}/api/attachments/${id}`, { method: 'DELETE' }).catch(() => {})
   }, [])
 
+  // Early compatibility awareness: fetch workload capabilities (vision/tools/reasoning/audio) — strictly model-derived
+  useEffect(() => {
+    let cancelled = false
+    const fetchCaps = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/models/discovery`)
+        if (r.ok) {
+          const d = await r.json()
+          if (!cancelled) setWorkloadCaps(d.workload_capabilities ?? null)
+        }
+      } catch { /* ignore */ }
+    }
+    fetchCaps()
+    const id = window.setInterval(fetchCaps, 15000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
+
+  const hasImage = attachments.some((a) => a.type === 'image' || (a.mime || '').startsWith('image/'))
+  const hasAudio = attachments.some((a) => (a.mime || '').startsWith('audio/'))
+  const generalCaps = workloadCaps?.general
+  const researchCaps = workloadCaps?.research
+  const incompatibilities: { key: string; msg: string }[] = []
+  if (hasImage && generalCaps && !generalCaps.vision) incompatibilities.push({ key: 'vision', msg: 'Image attached — current General model does not support Vision. Choose a Vision-capable model before sending.' })
+  if (hasAudio && generalCaps && !generalCaps.audio) incompatibilities.push({ key: 'audio', msg: 'Audio attached — current General model does not support Audio. Choose an Audio-capable model before sending.' })
+  if (deepResearch && researchCaps && !researchCaps.reasoning && !researchCaps.thinking) incompatibilities.push({ key: 'thinking', msg: 'Deep Research requires a Thinking-capable Research model. Choose a compatible model before sending.' })
+  // Tools hint: file attachments beyond images benefit from Tools
+  const hasFiles = attachments.some((a) => a.type !== 'image' && !(a.mime || '').startsWith('image/'))
+  if (hasFiles && generalCaps && !generalCaps.tools) incompatibilities.push({ key: 'tools', msg: 'Files attached — current General model does not support Tools. Tool calling may not work.' })
+
   const toggleMic = useCallback(() => {
     if (micStateRef.current === 'idle') {
       micStateRef.current = 'listening'
@@ -316,10 +346,15 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
       return
     }
     if ((!value.trim() && attachments.length === 0) || disabled) return
+    // Do not silently fallback — block vision/audio/thinking incompatibilities, prompt to choose compatible model
+    const blocking = incompatibilities.filter((c) => c.key === 'vision' || c.key === 'audio' || c.key === 'thinking')
+    if (blocking.length > 0) return
     onSend(value, attachments.length > 0 ? attachments : undefined)
     setValue('')
     setAttachments([])
   }
+
+  const blockingIncompat = incompatibilities.some((c) => c.key === 'vision' || c.key === 'audio' || c.key === 'thinking')
 
   const handleAttachFolder = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
@@ -413,6 +448,24 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           ))}
         </div>
       )}
+      {incompatibilities.length > 0 && (
+        <div className="mx-2 mb-2 p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-1.5">
+          {incompatibilities.map((c) => (
+            <div key={c.key} className="flex items-start gap-2 text-[11px] leading-relaxed">
+              <AlertTriangle size={12} className={`shrink-0 mt-0.5 ${c.key === 'tools' ? 'text-base-400' : 'text-amber-400'}`} />
+              <span className={c.key === 'tools' ? 'text-base-400' : 'text-amber-300'}>{c.msg}</span>
+            </div>
+          ))}
+          {blockingIncompat && onOpenSettings && (
+            <button
+              onClick={() => onOpenSettings('models')}
+              className="text-[11px] font-medium text-amber-300 hover:text-amber-200 underline underline-offset-2"
+            >
+              Choose a compatible model →
+            </button>
+          )}
+        </div>
+      )}
       <div className="flex items-center justify-between px-2.5 pb-1.5">
         <div className="flex items-center gap-1">
           
@@ -496,9 +549,10 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
 
         <button
           onClick={submit}
-          disabled={disabled || (!value.trim() && attachments.length === 0 && !generating)}
+          disabled={disabled || (!value.trim() && attachments.length === 0 && !generating) || blockingIncompat}
           aria-label={generating ? 'Stop generating' : 'Send message'}
-          className="p-2 rounded-full bg-accent hover:bg-accent/90 disabled:bg-base-700 disabled:text-base-500 text-white transition-colors"
+          title={blockingIncompat ? 'Incompatible model — choose a compatible model first' : undefined}
+          className={`p-2 rounded-full transition-colors ${blockingIncompat ? 'bg-base-700 text-base-500 cursor-not-allowed' : 'bg-accent hover:bg-accent/90 disabled:bg-base-700 disabled:text-base-500 text-white'}`}
         >
           {generating ? <Square size={14} /> : <ArrowUp size={16} />}
         </button>

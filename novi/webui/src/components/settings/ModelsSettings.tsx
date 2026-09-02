@@ -15,6 +15,7 @@ import {
 import type { CapabilityEvidence, DiscoveryHardware, DiscoveryPayload, DiscoveredModelEntry, RecommendationExplanation, SchemaResponse, WorkloadRecommendation } from './api'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { workloadsFromDiscovery } from './workloads'
+import { CapabilityChips, capsFromWorkloadMap, capsFromEntry } from '@/components/common/CapabilityChips'
 
 interface Props {
   discovery: DiscoveryPayload | null
@@ -140,7 +141,7 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
             const model = selection[w.key] ?? ''
             const entry = modelByName(discovery, model)
             const missing = model !== '' && !discovery.installedNames.includes(model)
-            const vision = w.key === 'general' && discovery.vision_capable
+            const caps = capsFromWorkloadMap(discovery.workload_capabilities as any, w.key, entry)
             const rec = discovery.recommended?.workloads?.[w.key] ?? null
             const recommended = rec?.model ?? ''
             const explanation = rec?.explanation ?? null
@@ -152,7 +153,7 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
                 entry={entry}
                 installedModels={installedModels}
                 missing={missing}
-                vision={vision}
+                caps={caps}
                 recommended={recommended}
                 recommendation={rec}
                 explanation={explanation}
@@ -301,7 +302,7 @@ function HardwareFact({ icon, label, value, unknown }: { icon?: React.ReactNode;
 // ── 2. Advisory recommendations ──────────────────────────────────────────
 
 function RecommendedModels({ recs, workloadMeta, installedNames, applying, onUseRecommended, onUseRecommendedFor }: {
-  recs: { workload: string; model: string; reasons: string[]; caveats: string[]; qualification: string; hardwareConfidence: string; visionCapable: boolean }[]
+  recs: { workload: string; model: string; reasons: string[]; caveats: string[]; qualification: string; hardwareConfidence: string; visionCapable: boolean; capabilities?: string[] }[]
   workloadMeta: { key: string; label: string; desc: string }[]
   installedNames: string[]
   applying: boolean
@@ -363,11 +364,14 @@ function RecommendedModels({ recs, workloadMeta, installedNames, applying, onUse
                         ))}
                       </div>
                     )}
-                    {r.visionCapable && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 mt-1">
-                        <Eye size={10} /> Vision-capable
-                      </span>
-                    )}
+                    <CapabilityChips caps={{
+                      vision: r.capabilities?.includes('vision') || r.visionCapable,
+                      tools: r.capabilities?.includes('tools'),
+                      reasoning: r.capabilities?.includes('reasoning'),
+                      thinking: r.capabilities?.includes('reasoning'),
+                      audio: r.capabilities?.includes('audio'),
+                      coding: r.capabilities?.includes('coding'),
+                    }} />
                   </div>
                   <button
                     onClick={() => onUseRecommendedFor(r.workload)}
@@ -418,8 +422,6 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
         <div className="space-y-2">
           {models.map((m) => {
             const busy = installing[m.name]
-            const caps = Object.keys(m.capabilities ?? {}).filter((c) =>
-              ['chat', 'reasoning', 'coding', 'vision'].includes(c))
             return (
               <div key={m.name} className="p-3 rounded-lg bg-base-900/60 border border-base-700">
                 <div className="flex items-center justify-between gap-3">
@@ -429,11 +431,7 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
                       <StatusBadge status="available" />
                     </div>
                     <div className="flex flex-wrap items-center gap-1 mt-1">
-                      {caps.map((c) => (
-                        <span key={c} className="text-[10px] text-sky-400 capitalize bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 rounded">
-                          {c}
-                        </span>
-                      ))}
+                      <CapabilityChips caps={capsFromEntry(m) as any} />
                       {m.approxRamGb != null && (
                         <span className="text-[10px] text-base-500">~{m.approxRamGb} GB RAM footprint</span>
                       )}
@@ -479,13 +477,13 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
 
 // ── 1. Current selection ─────────────────────────────────────────────────
 
-function SelectionRow({ workload, model, entry, installedModels, missing, vision, recommended, recommendation, explanation, expanded, onToggleWhy, saving, applying, onSelect, onUseRecommended }: {
+function SelectionRow({ workload, model, entry, installedModels, missing, caps, recommended, recommendation, explanation, expanded, onToggleWhy, saving, applying, onSelect, onUseRecommended }: {
   workload: { key: string; label: string; desc: string }
   model: string
   entry?: DiscoveredModelEntry
   installedModels: DiscoveredModelEntry[]
   missing: boolean
-  vision: boolean
+  caps?: { vision?: boolean; tools?: boolean; reasoning?: boolean; thinking?: boolean; audio?: boolean; coding?: boolean } | null
   recommended: string
   recommendation: WorkloadRecommendation | null
   explanation: RecommendationExplanation | null
@@ -514,11 +512,7 @@ function SelectionRow({ workload, model, entry, installedModels, missing, vision
                 <AlertTriangle size={10} /> Recommendation changed
               </span>
             )}
-            {vision && (
-              <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
-                <Eye size={10} /> Vision-capable
-              </span>
-            )}
+            {caps && <CapabilityChips caps={caps} />}
           </div>
           <p className="text-[11px] text-base-500 mt-0.5">{workload.desc}</p>
           {recommended && (

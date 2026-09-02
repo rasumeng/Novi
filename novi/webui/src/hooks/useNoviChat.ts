@@ -607,7 +607,7 @@ export function useNoviChat() {
   }, [connection, pushNotification])
 
   const sendMessage = useCallback(
-    (content: string, attachments?: Attachment[], deepResearch?: boolean) => {
+    (content: string, attachments?: Attachment[], deepResearch?: boolean, projectIdOverride?: string | null) => {
       const client = clientRef.current
       // Single-flight: refuse a new generation while one is already owned.
       if (!client || owner) return
@@ -618,7 +618,12 @@ export function useNoviChat() {
       // Find the project this conversation belongs to — convProject via conversationIds OR projectId field
       const conv = conversations.find(c => c.id === resolvedActiveId) as any
       const convProject = projects.find(p => p.conversationIds.includes(resolvedActiveId) || (conv?.projectId && conv.projectId === p.id))
-      const effectiveProjectId = convProject?.id ?? (resolvedActiveId === DRAFT_ID ? activeProjectId : null)
+      let effectiveProjectId: string | null = null
+      if (projectIdOverride !== undefined) {
+        effectiveProjectId = projectIdOverride
+      } else {
+        effectiveProjectId = convProject?.id ?? (resolvedActiveId === DRAFT_ID ? activeProjectId : null)
+      }
       const projectId = effectiveProjectId ?? undefined
 
       if (resolvedActiveId === DRAFT_ID) {
@@ -673,7 +678,7 @@ export function useNoviChat() {
         setInlineSteps([])
       }
     },
-    [owner, updateConversation, resolvedActiveId, projects]
+    [owner, updateConversation, resolvedActiveId, projects, conversations, activeProjectId]
   )
 
   const stop = useCallback(() => {

@@ -128,6 +128,15 @@ export interface DiscoveryHardware {
   confidence: string
 }
 
+export interface WorkloadCaps {
+  vision: boolean
+  tools: boolean
+  reasoning: boolean
+  thinking: boolean
+  audio: boolean
+  coding: boolean
+}
+
 export interface DiscoveryPayload {
   hardware: DiscoveryHardware
   models: DiscoveredModelEntry[]
@@ -137,6 +146,7 @@ export interface DiscoveryPayload {
   workloads: Record<string, string>
   recommended: RecommendationsPayload
   vision_capable: boolean
+  workload_capabilities?: Record<string, WorkloadCaps>
 }
 
 export async function fetchSchema(): Promise<SchemaResponse> {
@@ -163,6 +173,7 @@ export async function fetchDiscovery(): Promise<DiscoveryPayload> {
     workloads: { general: '', research: '', code: '' },
     recommended: { workloads: {}, provisional: true },
     vision_capable: false,
+    workload_capabilities: {},
   }
 }
 

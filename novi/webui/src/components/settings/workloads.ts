@@ -20,9 +20,11 @@ export function workloadsFromDiscovery(discovery: DiscoveryPayload | null, schem
       byKey.set(m[1], { label: s.label, desc: s.description })
     }
   }
-  return Object.keys(discovery?.workloads ?? {}).map((key) => ({
+  const keys = Object.keys(discovery?.workloads ?? {})
+  const metas = keys.map((key) => ({
     key,
     label: byKey.get(key)?.label ?? key,
     desc: byKey.get(key)?.desc ?? '',
   }))
+  return metas
 }

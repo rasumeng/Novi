@@ -1213,9 +1213,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             for workload in WORKLOADS
         }
         payload["recommended"] = recommend(installed=installed).to_dict()
-        # Desktop-vision availability signal: whether the user's selected
-        # general workload model supports vision. Derived from catalog/discovery
-        # capability facts, never hardcoded. Unselected -> False.
+        # Workload capability signals: normalized ModelCapabilities per workload.
+        # All derived strictly from model facts (audio never inferred from tools).
+        # vision_capable kept for backward compat.
+        def _caps_for(model_name: str) -> dict:
+            if not model_name or not model_name.strip():
+                return {"vision": False, "tools": False, "reasoning": False, "thinking": False, "audio": False, "coding": False}
+            c = model_capabilities(model_name.strip())
+            return {"vision": c.supports_vision, "tools": c.supports_tools, "reasoning": c.supports_reasoning, "thinking": c.supports_thinking, "audio": c.supports_audio, "coding": c.supports_coding}
+
+        payload["workload_capabilities"] = {
+            w: _caps_for(payload["workloads"].get(w, "") or "")
+            for w in payload["workloads"]
+        }
+        # backward compat single flag
         selected_general = (payload["workloads"].get("general") or "").strip()
         payload["vision_capable"] = bool(
             selected_general and model_capabilities(selected_general).supports_vision)
