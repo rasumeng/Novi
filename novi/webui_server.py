@@ -839,17 +839,30 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 entry["title"] = title
                 entry["pinned"] = pinned
                 entry["updatedAt"] = ts
-                if project_id is not None:
-                    entry["projectId"] = project_id
+                if "projectId" in body:
+                    # Canonical: conversation.projectId authoritative, None clears
+                    val = body.get("projectId")
+                    if val is None or (isinstance(val, str) and not val.strip()):
+                        entry.pop("projectId", None)
+                        # also store explicit None for clarity? pop is enough; derived checks get()
+                    else:
+                        entry["projectId"] = val.strip() if isinstance(val, str) else val
             else:
                 entry = {
                     "id": conv_id,
                     "title": title,
                     "pinned": pinned,
-                    "projectId": project_id,
                     "createdAt": ts,
                     "updatedAt": ts,
                 }
+                if "projectId" in body:
+                    val = body.get("projectId")
+                    if val is not None and not (isinstance(val, str) and not val.strip()):
+                        entry["projectId"] = val.strip() if isinstance(val, str) else val
+                else:
+                    # legacy: body without projectId key but project_id variable may be None -> omit
+                    if project_id is not None and not (isinstance(project_id, str) and not project_id.strip()):
+                        entry["projectId"] = project_id.strip() if isinstance(project_id, str) else project_id
                 idx["conversations"].insert(0, entry)
 
             # Atomic order: .md first, then index — crash never leaves orphan index
@@ -892,20 +905,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             idx = _conversations_idx()
             idx["conversations"] = [c for c in idx["conversations"] if c["id"] != conv_id]
             _save_idx(idx)
-        # prune from projects conversationIds
-        try:
-            with _PROJECTS_LOCK:
-                p_idx = _projects_idx()
-                changed = False
-                for p in p_idx.get("projects", []):
-                    if conv_id in p.get("conversationIds", []):
-                        p["conversationIds"] = [cid for cid in p["conversationIds"] if cid != conv_id]
-                        p["updatedAt"] = datetime.now(timezone.utc).isoformat()
-                        changed = True
-                if changed:
-                    _save_projects_idx(p_idx)
-        except Exception:
-            pass
+        # Canonical: no prune needed — project.conversationIds is derived from conversation.projectId.
         if md_path.exists():
             md_path.unlink()
         return {"ok": True}
@@ -1449,12 +1449,68 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         return {"projects": []}
 
     def _save_projects_idx(idx: dict):
+        # Canonical invariant: project.conversationIds is derived, never persisted.
+        # Strip any stray conversationIds before write so file stays canonical.
+        for _p in idx.get("projects", []):
+            _p.pop("conversationIds", None)
         _atomic_write_text(PROJECTS_INDEX, json.dumps(idx, indent=2))
+
+    def _derive_project_conversation_ids(project_id: str) -> list[str]:
+        try:
+            convs = _conversations_idx().get("conversations", [])
+        except Exception:
+            return []
+        return [c["id"] for c in convs if c.get("projectId") == project_id]
+
+    def _augment_project(p: dict) -> dict:
+        out = dict(p)
+        out["conversationIds"] = _derive_project_conversation_ids(p["id"])
+        return out
+
+    def _augment_projects_for_response(projects: list[dict]) -> list[dict]:
+        return [_augment_project(p) for p in projects]
+
+    def _migrate_projects_to_canonical():
+        """One-time migration: backfill projectId into conversations then strip."""
+        try:
+            p_idx = _projects_idx()
+        except Exception:
+            return
+        needs = any("conversationIds" in p for p in p_idx.get("projects", []))
+        if not needs:
+            return
+        # Backfill missing projectId into conversations (conversation wins if already set)
+        with _CONVERSATIONS_LOCK:
+            try:
+                c_idx = _conversations_idx()
+            except Exception:
+                c_idx = {"conversations": []}
+            conv_by_id = {c["id"]: c for c in c_idx.get("conversations", [])}
+            c_changed = False
+            for p in p_idx.get("projects", []):
+                pid = p["id"]
+                for cid in list(p.get("conversationIds") or []):
+                    conv = conv_by_id.get(cid)
+                    if conv is not None and not conv.get("projectId"):
+                        conv["projectId"] = pid
+                        c_changed = True
+            if c_changed:
+                _save_idx(c_idx)
+        with _PROJECTS_LOCK:
+            p_idx2 = _projects_idx()
+            changed = False
+            for p in p_idx2.get("projects", []):
+                if "conversationIds" in p:
+                    p.pop("conversationIds", None)
+                    changed = True
+            if changed:
+                _save_projects_idx(p_idx2)
 
     @app.get("/api/projects")
     def get_projects():
+        _migrate_projects_to_canonical()
         idx = _projects_idx()
-        return idx["projects"]
+        return _augment_projects_for_response(idx["projects"])
 
     @app.post("/api/projects")
     def create_project(body: dict):
@@ -1467,38 +1523,38 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             "id": f"proj-{uuid.uuid4().hex[:8]}",
             "name": name,
             "description": (body.get("description") or "").strip(),
-            "conversationIds": [],
             "sharedContext": (body.get("sharedContext") or "").strip(),
             "workspace": None,
             "pinned": bool(body.get("pinned", False)),
             "createdAt": ts,
             "updatedAt": ts,
         }
-        idx = _projects_idx()
-        idx["projects"].insert(0, project)
-        _save_projects_idx(idx)
-        return project
+        with _PROJECTS_LOCK:
+            idx = _projects_idx()
+            idx["projects"].insert(0, project)
+            _save_projects_idx(idx)
+        return _augment_project(project)
 
     @app.put("/api/projects/{proj_id}")
     def update_project(proj_id: str, body: dict):
-        idx = _projects_idx()
-        for p in idx["projects"]:
-            if p["id"] == proj_id:
-                if "name" in body:
-                    p["name"] = body["name"].strip() or p["name"]
-                if "description" in body:
-                    p["description"] = body["description"].strip()
-                if "sharedContext" in body:
-                    p["sharedContext"] = body["sharedContext"].strip()
-                if "conversationIds" in body:
-                    p["conversationIds"] = body["conversationIds"]
-                if "workspace" in body:
-                    p["workspace"] = body["workspace"]
-                if "pinned" in body:
-                    p["pinned"] = bool(body["pinned"])
-                p["updatedAt"] = datetime.now(timezone.utc).isoformat()
-                _save_projects_idx(idx)
-                return p
+        # conversationIds is derived — never persisted. Ignore it; conversation.projectId is canonical.
+        with _PROJECTS_LOCK:
+            idx = _projects_idx()
+            for p in idx["projects"]:
+                if p["id"] == proj_id:
+                    if "name" in body:
+                        p["name"] = body["name"].strip() or p["name"]
+                    if "description" in body:
+                        p["description"] = body["description"].strip()
+                    if "sharedContext" in body:
+                        p["sharedContext"] = body["sharedContext"].strip()
+                    if "workspace" in body:
+                        p["workspace"] = body["workspace"]
+                    if "pinned" in body:
+                        p["pinned"] = bool(body["pinned"])
+                    p["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                    _save_projects_idx(idx)
+                    return _augment_project(p)
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": "not found"}, status_code=404)
 
@@ -1523,23 +1579,24 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         if capability != "READ":
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": "only READ enabled for beta"}, status_code=400)
-        idx = _projects_idx()
-        for p in idx["projects"]:
-            if p["id"] == proj_id:
-                try:
-                    result = _workspace_service.attach(proj_id, root, capability)
-                except ValueError as e:
-                    from fastapi.responses import JSONResponse
-                    return JSONResponse({"error": str(e)}, status_code=400)
-                p["workspace"] = {
-                    "root": result["root"],
-                    "capability": result["capability"],
-                    "indexedAt": datetime.now(timezone.utc).isoformat(),
-                    "stats": result["stats"],
-                }
-                p["updatedAt"] = datetime.now(timezone.utc).isoformat()
-                _save_projects_idx(idx)
-                return p
+        with _PROJECTS_LOCK:
+            idx = _projects_idx()
+            for p in idx["projects"]:
+                if p["id"] == proj_id:
+                    try:
+                        result = _workspace_service.attach(proj_id, root, capability)
+                    except ValueError as e:
+                        from fastapi.responses import JSONResponse
+                        return JSONResponse({"error": str(e)}, status_code=400)
+                    p["workspace"] = {
+                        "root": result["root"],
+                        "capability": result["capability"],
+                        "indexedAt": datetime.now(timezone.utc).isoformat(),
+                        "stats": result["stats"],
+                    }
+                    p["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                    _save_projects_idx(idx)
+                    return _augment_project(p)
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": "not found"}, status_code=404)
 
@@ -1598,17 +1655,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/projects/{proj_id}/conversations")
     def get_project_conversations(proj_id: str):
+        _migrate_projects_to_canonical()
         idx = _projects_idx()
-        for p in idx["projects"]:
-            if p["id"] == proj_id:
-                convs = []
-                for cid in p.get("conversationIds", []):
-                    conv = _conversation_by_id(cid)
-                    if conv:
-                        convs.append(conv)
-                return convs
-        from fastapi.responses import JSONResponse
-        return JSONResponse({"error": "not found"}, status_code=404)
+        if not any(p["id"] == proj_id for p in idx.get("projects", [])):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "not found"}, status_code=404)
+        # Canonical: scan conversations for projectId == pid
+        c_idx = _conversations_idx()
+        convs = []
+        for c in c_idx.get("conversations", []):
+            if c.get("projectId") == proj_id:
+                conv = _conversation_by_id(c["id"])
+                if conv:
+                    convs.append(conv)
+        return convs
 
     @app.post("/api/directory-picker")
     def directory_picker():

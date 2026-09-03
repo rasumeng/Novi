@@ -116,32 +116,9 @@ export function useNoviChat() {
     } catch {}
   }, [activeProjectId])
 
-  // backfill: ensure chats with projectId are reflected in projects conversationIds (migration)
-  useEffect(() => {
-    if (!projects.length || !conversations.length) return
-    let changed = false
-    const projMap = new Map(projects.map(p => [p.id, p] as const))
-    for (const c of conversations) {
-      const pid = (c as any).projectId
-      if (pid && projMap.has(pid)) {
-        const proj = projMap.get(pid)!
-        if (!proj.conversationIds.includes(c.id)) {
-          proj.conversationIds = [...proj.conversationIds, c.id]
-          changed = true
-        }
-      }
-    }
-    if (changed) {
-      setProjects(Array.from(projMap.values()))
-      // also sync to server for affected projects
-      for (const p of projMap.values()) {
-        const orig = projects.find(o => o.id === p.id)
-        if (orig && orig.conversationIds.length !== p.conversationIds.length) {
-          updateProject(p.id, { conversationIds: p.conversationIds } as any).catch(()=>{})
-        }
-      }
-    }
-  }, [projects, conversations])
+  // Task 1.4 canonical: conversation.projectId is authoritative. project.conversationIds is derived on read.
+  // Legacy backfill effect is now a no-op (kept as guard for old persisted data via server migration).
+  useEffect(() => {}, [projects, conversations])
 
   // Milestone 4: hydrate the persisted assistant timeline on mount.
   useEffect(() => {
@@ -639,15 +616,7 @@ export function useNoviChat() {
         if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
         setConversations((convs) => [newConv, ...convs])
         setActiveId(newId)
-        // auto-link new conversation to active project
-        if (effectiveProjectId) {
-          const proj = projects.find(p => p.id === effectiveProjectId)
-          if (proj && !proj.conversationIds.includes(newId)) {
-            const updated = { ...proj, conversationIds: [...proj.conversationIds, newId] }
-            setProjects(prev => prev.map(p => p.id === effectiveProjectId ? updated : p))
-            updateProject(effectiveProjectId, { conversationIds: updated.conversationIds } as any).catch(()=>{})
-          }
-        }
+        // Canonical: new conversation's projectId is persisted via saveConversation (dirtyIdRef) — no separate project update needed.
         setOwner({ conversationId: newId })
         setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
         dirtyIdRef.current = newId
@@ -773,36 +742,40 @@ export function useNoviChat() {
       showError("Couldn't delete this conversation on the server — it may come back after a restart.")
     })
     setConversations((convs) => convs.filter((c) => c.id !== id))
-    // prune from projects conversationIds and keep projectId consistent
+    // Canonical: derived — prune local optimistically, no server project update
     setProjects(prev => prev.map(p => p.conversationIds.includes(id) ? { ...p, conversationIds: p.conversationIds.filter(cid => cid !== id) } : p))
-    // sync pruned projects to server
-    for (const p of projects) {
-      if (p.conversationIds.includes(id)) {
-        updateProject(p.id, { conversationIds: p.conversationIds.filter(cid => cid !== id) } as any).catch(()=>{})
-      }
-    }
     setActiveId((prev) => prev === id ? DRAFT_ID : prev)
-  }, [showError, projects])
+  }, [showError])
 
   const addConversationToProject = useCallback((convId: string, projId: string) => {
-    const proj = projects.find(p => p.id === projId)
-    if (!proj || proj.conversationIds.includes(convId)) return
-    const updated = { ...proj, conversationIds: [...proj.conversationIds, convId] }
-    setProjects(prev => prev.map(p => p.id === projId ? updated : p))
-    updateProject(projId, { conversationIds: updated.conversationIds }).catch(() => {
-      showError("Couldn't add this conversation to the project.")
-    })
-  }, [projects, showError])
+    const conv = conversations.find(c => c.id === convId)
+    if (!conv) return
+    if ((conv as any).projectId === projId) return
+    const updatedConv = { ...conv, projectId: projId } as Conversation
+    setConversations(prev => prev.map(c => c.id === convId ? updatedConv : c))
+    // optimistic project prune/add (derived will converge on next fetch)
+    setProjects(prev => prev.map(p => {
+      if (p.id === projId) {
+        if (p.conversationIds.includes(convId)) return p
+        return { ...p, conversationIds: [...p.conversationIds, convId] }
+      }
+      if (p.conversationIds.includes(convId)) {
+        return { ...p, conversationIds: p.conversationIds.filter(cid => cid !== convId) }
+      }
+      return p
+    }))
+    // Canonical: move via conversation.projectId
+    saveConversation(updatedConv).catch(() => showError("Couldn't add this conversation to the project."))
+  }, [conversations, showError])
 
   const removeConversationFromProject = useCallback((convId: string, projId: string) => {
-    const proj = projects.find(p => p.id === projId)
-    if (!proj) return
-    const updated = { ...proj, conversationIds: proj.conversationIds.filter(id => id !== convId) }
-    setProjects(prev => prev.map(p => p.id === projId ? updated : p))
-    updateProject(projId, { conversationIds: updated.conversationIds }).catch(() => {
-      showError("Couldn't remove this conversation from the project.")
-    })
-  }, [projects, showError])
+    const conv = conversations.find(c => c.id === convId)
+    if (!conv) return
+    const updatedConv = { ...conv, projectId: null } as Conversation
+    setConversations(prev => prev.map(c => c.id === convId ? updatedConv : c))
+    setProjects(prev => prev.map(p => p.id === projId ? { ...p, conversationIds: p.conversationIds.filter(cid => cid !== convId) } : p))
+    saveConversation(updatedConv).catch(() => showError("Couldn't remove this conversation from the project."))
+  }, [conversations, showError])
 
   const handleCreateProject = useCallback(async (name: string, description?: string, sharedContext?: string) => {
     const p = await createProject({ name, description, sharedContext })
