@@ -291,26 +291,14 @@ class NoviContext:
         if self._orchestrator is None:
             capability_registry = CapabilityRegistry()
             register_builtin_capabilities(capability_registry)
-            # Semantic router — control plane, independent placement (CPU vs GPU)
-            from ..orchestrator.router import WorkloadRouter, OllamaRouterLLM, router_model_from_config, router_placement_from_config
+            # Beta heuristic router — deterministic, no LLM, no llama.cpp
+            from ..orchestrator.router import WorkloadRouter
             from ..orchestrator.conversation_state import ConversationStateStore
             cfg = self.config
-            # Router uses its own Ollama adapter with per-model num_gpu, not SimpleLLM (which is workload-bound)
-            placement = router_placement_from_config(cfg)
-            try:
-                router_llm = OllamaRouterLLM(
-                    model=router_model_from_config(cfg),
-                    base_url=cfg.get("providers", {}).get("ollama", {}).get("url", "http://localhost:11434"),
-                    keep_alive=placement["keep_alive"],
-                    num_gpu=placement["num_gpu"],
-                )
-            except Exception:
-                router_llm = None
-            router = WorkloadRouter(llm=router_llm, config=cfg)
+            router = WorkloadRouter()
             self._orchestrator = Orchestrator(
-                intent_detector=IntentDetector(llm=self.simple_llm, router=router),
                 complexity_estimator=ComplexityEstimator(),
-                evidence_detector=EvidenceDetector(llm=self.simple_llm),
+                evidence_detector=EvidenceDetector(),
                 capability_registry=capability_registry,
                 task_store=TaskStore(),
                 planner_engine=PlannerEngine(),
