@@ -26,6 +26,7 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
   const hardware = discovery.hardware
   const missing = discovery.missingModels
   const workloads = discovery.workloads ?? {}
+  const isUnreachable = discovery.ollamaReachable === false || discovery.status === 'error' || discovery.status === 'degraded'
   // Workload names come from the backend schema + discovery payload — never
   // hardcoded in the frontend.
   const WORKLOADS = workloadsFromDiscovery(discovery, schema)
@@ -98,7 +99,18 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
         </span>
       </div>
 
-      {/* Warnings */}
+      {/* Warnings — honest Ollama status */}
+      {isUnreachable && (
+        <div data-testid="general-ollama-unreachable" className="flex items-center justify-between gap-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
+          <p className="flex items-center gap-2 text-xs text-amber-300">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>
+              Ollama not reachable at {discovery.ollamaUrl ?? 'http://localhost:11434'}
+              {discovery.modelsStale ? ' — showing cached inventory.' : '.'}
+            </span>
+          </p>
+        </div>
+      )}
       {missing.length > 0 && (
         <Warnings missing={missing} installing={installing} onInstall={onInstall} onNavigate={onNavigate} />
       )}

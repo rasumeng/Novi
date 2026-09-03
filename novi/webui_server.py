@@ -1271,6 +1271,27 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         selected_general = (payload["workloads"].get("general") or "").strip()
         payload["vision_capable"] = bool(
             selected_general and model_capabilities(selected_general).supports_vision)
+        # ── Task 2.1 — honest discovery status (additive, never blocks) ──
+        _ollama_reachable = bool(getattr(discovery, "last_reachable", True))
+        _ollama_error = getattr(discovery, "last_error", None)
+        _models_stale = bool(getattr(discovery, "last_models_stale", False))
+        # Fallback: per-record stale flag (when discovery shim not used)
+        if not _models_stale and installed:
+            _models_stale = any(bool(getattr(m, "stale", False)) for m in installed)
+        if _ollama_error is None and not _ollama_reachable:
+            _ollama_error = f"Ollama not reachable at {url}"
+        if _ollama_reachable:
+            status = "ok"
+        elif _models_stale:
+            status = "degraded"
+        else:
+            status = "error"
+        payload["status"] = status
+        payload["ollamaReachable"] = _ollama_reachable
+        payload["ollamaUrl"] = url
+        payload["modelsStale"] = _models_stale
+        if _ollama_error:
+            payload["ollamaError"] = _ollama_error
         return payload
 
     @app.post("/api/models/install")

@@ -77,6 +77,10 @@ class ModelDiscovery:
     def __init__(self, ollama_url: str = "http://localhost:11434", timeout: float = 5.0):
         self.ollama_url = ollama_url
         self._inventory = OllamaRuntimeInventory(ollama_url, timeout)
+        # Honest status fields populated by the last :meth:`installed` call.
+        self.last_error: Optional[str] = None
+        self.last_reachable: bool = True
+        self.last_models_stale: bool = False
 
     def installed(self) -> list[ModelRecord]:
         """Live ``/api/tags`` view, enriched via cached ``/api/show`` detail.
@@ -86,13 +90,52 @@ class ModelDiscovery:
         cached metadata exists, serves the cached installed set flagged
         ``stale=True`` so the UI can surface config-referenced models rather
         than hiding everything.
+
+        Side-effect: populates ``last_reachable`` / ``last_error`` /
+        ``last_models_stale`` for the honest discovery payload.
         """
-        raw_tags = query_ollama_tags(self.ollama_url, self._inventory.timeout)
+        self.last_error = None
+        self.last_reachable = True
+        self.last_models_stale = False
+        raw_tags: list[dict] = []
+        try:
+            raw_tags = query_ollama_tags(self.ollama_url, self._inventory.timeout)
+        except Exception as e:  # pragma: no cover — query_ollama_tags normally swallows
+            raw_tags = []
+            self.last_error = f"{type(e).__name__}: {e}"[:500] if str(e) else type(e).__name__
+            self.last_reachable = False
+
+        # Honest transport error captured by runtime_inventory seam (still additive
+        # when tests monkeypatch query_ollama_tags — we'll synthesize).
         if not raw_tags:
+            # Check monkeypatch-safe stale cache first
             stale = self._records_from_cache()
+            # Try to pick up a real transport error from the HTTP seam
+            try:
+                from .runtime_inventory import _last_tags_error  # type: ignore
+
+                if _last_tags_error:
+                    self.last_error = _last_tags_error
+                    self.last_reachable = False
+            except Exception:
+                pass
             if stale:
+                self.last_models_stale = True
+                if self.last_error is None:
+                    # query_ollama_tags was monkeypatched to [] or swallowed
+                    self.last_reachable = False
+                    self.last_error = f"Ollama not reachable at {self.ollama_url}"
                 log.debug("daemon unreachable; serving stale cached metadata")
                 return stale
+            # No stale: empty is honest failure. Even when daemon is reachable
+            # with 0 models we surface error/degraded rather than silent success
+            # (spec: empty discovery never looks successful). The probe is
+            # intentionally not used when tests monkeypatch query_ollama_tags to
+            # [] because the real daemon may be up in the test env.
+            if self.last_error is None:
+                self.last_reachable = False
+                self.last_error = f"Ollama not reachable at {self.ollama_url}"
+            self.last_models_stale = False
             return []
 
         records: list[ModelRecord] = []
@@ -107,7 +150,21 @@ class ModelDiscovery:
             if detail is not None:
                 record = detail
             record.status = ModelStatus.INSTALLED
+            # Cache-hit inside show_model marks stale True; for the live path
+            # the data is fresh (tags succeeded), so clear stale.
+            record.stale = False
             enriched.append(record)
+        # Success path — clear stale/error
+        self.last_reachable = True
+        self.last_error = None
+        self.last_models_stale = False
+        # Also clear module-level last error on success
+        try:
+            import novi.configuration.runtime_inventory as _ri
+
+            _ri._last_tags_error = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
         return enriched
 
     def show_model(self, name: str) -> Optional[ModelRecord]:

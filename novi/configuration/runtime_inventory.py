@@ -55,6 +55,13 @@ _RUNTIME_CAPABILITY_TOKENS: dict[str, str] = {
 
 # ── HTTP primitives (patchable seam) ────────────────────────────────────
 
+# Last error from the most recent query_ollama_tags call, for honest discovery
+# status. Cleared on success, set on transport failure. Read by
+# configuration.discovery to synthesize ollamaError without breaking the
+# monkeypatch seam (tests that replace query_ollama_tags still synthesize).
+_last_tags_error: Optional[str] = None
+
+
 def _http_get_json(url: str, timeout: float) -> Optional[dict]:
     req = Request(url, headers={"Accept": "application/json"})
     with urlopen(req, timeout=timeout) as resp:
@@ -66,13 +73,18 @@ def query_ollama_tags(url: str = _DEFAULT_OLLAMA_URL, timeout: float = 5.0) -> l
     """Fetch ``/api/tags`` and return the raw ``models`` list.
 
     Returns ``[]`` on any failure (daemon down, bad response) — never raises.
+    Side-effect: updates :data:`_last_tags_error` for honest status reporting.
     """
+    global _last_tags_error
     try:
         payload = _http_get_json(f"{url.rstrip('/')}/api/tags", timeout)
-    except Exception:
+    except Exception as e:
+        _last_tags_error = f"{type(e).__name__}: {e}"[:500] if str(e) else type(e).__name__
         return []
     if not payload or not isinstance(payload.get("models"), list):
+        _last_tags_error = None
         return []
+    _last_tags_error = None
     return payload["models"]
 
 

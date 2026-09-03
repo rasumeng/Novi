@@ -28,6 +28,7 @@ export function useFrameworkSettings() {
   const { showError } = useToast()
   const [schema, setSchema] = useState<SchemaResponse | null>(null)
   const [discovery, setDiscovery] = useState<DiscoveryPayload | null>(null)
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null)
   const [values, setValues] = useState<SettingValues>({})
   const [loading, setLoading] = useState(true)
   const [installs, setInstalls] = useState<Record<string, { phase: string; pct: number | null }>>({})
@@ -38,6 +39,7 @@ export function useFrameworkSettings() {
       const [sch, disc, cfg] = await Promise.all([fetchSchema(), fetchDiscovery(), fetchFrameworkConfig()])
       setSchema(sch)
       setDiscovery(disc)
+      setDiscoveryError(disc.ollamaError ?? (disc.status === 'error' || disc.status === 'degraded' ? `Ollama not reachable at ${disc.ollamaUrl ?? 'http://localhost:11434'}` : null))
       const v: SettingValues = {}
       for (const s of sch.settings) {
         const cur = readPath(cfg as unknown as Record<string, unknown>, s.id)
@@ -101,6 +103,7 @@ export function useFrameworkSettings() {
   const refreshDiscovery = useCallback(async () => {
     const disc = await fetchDiscovery()
     setDiscovery(disc)
+    setDiscoveryError(disc.ollamaError ?? (disc.status === 'error' || disc.status === 'degraded' ? `Ollama not reachable at ${disc.ollamaUrl ?? 'http://localhost:11434'}` : null))
   }, [])
 
   // Background refresh after a selection save. fetchDiscovery returns an
@@ -109,6 +112,7 @@ export function useFrameworkSettings() {
   // like the fallback (all empty) while the saved selection is non-empty.
   const refreshDiscoveryPreserving = useCallback(async (preserve?: Record<string, string>) => {
     const disc = await fetchDiscovery()
+    setDiscoveryError(disc.ollamaError ?? (disc.status === 'error' || disc.status === 'degraded' ? `Ollama not reachable at ${disc.ollamaUrl ?? 'http://localhost:11434'}` : null))
     setDiscovery((d) => {
       if (!d) return disc
       const payloadEmpty = Object.values(disc.workloads ?? {}).every(v => !v)
@@ -217,6 +221,7 @@ export function useFrameworkSettings() {
     schema,
     values,
     discovery,
+    discoveryError,
     settingsByCategory,
     loading,
     installs,

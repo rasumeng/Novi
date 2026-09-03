@@ -118,10 +118,38 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
   const anyRecommended = recs.length > 0
   const provisional = discovery.recommended?.provisional ?? false
 
+  const isUnreachable = discovery.ollamaReachable === false || discovery.status === 'error' || discovery.status === 'degraded'
+  const ollamaUrl = discovery.ollamaUrl ?? 'http://localhost:11434'
+  const ollamaError = discovery.ollamaError ?? (isUnreachable ? `Ollama not reachable at ${ollamaUrl}` : null)
+
   return (
     <div className="space-y-8">
       {/* 0. Hardware — reference context for every decision below, not a recommendation itself */}
       <HardwareBar hardware={discovery.hardware} provisional={provisional} onRefresh={refresh} refreshing={refreshing} />
+
+      {/* Task 2.1 — honest Ollama discovery failure banner */}
+      {isUnreachable && (
+        <div data-testid="ollama-unreachable-banner" className="flex items-center justify-between gap-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
+          <p className="flex items-center gap-2 text-xs text-amber-300">
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>
+              {discovery.modelsStale
+                ? `Ollama not reachable at ${ollamaUrl} — showing cached inventory.`
+                : `Ollama not reachable at ${ollamaUrl}.`}
+              {ollamaError && ollamaError !== `Ollama not reachable at ${ollamaUrl}` && (
+                <span className="text-amber-200/80"> {ollamaError}</span>
+              )}
+            </span>
+          </p>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors disabled:opacity-50 shrink-0"
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Retry
+          </button>
+        </div>
+      )}
 
       {stateError && (
         <div className="flex items-center gap-2 p-3 rounded-xl border border-err/30 bg-err/5">
@@ -228,7 +256,11 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
           ))}
           {rows.length === 0 && (
             <p className="text-xs text-base-500 py-6 text-center">
-              {query ? `No models match "${query}".` : 'No models detected. Install one below.'}
+              {query
+                ? `No models match "${query}".`
+                : isUnreachable
+                  ? 'Start Ollama or check Providers → Ollama URL'
+                  : 'No models detected. Install one below.'}
             </p>
           )}
         </div>

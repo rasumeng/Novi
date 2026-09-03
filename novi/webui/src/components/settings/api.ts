@@ -149,6 +149,12 @@ export interface DiscoveryPayload {
   workload_capabilities?: Record<string, WorkloadCaps>
   capabilityStates?: Record<string, Record<string, string>>
   modelCapabilityStates?: Record<string, Record<string, string>>
+  // Task 2.1 — honest Ollama discovery status (additive)
+  status?: 'ok' | 'degraded' | 'error'
+  ollamaReachable?: boolean
+  ollamaUrl?: string
+  ollamaError?: string
+  modelsStale?: boolean
 }
 
 export async function fetchSchema(): Promise<SchemaResponse> {
@@ -164,7 +170,10 @@ export async function fetchFrameworkConfig(): Promise<Record<string, unknown>> {
 export async function fetchDiscovery(): Promise<DiscoveryPayload> {
   try {
     const r = await fetch(`${API_BASE}/api/models/discovery`)
-    if (r.ok) return r.json()
+    if (r.ok) {
+      const data = await r.json()
+      return data as DiscoveryPayload
+    }
   } catch {}
   return {
     hardware: { ramGb: 0, gpu: { name: '', vramTotalGb: null, vendor: '' }, confidence: 'unknown' },
@@ -176,6 +185,11 @@ export async function fetchDiscovery(): Promise<DiscoveryPayload> {
     recommended: { workloads: {}, provisional: true },
     vision_capable: false,
     workload_capabilities: {},
+    status: 'error',
+    ollamaReachable: false,
+    ollamaUrl: 'http://localhost:11434',
+    ollamaError: 'Failed to reach Novi backend',
+    modelsStale: false,
   }
 }
 
