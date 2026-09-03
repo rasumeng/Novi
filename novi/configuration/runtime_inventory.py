@@ -42,12 +42,14 @@ _DEFAULT_OLLAMA_URL = "http://localhost:11434"
 # A token is only mapped when its meaning is identical to ours; anything
 # unrecognized stays in ``record.metadata["runtime_capabilities"]`` raw.
 # Reasoning is canonical; Thinking is UI label. Audio is strictly model-derived.
+# ``speech`` is an alias some Ollama variants report for audio.
 _RUNTIME_CAPABILITY_TOKENS: dict[str, str] = {
     "tools": "tools",
     "vision": "vision",
     "embedding": "embeddings",
     "reasoning": "reasoning",
     "audio": "audio",
+    "speech": "audio",
 }
 
 

@@ -950,9 +950,9 @@ function CapabilityEvidenceList({ evidence }: { evidence?: CapabilityEvidence[] 
               — {sourceLabel}
             </span>
             {isNameInference && <span className="text-base-500 italic">(weak)</span>}
-            {e.supported === false && <span className="text-red-400">not supported</span>}
+            {e.supported === false && <span className="text-red-400">Verified unsupported</span>}
             {(e.supported === null || e.supported === undefined) && (
-              <span className="text-amber-400">Unknown</span>
+              <span className="text-amber-400">Unknown — not yet verified (tap Rescan)</span>
             )}
           </p>
         )

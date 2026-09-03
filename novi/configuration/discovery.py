@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from .model_records import ModelRecord, ModelStatus
+from .model_records import CapabilityState, ModelRecord, ModelStatus
 from .metadata_cache import ModelMetadataCache
 from .runtime_inventory import (
     OllamaRuntimeInventory,
@@ -132,6 +132,65 @@ class ModelDiscovery:
 
     def installed_map(self) -> dict[str, ModelRecord]:
         return {m.name: m for m in self.installed() if m.name}
+
+    def verify_capabilities(self, name: str, caps: set[str]) -> dict[str, CapabilityState]:
+        """Tri-state live verification for ``caps`` on ``name``.
+
+        Flow: deterministic check (seed+cache) first; for remaining ``UNKNOWN``
+        caps, attempt a single bounded live ``/api/show`` fetch (timeout 3 s),
+        cache on success, and derive authoritative states. Failures map to
+        ``VERIFICATION_FAILED`` — never ``UNSUPPORTED`` for unknown.
+
+        ``caps`` values use Novi capability names (``vision``/``audio``/``tools`` …).
+        ``thinking`` is normalized to ``reasoning``.
+        """
+        from .runtime_inventory import _RUNTIME_CAPABILITY_TOKENS
+
+        # Lazy import to avoid circular import at module load.
+        from ..runtime.model_selector import model_capability_state
+
+        normalized = {c if c != "thinking" else "reasoning" for c in caps}
+        result: dict[str, CapabilityState] = {}
+        unknown: set[str] = set()
+        for cap in normalized:
+            state = model_capability_state(name, cap)
+            if state != CapabilityState.UNKNOWN:
+                result[cap] = state
+            else:
+                unknown.add(cap)
+        if not unknown:
+            return result
+
+        # Single live fetch for all remaining unknown caps
+        payload = None
+        try:
+            # Use a bounded timeout (3 s) regardless of discovery timeout
+            payload = query_ollama_show(self.ollama_url, name, timeout=3.0)
+        except Exception:
+            payload = None
+
+        if payload is not None and isinstance(payload, dict):
+            _CACHE.set(self.ollama_url, name, payload)
+            tokens = payload.get("capabilities")
+            mapped: set[str] = set()
+            if isinstance(tokens, list):
+                for t in tokens:
+                    if isinstance(t, str):
+                        m = _RUNTIME_CAPABILITY_TOKENS.get(t)
+                        if m:
+                            mapped.add(m)
+            for cap in unknown:
+                if cap in mapped:
+                    result[cap] = CapabilityState.SUPPORTED
+                else:
+                    # Live payload authoritative: absence => unsupported
+                    result[cap] = CapabilityState.UNSUPPORTED
+            return result
+
+        # Live failed (404/timeout/network): verification_failed for all remaining unknown
+        for cap in unknown:
+            result[cap] = CapabilityState.VERIFICATION_FAILED
+        return result
 
     # -- internals ----------------------------------------------------------
 

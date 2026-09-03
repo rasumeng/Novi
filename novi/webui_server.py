@@ -1226,6 +1226,18 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             w: _caps_for(payload["workloads"].get(w, "") or "")
             for w in payload["workloads"]
         }
+        # Tri-state capability states per workload model (additive, shared helper).
+        from .runtime.model_selector import model_capability_state
+        _caps_list = ("vision", "audio", "tools", "reasoning", "coding")
+        payload["capabilityStates"] = {
+            w: {cap: model_capability_state((payload["workloads"].get(w, "") or "").strip(), cap).value for cap in _caps_list}
+            for w in payload["workloads"]
+        }
+        # Per-model capability states for library rows (authoritative, not name heuristics).
+        payload["modelCapabilityStates"] = {
+            m["name"]: {cap: model_capability_state(m["name"], cap).value for cap in _caps_list}
+            for m in payload["models"] if m.get("name")
+        }
         # backward compat single flag
         selected_general = (payload["workloads"].get("general") or "").strip()
         payload["vision_capable"] = bool(

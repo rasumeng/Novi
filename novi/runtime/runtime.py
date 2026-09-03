@@ -234,7 +234,16 @@ class NoviRuntime:
         # Phase 2: ModelSelector resolves the configured workload model
         # verbatim at execution time — no default_model, no ranking, no
         # substitution, no resource/VRAM preference.
-        self._model_selector = ModelSelector(self.model_service)
+        _ollama_url = (rt.get("ollama", {}) or {}).get("url") or (self.cfg.get("ollama", {}) or {}).get("url") or "http://localhost:11434"
+        # Also support flat key from configuration framework
+        if _ollama_url == "http://localhost:11434":
+            try:
+                _flat = self.cfg.get("ollama.url")
+                if isinstance(_flat, str) and _flat:
+                    _ollama_url = _flat
+            except Exception:
+                pass
+        self._model_selector = ModelSelector(self.model_service, ollama_url=_ollama_url)
         self.force_capability = rt.get("force_capability", "") or ""
         self.force_model = rt.get("force_model", "") or ""
         if self.force_capability:
@@ -607,31 +616,76 @@ class NoviRuntime:
                 ctx.model_supports_tools = False
 
             # Capability validation on the SELECTED model: reject explicitly — never substitute.
-            # All checks are strictly model-derived; audio never inferred from tools.
+            # Tri-state: supported/unsupported/unknown/verification_failed. Unknown never
+            # blocks as unsupported; live /api/show fallback (3s, cached) is authoritative.
+            # Safe-attempt policy: unknown/verification_failed allows with trace notice.
             has_audio = any(
                 (a.get("mime") or "").startswith("audio/")
                 for a in (ctx.attachments or [])
             )
             if ctx.has_images or has_audio:
-                caps = model_capabilities(ctx.model_name)
-                if ctx.has_images and not caps.supports_vision:
-                    msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
-                           f"does not support image input. Select a vision-capable "
-                           f"model for the {ctx.workload} workload.")
-                    self.tracer.finalize(ctx.trace, "error")
-                    yield ("status", f"Model unavailable: {msg}")
-                    yield ("error", msg)
-                    yield (_LOOP_DONE, msg, "error", False)
-                    return
-                if has_audio and not caps.supports_audio:
-                    msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
-                           f"does not support audio input. Select an audio-capable "
-                           f"model for the {ctx.workload} workload.")
-                    self.tracer.finalize(ctx.trace, "error")
-                    yield ("status", f"Model unavailable: {msg}")
-                    yield ("error", msg)
-                    yield (_LOOP_DONE, msg, "error", False)
-                    return
+                from ..configuration.model_records import CapabilityState
+                from .model_selector import model_capability_state
+
+                def _verify_capability(cap: str) -> CapabilityState:
+                    st = model_capability_state(ctx.model_name, cap)
+                    if st != CapabilityState.UNKNOWN:
+                        return st
+                    try:
+                        from ..configuration.discovery import ModelDiscovery
+                        # Use selector's ollama_url (bounded 3s inside verify)
+                        disc = ModelDiscovery(self._model_selector.ollama_url, timeout=3.0)
+                        per = disc.verify_capabilities(ctx.model_name, {cap})
+                        return per.get(cap, CapabilityState.VERIFICATION_FAILED)
+                    except Exception:
+                        return CapabilityState.VERIFICATION_FAILED
+
+                if ctx.has_images:
+                    state = _verify_capability("vision")
+                    if state == CapabilityState.UNSUPPORTED:
+                        msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
+                               f"does not support image input. Select a vision-capable "
+                               f"model for the {ctx.workload} workload.")
+                        self.tracer.finalize(ctx.trace, "error")
+                        yield ("status", f"Model unavailable: {msg}")
+                        yield ("error", msg)
+                        yield (_LOOP_DONE, msg, "error", False)
+                        return
+                    elif state in (CapabilityState.UNKNOWN, CapabilityState.VERIFICATION_FAILED):
+                        # Safe-attempt: allow but surface unverified trace
+                        evt = self.tracer.emit(
+                            action=TraceAction.UNDERSTANDING,
+                            category="capability",
+                            summary=f"capability_unverified: vision for '{ctx.model_name}' ({state.value}) — attempting anyway",
+                            trace=ctx.trace,
+                            debug_category="capability",
+                            debug_data={"model": ctx.model_name, "capability": "vision", "state": state.value},
+                        )
+                        yield ("trace", evt)
+                        yield ("status", "Capability not verified — attempting anyway (vision)")
+
+                if has_audio:
+                    state = _verify_capability("audio")
+                    if state == CapabilityState.UNSUPPORTED:
+                        msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
+                               f"does not support audio input. Select an audio-capable "
+                               f"model for the {ctx.workload} workload.")
+                        self.tracer.finalize(ctx.trace, "error")
+                        yield ("status", f"Model unavailable: {msg}")
+                        yield ("error", msg)
+                        yield (_LOOP_DONE, msg, "error", False)
+                        return
+                    elif state in (CapabilityState.UNKNOWN, CapabilityState.VERIFICATION_FAILED):
+                        evt = self.tracer.emit(
+                            action=TraceAction.UNDERSTANDING,
+                            category="capability",
+                            summary=f"capability_unverified: audio for '{ctx.model_name}' ({state.value}) — attempting anyway",
+                            trace=ctx.trace,
+                            debug_category="capability",
+                            debug_data={"model": ctx.model_name, "capability": "audio", "state": state.value},
+                        )
+                        yield ("trace", evt)
+                        yield ("status", "Capability not verified — attempting anyway (audio)")
 
             ctx.trace.model_selected = ctx.model_name
             ctx.trace.workload = ctx.workload

@@ -24,6 +24,7 @@ from typing import Optional
 
 from ..configuration.resolver import WORKLOADS
 from ..models import ModelUnavailableError
+from ..configuration.model_records import CapabilityState
 
 log = logging.getLogger("novi.model_selector")
 
@@ -59,6 +60,53 @@ class ModelCapabilities:
             "coding": self.supports_coding,
             "capabilities": sorted(self.capabilities),
         }
+
+
+def _normalize_capability(cap: str) -> str:
+    """Thinking is UI alias for reasoning."""
+    if cap == "thinking":
+        return "reasoning"
+    return cap
+
+
+def model_capability_state(model_name: str, capability: str) -> CapabilityState:
+    """Tri-state capability answer for ``model_name`` / ``capability``.
+
+    Authoritative-only, deterministic, never triggers network. Uses curated
+    seed facts plus measured cached ``/api/show`` tokens. Unknown models with
+    no seed and no cached runtime entry return ``UNKNOWN`` (never ``UNSUPPORTED``).
+    """
+    cap = _normalize_capability(capability)
+    from ..configuration.model_seeds import SEED_MODEL_FACTS
+    from ..configuration.discovery import cached_runtime_capabilities, _CACHE
+
+    fact = SEED_MODEL_FACTS.get(model_name)
+    cached_caps = set(cached_runtime_capabilities(model_name))
+    # Detect whether any non-expired cache entry exists for this model
+    has_cached_entry = False
+    for (url, cached_name) in list(_CACHE._entries):
+        if cached_name == model_name and _CACHE.get(url, cached_name) is not None:
+            has_cached_entry = True
+            break
+
+    if fact is not None:
+        caps = set(fact.capabilities)
+        if getattr(fact, "supports_audio", False):
+            caps.add("audio")
+        if getattr(fact, "supports_tools", False):
+            caps.add("tools")
+        if getattr(fact, "supports_vision", False):
+            caps.add("vision")
+        caps |= cached_caps
+        if cap in caps:
+            return CapabilityState.SUPPORTED
+        return CapabilityState.UNSUPPORTED
+    # Unknown seed
+    if cap in cached_caps:
+        return CapabilityState.SUPPORTED
+    if has_cached_entry:
+        return CapabilityState.UNSUPPORTED
+    return CapabilityState.UNKNOWN
 
 
 def model_capabilities(model_name: str) -> ModelCapabilities:
@@ -100,8 +148,9 @@ def model_capabilities(model_name: str) -> ModelCapabilities:
 class ModelSelector:
     """Strict workload → model resolver. Never substitutes, ranks, or falls back."""
 
-    def __init__(self, model_service=None):
+    def __init__(self, model_service=None, ollama_url: str = "http://localhost:11434"):
         self.model_service = model_service
+        self.ollama_url = ollama_url
 
     def resolve(self, workload: str) -> str:
         """Return the configured model for ``workload``.
@@ -118,6 +167,29 @@ class ModelSelector:
         if not model_name:
             raise ModelUnavailableError(workload, None, [])
         return model_name
+
+    def capability_state(self, model_name: str, capability: str) -> CapabilityState:
+        """Tri-state state for a specific model/capability (deterministic, no network)."""
+        return model_capability_state(model_name, _normalize_capability(capability))
+
+    def verify(self, model_name: str, capability: str, timeout: float = 3.0) -> CapabilityState:
+        """Live verification: deterministic check, then bounded live ``/api/show`` fallback.
+
+        Safe to call from runtime validation. Caches successful live payloads.
+        Returns ``VERIFICATION_FAILED`` when live fetch fails for an unknown cap.
+        """
+        cap = _normalize_capability(capability)
+        state = model_capability_state(model_name, cap)
+        if state != CapabilityState.UNKNOWN:
+            return state
+        # Unknown -> attempt live verification once
+        try:
+            from ..configuration.discovery import ModelDiscovery
+            discovery = ModelDiscovery(self.ollama_url, timeout=timeout)
+            per = discovery.verify_capabilities(model_name, {cap})
+            return per.get(cap, CapabilityState.VERIFICATION_FAILED)
+        except Exception:
+            return CapabilityState.VERIFICATION_FAILED
 
     def capabilities(self, workload: str) -> ModelCapabilities:
         """Capability facts of the selected model. Detection only; advisory."""

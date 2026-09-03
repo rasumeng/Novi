@@ -147,6 +147,8 @@ export interface DiscoveryPayload {
   recommended: RecommendationsPayload
   vision_capable: boolean
   workload_capabilities?: Record<string, WorkloadCaps>
+  capabilityStates?: Record<string, Record<string, string>>
+  modelCapabilityStates?: Record<string, Record<string, string>>
 }
 
 export async function fetchSchema(): Promise<SchemaResponse> {

@@ -55,6 +55,22 @@ class ModelIdentity:
         }
 
 
+class CapabilityState(str, Enum):
+    """Tri-state capability verification result shared UI+runtime.
+
+    * ``SUPPORTED`` — evidence confirms the model supports the capability.
+    * ``UNSUPPORTED`` — evidence confirms it does NOT support it.
+    * ``UNKNOWN`` — no evidence either way (cold/uncached unknown model).
+    * ``VERIFICATION_FAILED`` — live ``/api/show`` verification was attempted
+      but failed (network/404/timeout). Never treated as ``UNSUPPORTED``.
+    """
+
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    UNKNOWN = "unknown"
+    VERIFICATION_FAILED = "verification_failed"
+
+
 @dataclass
 class CapabilityEvidence:
     """A single capability claim with provenance.
@@ -79,6 +95,23 @@ class CapabilityEvidence:
             "confidence": self.confidence,
             "note": self.note,
         }
+
+
+def capability_state_for_record(record: Optional["ModelRecord"], capability: str) -> CapabilityState:
+    """Shared helper: map a :class:`ModelRecord` to :class:`CapabilityState`.
+
+    Never uses name heuristics — only ``record`` evidence/flags. Returns
+    ``UNKNOWN`` when there is no evidence either way; ``VERIFICATION_FAILED``
+    is only produced by the live-verify path, never here.
+    """
+    if record is None:
+        return CapabilityState.UNKNOWN
+    val = record.capability_support(capability)
+    if val is True:
+        return CapabilityState.SUPPORTED
+    if val is False:
+        return CapabilityState.UNSUPPORTED
+    return CapabilityState.UNKNOWN
 
 
 @dataclass
