@@ -20,6 +20,8 @@ export interface RuntimeConfig {
   memory_distance_threshold?: number
   max_memory_results?: number
   max_project_results?: number
+  temperature?: number
+  /** @deprecated legacy split — migrated to runtime.temperature */
   temperatures?: Record<string, number>
   tool_gate?: Record<string, string[]>
 }

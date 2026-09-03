@@ -97,20 +97,48 @@ class OllamaProvider(LLMProvider):
         key = round(float(temperature), 2)
         if key not in self._clients:
             reasoning = self.cfg.get("reasoning", False)
+            max_tokens = self._resolve_max_tokens()
+            kwargs: dict = dict(
+                model=self.model_name,
+                base_url=self.base_url,
+                temperature=key,
+                reasoning=reasoning,
+            )
+            if max_tokens is not None:
+                kwargs["num_predict"] = max_tokens
             try:
-                self._clients[key] = ChatOllama(
-                    model=self.model_name,
-                    base_url=self.base_url,
-                    temperature=key,
-                    reasoning=reasoning,
-                )
+                self._clients[key] = ChatOllama(**kwargs)
             except Exception:
-                self._clients[key] = ChatOllama(
-                    model=self.model_name,
-                    base_url=self.base_url,
-                    temperature=key,
-                )
+                # Fallback without num_predict if provider rejects it
+                kwargs.pop("num_predict", None)
+                try:
+                    self._clients[key] = ChatOllama(
+                        model=self.model_name,
+                        base_url=self.base_url,
+                        temperature=key,
+                    )
+                except Exception:
+                    self._clients[key] = ChatOllama(
+                        model=self.model_name,
+                        base_url=self.base_url,
+                        temperature=key,
+                    )
         return self._clients[key]
+
+    def _resolve_max_tokens(self) -> int | None:
+        """Read llm.max_tokens from the framework if present."""
+        try:
+            from ..configuration.bootstrap import get_configuration
+            mt = get_configuration().get("llm.max_tokens", None)
+            if isinstance(mt, int) and mt > 0:
+                return mt
+        except Exception:
+            pass
+        # Fallback: check provider-local config (e.g. tests)
+        mt = self.cfg.get("max_tokens")
+        if isinstance(mt, int) and mt > 0:
+            return mt
+        return None
 
     def list_models(self) -> list[ModelInfo]:
         import json
@@ -147,8 +175,25 @@ class OpenAIProvider(LLMProvider):
             )
             if self.base_url:
                 kwargs["base_url"] = self.base_url
+            max_tokens = self._resolve_max_tokens()
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             self._clients[key] = ChatOpenAI(**kwargs)
         return self._clients[key]
+
+    def _resolve_max_tokens(self) -> int | None:
+        """Read llm.max_tokens from the framework if present."""
+        try:
+            from ..configuration.bootstrap import get_configuration
+            mt = get_configuration().get("llm.max_tokens", None)
+            if isinstance(mt, int) and mt > 0:
+                return mt
+        except Exception:
+            pass
+        mt = self.cfg.get("max_tokens")
+        if isinstance(mt, int) and mt > 0:
+            return mt
+        return None
 
     def list_models(self) -> list[ModelInfo]:
         return [ModelInfo(name=self.model_name, provider="openai")]

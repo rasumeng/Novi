@@ -76,6 +76,7 @@ def register_defaults(reg: ConfigRegistry):
                 owner="memory",
                 type=SettingType.MODEL,
                 default="",
+                visibility=Visibility.DEVELOPER,
             ),
             Setting(
                 id="embedding.backend",
@@ -186,12 +187,13 @@ def register_defaults(reg: ConfigRegistry):
                 visibility=Visibility.ADVANCED,
             ),
             Setting(
-                id="runtime.temperatures.chat",
-                label="Chat temperature",
+                id="runtime.temperature",
+                label="Temperature",
+                description="Model temperature (lower = more deterministic, higher = more creative).",
                 category=Category.DEVELOPER,
                 owner="runtime",
                 type=SettingType.FLOAT,
-                default=0.6,
+                default=0.4,
                 visibility=Visibility.ADVANCED,
             ),
         ],
@@ -416,7 +418,7 @@ def register_defaults(reg: ConfigRegistry):
                 owner="runtime",
                 type=SettingType.MODEL,
                 default="",
-                visibility=Visibility.USER,
+                visibility=Visibility.HIDDEN,
             ),
         ],
     ))

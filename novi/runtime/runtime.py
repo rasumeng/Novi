@@ -194,7 +194,16 @@ class NoviRuntime:
         self.memory_distance_threshold = rt.get("memory_distance_threshold", 0.5)
         self.max_memory_results = rt.get("max_memory_results", 3)
         self.max_project_results = rt.get("max_project_results", 3)
-        self.temperature = rt.get("temperature", 0.4)
+        # Canonical: runtime.temperature (flat). Legacy runtime.temperatures.chat
+        # is migrated at load time but handle stale nested dict for old snapshots.
+        _temp = rt.get("temperature", None)
+        if _temp is None:
+            _temps = rt.get("temperatures", {})
+            if isinstance(_temps, dict):
+                _temp = _temps.get("chat", 0.4)
+            else:
+                _temp = 0.4
+        self.temperature = float(_temp) if _temp is not None else 0.4
         self._perms = PermissionResolver(self.cfg)
         self._perm_mode = "manual"
         self.tracer = RuntimeTracer(event_bus, debug_trace)

@@ -45,6 +45,7 @@ _LEGACY_MODEL_KEYS = {"chat", "coder", "research", "max_tokens"}
 def migrate(data: dict) -> dict:
     """Migrate a loaded config dict in place (does not write). Idempotent."""
     _migrate_workloads(data)
+    _migrate_runtime_temperature(data)
     _drop_legacy_backcompat(data)
     return data
 
@@ -142,3 +143,36 @@ def _drop_legacy_backcompat(cfg: dict):
         if not models:
             cfg.pop("models", None)
     log.info("dropped legacy model config keys (roles/mode/custom/experience/lightweight_mode)")
+
+
+def _migrate_runtime_temperature(cfg: dict):
+    """Collapse legacy runtime.temperatures.* into runtime.temperature.
+
+    Historical config stored per-workload temperatures under
+    ``runtime.temperatures.{chat,work,research}`` but the runtime only reads
+    ``runtime.temperature`` (flat). Preserve the most relevant legacy value
+    (``temperatures.chat``) as ``temperature`` when no explicit flat value
+    exists, then drop the stale nested dict.
+    """
+    runtime = cfg.get("runtime")
+    if not isinstance(runtime, dict):
+        return
+    if "temperature" in runtime:
+        # New canonical already present — drop stale split.
+        runtime.pop("temperatures", None)
+        return
+    temps = runtime.get("temperatures")
+    if isinstance(temps, dict):
+        # Prefer chat, fall back to any available, else default 0.4.
+        picked = temps.get("chat")
+        if picked is None:
+            for v in temps.values():
+                if isinstance(v, (int, float)):
+                    picked = v
+                    break
+        if isinstance(picked, (int, float)):
+            runtime["temperature"] = float(picked)
+        # Always drop legacy split after migration.
+        runtime.pop("temperatures", None)
+        if "temperature" in runtime:
+            log.info("migrated runtime.temperatures -> runtime.temperature")
