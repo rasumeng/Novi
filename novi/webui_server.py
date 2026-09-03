@@ -38,6 +38,7 @@ events are marshalled back onto the event loop through an asyncio.Queue.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import uuid
@@ -96,6 +97,13 @@ def _memory_items_to_dicts(result) -> list[dict]:
 # Each session gets a cheap per-session NoviRuntime that references it.
 _shared_backend: dict | None = None
 _backend_lock = threading.Lock()
+
+# Task 1.3 — conversation persistence safety: single RLock guards
+# _conversations_idx + _save_idx + md write pairs. Projects have a
+# separate lock (same atomic pattern) so Task 1.4 can reason independently.
+_CONVERSATIONS_LOCK = threading.RLock()
+_PROJECTS_LOCK = threading.RLock()
+_PERSIST_LOGGER = logging.getLogger("novi.webui_server.persistence")
 
 # Background agent runs (run_id -> run info + thread).
 _background_runs: dict[str, dict] = {}
@@ -689,6 +697,17 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     CHATS_DIR.mkdir(parents=True, exist_ok=True)
 
+    def _atomic_write_text(path: Path, data: str) -> None:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(data, "utf-8")
+        tmp.replace(path)
+
+    def _escape_body(text: str) -> str:
+        return re.sub(r'^## ', r'\#\# ', text, flags=re.MULTILINE)
+
+    def _unescape_body(text: str) -> str:
+        return re.sub(r'^\\#\\# ', '## ', text, flags=re.MULTILINE)
+
     def _conversations_idx():
         idx = CHATS_DIR / "index.json"
         if idx.exists():
@@ -699,7 +718,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         return {"conversations": []}
 
     def _save_idx(idx: dict):
-        (CHATS_DIR / "index.json").write_text(json.dumps(idx, indent=2), "utf-8")
+        _atomic_write_text(CHATS_DIR / "index.json", json.dumps(idx, indent=2))
 
     def _conv_to_file(conv: dict):
         title = conv.get("title", "Untitled")
@@ -707,7 +726,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         for m in conv.get("messages", []):
             role = "User" if m.get("role") == "user" else "Novi"
             lines.append(f"## {role}")
-            lines.append(m.get("content", ""))
+            lines.append(_escape_body(m.get("content", "")))
             model = m.get("model")
             if model:
                 lines.append(f"@model {model}")
@@ -720,17 +739,26 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     @app.get("/api/conversations")
     def get_conversations():
         idx = _conversations_idx()
-        return [
-            {
-                "id": c["id"],
-                "title": c["title"],
-                "updatedAt": c.get("updatedAt", ""),
-                "pinned": c.get("pinned", False),
-                "projectId": c.get("projectId"),
-                "messages": _load_messages(c["id"]),
-            }
-            for c in idx.get("conversations", [])
-        ]
+        out = []
+        for c in idx.get("conversations", []):
+            try:
+                md_path = _safe_child(CHATS_DIR, c["id"], ".md")
+            except ValueError:
+                _PERSIST_LOGGER.warning("conversation index entry has invalid id %r", c.get("id"))
+                continue
+            if not md_path.exists():
+                _PERSIST_LOGGER.warning("conversation %s indexed but .md missing", c["id"])
+            out.append(
+                {
+                    "id": c["id"],
+                    "title": c["title"],
+                    "updatedAt": c.get("updatedAt", ""),
+                    "pinned": c.get("pinned", False),
+                    "projectId": c.get("projectId"),
+                    "messages": _load_messages(c["id"]),
+                }
+            )
+        return out
 
     def _load_messages(conv_id: str) -> list:
         try:
@@ -773,8 +801,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 model = l[len("@model "):].strip()
             else:
                 clean.append(l)
+        content = _unescape_body("\n".join(clean).strip())
         msg = {"role": role,
-               "content": "\n".join(clean).strip(),
+               "content": content,
                "id": f"{conv_id}-{idx}",
                "createdAt": ""}
         if atts:
@@ -801,33 +830,31 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             return JSONResponse({"error": "invalid id"}, status_code=400)
 
         ts = datetime.now(timezone.utc).isoformat()
-        idx = _conversations_idx()
+        with _CONVERSATIONS_LOCK:
+            idx = _conversations_idx()
 
-        existing = [c for c in idx["conversations"] if c["id"] == conv_id]
-        if existing:
-            entry = existing[0]
-            entry["title"] = title
-            entry["pinned"] = pinned
-            entry["updatedAt"] = ts
-            if project_id is not None:
-                entry["projectId"] = project_id
-        else:
-            entry = {
-                "id": conv_id,
-                "title": title,
-                "pinned": pinned,
-                "projectId": project_id,
-                "createdAt": ts,
-                "updatedAt": ts,
-            }
-            idx["conversations"].insert(0, entry)
+            existing = [c for c in idx["conversations"] if c["id"] == conv_id]
+            if existing:
+                entry = existing[0]
+                entry["title"] = title
+                entry["pinned"] = pinned
+                entry["updatedAt"] = ts
+                if project_id is not None:
+                    entry["projectId"] = project_id
+            else:
+                entry = {
+                    "id": conv_id,
+                    "title": title,
+                    "pinned": pinned,
+                    "projectId": project_id,
+                    "createdAt": ts,
+                    "updatedAt": ts,
+                }
+                idx["conversations"].insert(0, entry)
 
-        _save_idx(idx)
-        # write .md file
-        md_path.write_text(
-            _conv_to_file({"title": title, "messages": messages}),
-            "utf-8",
-        )
+            # Atomic order: .md first, then index — crash never leaves orphan index
+            _atomic_write_text(md_path, _conv_to_file({"title": title, "messages": messages}))
+            _save_idx(idx)
         return {"ok": True}
 
     @app.get("/api/conversations/search")
@@ -856,27 +883,29 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.delete("/api/conversations/{conv_id}")
     def delete_conversation(conv_id: str):
-        idx = _conversations_idx()
-        idx["conversations"] = [c for c in idx["conversations"] if c["id"] != conv_id]
-        _save_idx(idx)
-        # prune from projects conversationIds
-        try:
-            p_idx = _projects_idx()
-            changed = False
-            for p in p_idx.get("projects", []):
-                if conv_id in p.get("conversationIds", []):
-                    p["conversationIds"] = [cid for cid in p["conversationIds"] if cid != conv_id]
-                    p["updatedAt"] = datetime.now(timezone.utc).isoformat()
-                    changed = True
-            if changed:
-                _save_projects_idx(p_idx)
-        except Exception:
-            pass
         try:
             md_path = _safe_child(CHATS_DIR, conv_id, ".md")
         except ValueError:
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": "invalid id"}, status_code=400)
+        with _CONVERSATIONS_LOCK:
+            idx = _conversations_idx()
+            idx["conversations"] = [c for c in idx["conversations"] if c["id"] != conv_id]
+            _save_idx(idx)
+        # prune from projects conversationIds
+        try:
+            with _PROJECTS_LOCK:
+                p_idx = _projects_idx()
+                changed = False
+                for p in p_idx.get("projects", []):
+                    if conv_id in p.get("conversationIds", []):
+                        p["conversationIds"] = [cid for cid in p["conversationIds"] if cid != conv_id]
+                        p["updatedAt"] = datetime.now(timezone.utc).isoformat()
+                        changed = True
+                if changed:
+                    _save_projects_idx(p_idx)
+        except Exception:
+            pass
         if md_path.exists():
             md_path.unlink()
         return {"ok": True}
@@ -1420,7 +1449,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         return {"projects": []}
 
     def _save_projects_idx(idx: dict):
-        PROJECTS_INDEX.write_text(json.dumps(idx, indent=2), "utf-8")
+        _atomic_write_text(PROJECTS_INDEX, json.dumps(idx, indent=2))
 
     @app.get("/api/projects")
     def get_projects():
