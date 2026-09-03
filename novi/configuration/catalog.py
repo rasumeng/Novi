@@ -56,7 +56,8 @@ from .recommendation import (
 # Capabilities a user can pick / that get recommended for the user-facing
 # roles. Anything outside this set (notably ``embeddings``) is internal and must
 # never surface as a setup item, recommendation, or install target.
-USER_FACING_CAPABILITIES = frozenset(("chat", "reasoning", "coding", "vision"))
+# Reasoning is canonical; Thinking is UI alias. Audio/tools are model-derived.
+USER_FACING_CAPABILITIES = frozenset(("chat", "reasoning", "coding", "vision", "tools", "audio"))
 
 
 def _source_label(source: Optional[str]) -> str:
@@ -299,6 +300,8 @@ def _seed_advisory_records() -> list[ModelRecord]:
             caps.append(CapabilityEvidence("tools", True, "seed", 0.9, note))
         if fact.supports_vision and "vision" not in claimed:
             caps.append(CapabilityEvidence("vision", True, "seed", 0.9, note))
+        if fact.supports_audio and "audio" not in claimed:
+            caps.append(CapabilityEvidence("audio", True, "seed", 0.9, note))
         records.append(ModelRecord(
             name=name,
             status=ModelStatus.AVAILABLE,

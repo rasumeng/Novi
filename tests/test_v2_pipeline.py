@@ -13,12 +13,27 @@ import pytest
 
 @pytest.fixture
 def orchestrator():
+    import json
     from novi.orchestrator.orchestrator import Orchestrator
+    from novi.orchestrator.router import WorkloadRouter
     from novi.capabilities import CapabilityRegistry
     from novi.capabilities.builtin import register_builtin_capabilities
     registry = CapabilityRegistry()
     register_builtin_capabilities(registry)
-    return Orchestrator(capability_registry=registry)
+    mapping = {
+        "write a python function": {"workload": "code", "confidence": 0.9, "relation": "new", "state": {"topic": "code", "workload": "code", "status": "in_progress"}, "reasoning": ""},
+        "latest news about ai": {"workload": "research", "confidence": 0.9, "relation": "new", "state": {"topic": "", "workload": "research", "status": "in_progress"}, "reasoning": ""},
+        "implement a python function": {"workload": "code", "confidence": 0.9, "relation": "new", "state": {"topic": "code", "workload": "code", "status": "in_progress"}, "reasoning": ""},
+    }
+    class _M:
+        def invoke(self, prompt: str) -> str:
+            pl = prompt.lower()
+            for k, v in mapping.items():
+                if k in pl:
+                    return json.dumps(v)
+            return json.dumps({"workload": "general", "confidence": 0.85, "relation": "new", "state": {}, "reasoning": ""})
+    router = WorkloadRouter(llm=_M())
+    return Orchestrator(capability_registry=registry, router=router)
 
 
 @pytest.fixture

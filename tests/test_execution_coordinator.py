@@ -332,12 +332,13 @@ def test_ambiguous_continuation_surfaces_candidates_no_job(task_store, job_store
 
 
 def _force_continuation_intent(coord):
-    """Force a continuation intent by swapping the coordinator's detector."""
-    from novi.orchestrator.task_types import IntentType
-    class _CIntent(_FakeIntent):
-        def detect(self, user_input, history=None, has_images=False):
-            return (IntentType.CONTINUATION, 1.0)
-    coord._orchestrator.intent_detector = _CIntent()
+    """Force a continuation relation via semantic router."""
+    import json
+    from novi.orchestrator.router import WorkloadRouter
+    class _MockCont:
+        def invoke(self, prompt: str) -> str:
+            return json.dumps({"workload": "code", "confidence": 0.92, "relation": "continue", "state": {"topic": "test", "workload": "code", "status": "in_progress", "active_context": ""}, "reasoning": "force continue"})
+    coord._orchestrator.router = WorkloadRouter(llm=_MockCont())
     return coord
 
 

@@ -15,11 +15,12 @@ from typing import Optional
 
 from ..orchestrator.task_types import (
     ExecutionPlan, ExecutionStrategy, Goal, IntentType, TaskProfile,
-    EvidenceAnalysis, ComplexityScore, TaskAnalysis, GroundingDecision,
+    EvidenceAnalysis, ComplexityScore, TaskAnalysis, GroundingDecision, Relation,
 )
-from ..orchestrator.intent import IntentDetector
 from ..orchestrator.complexity import ComplexityEstimator
 from ..orchestrator.evidence import EvidenceDetector
+from ..orchestrator.router import WorkloadRouter, RouterState
+from ..orchestrator.conversation_state import ConversationStateStore
 from ..runtime.retrieval_policy import RetrievalPolicy
 from ..capabilities import CapabilityRegistry
 
@@ -39,34 +40,50 @@ _CAPABILITY_PRIORITY = [
 
 SEARCH_CONFIDENCE_THRESHOLD = 0.5
 
+# Beta: exactly 3 workloads map to 3 intents. Legacy intents are aliases only.
 _INTENT_TO_STRATEGY = {
     IntentType.CONVERSATION: ExecutionStrategy.RESPOND,
     IntentType.RESEARCH: ExecutionStrategy.RESEARCH,
     IntentType.CODING: ExecutionStrategy.EXECUTE,
-    IntentType.PLANNING: ExecutionStrategy.PLANNED,
-    IntentType.VISION: ExecutionStrategy.RESPOND,
     IntentType.AUTONOMOUS: ExecutionStrategy.AUTONOMOUS,
-    IntentType.CONTINUATION: ExecutionStrategy.EXECUTE,
+}
+
+# Router workload → IntentType mapping (canonical beta)
+_WORKLOAD_TO_INTENT = {
+    "general": IntentType.CONVERSATION,
+    "code": IntentType.CODING,
+    "research": IntentType.RESEARCH,
+    # legacy aliases — map to beta intents
+    "conversation": IntentType.CONVERSATION,
+    "coding": IntentType.CODING,
+    "vision": IntentType.CONVERSATION,
+    "planning": IntentType.CODING,
 }
 
 class Orchestrator:
-    """Lightweight coordinator. ~150 lines. Delegates everything."""
+    """Lightweight coordinator. Heuristic router (Beta deterministic)."""
 
     def __init__(
         self,
-        intent_detector: Optional[IntentDetector] = None,
+        intent_detector: Optional[object] = None,
         complexity_estimator: Optional[ComplexityEstimator] = None,
         evidence_detector: Optional[EvidenceDetector] = None,
         capability_registry: Optional[CapabilityRegistry] = None,
         task_store=None,
         planner_engine=None,
+        router: Optional[WorkloadRouter] = None,
+        conversation_state_store: Optional[ConversationStateStore] = None,
+        config: Optional[dict] = None,
     ):
-        self.intent_detector = intent_detector or IntentDetector()
+        # Heuristic router is authoritative; no LLM in Beta path
+        self.router = router or WorkloadRouter()
+        self.conversation_state_store = conversation_state_store or ConversationStateStore()
         self.complexity = complexity_estimator or ComplexityEstimator()
         self.evidence_detector = evidence_detector or EvidenceDetector()
         self.capabilities = capability_registry or CapabilityRegistry()
         self.task_store = task_store
         self.planner_engine = planner_engine
+        self._config = config
 
     def _resolve_capabilities(
         self,
@@ -74,16 +91,13 @@ class Orchestrator:
         evidence: EvidenceAnalysis,
         complexity: ComplexityScore,
     ) -> list[str]:
-        """Additive capability resolution from intent + evidence + complexity.
+        """Additive capability resolution from router workload (intent).
 
-        Each signal contributes independently — intent, evidence, and
-        complexity each add capabilities. Result is deduplicated and
-        sorted by _CAPABILITY_PRIORITY.
+        Evidence here is already workload-derived (no keyword detection).
         """
         caps: set[str] = set()
 
-        # ── Evidence-based capabilities ──────────────────────────────
-
+        # ── Evidence-based (workload-derived) ─────────────────────────
         if evidence.requirements.vision:
             caps.add("vision")
         if evidence.requirements.memory:
@@ -95,32 +109,22 @@ class Orchestrator:
             and evidence.confidence >= SEARCH_CONFIDENCE_THRESHOLD
         ):
             caps.add("search")
-            caps.add("conversation")  # Search always includes conversation
+            caps.add("conversation")
 
-        # ── Intent-based capabilities ─────────────────────────────────
-
+        # ── Intent (router workload — beta 3 only) ─────────────────────
         if intent == IntentType.CONVERSATION:
             caps.add("conversation")
         elif intent == IntentType.RESEARCH:
             caps.add("research")
             caps.add("conversation")
         elif intent == IntentType.CODING:
-            caps.update(["coding", "filesystem", "terminal"])
-        elif intent == IntentType.PLANNING:
-            caps.add("planning")
+            caps.update(["coding", "filesystem", "terminal", "conversation"])
+        else:
             caps.add("conversation")
-        elif intent == IntentType.VISION:
-            caps.add("vision")
-            caps.add("conversation")
-        elif intent == IntentType.CONTINUATION:
-            caps.update(["memory", "planning", "conversation"])
-
-        # ── Complexity-based capabilities ─────────────────────────────
 
         if complexity.plan_level > 0:
             caps.add("planning")
 
-        # Always ensure conversation is present unless vision-only
         if not caps:
             caps.add("conversation")
 
@@ -185,27 +189,48 @@ class Orchestrator:
         history: Optional[list] = None,
         has_images: bool = False,
         force_intent: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        attachments: Optional[list[dict]] = None,
     ) -> TaskAnalysis:
-        """Analyze user input — returns consolidated TaskAnalysis.
+        """Analyze verbatim user_input via semantic router (dispatcher).
 
-        Single entry point for the analysis pipeline. Bundles intent,
-        evidence, complexity, and confidence into one object.
-        Future signals (user profile, memory context) added here.
+        Invariant: user_input is passed verbatim to workload after routing;
+        router output is metadata (workload/relation/state) only.
 
-        ``force_intent`` (an ``IntentType`` value, e.g. ``"research"``) bypasses
-        intent detection and runs the whole analysis as that intent. This is
-        the EXPLICIT user-mode override (e.g. Deep Research toggle) — it is
-        never a hidden routing heuristic. All downstream decisions (strategy,
-        grounding, retrieval plan, capabilities) derive from the forced intent.
+        ``force_intent`` bypasses router — explicit user-mode override (Deep Research).
         """
+        # ── Explicit override (deterministic, objective) ──────────────
         if force_intent:
             intent = IntentType(force_intent)
             confidence = 1.0
+            workload = force_intent
+            relation = Relation.NEW
+            router_state = RouterState(topic="", workload=workload, status="in_progress")
+            router_reasoning = "explicit force_intent override"
         else:
-            intent, confidence = self.intent_detector.detect(
-                user_input, history, has_images
+            # ── Heuristic router (deterministic, Beta) ─────────────────────
+            prior_state = None
+            if conversation_id:
+                prior_state = self.conversation_state_store.get(conversation_id)
+            decision = self.router.route(
+                user_message=user_input,  # VERBATIM, never truncated
+                state=prior_state,
+                history=history,
+                has_images=has_images,
+                attachments=attachments,
             )
-        evidence = self.evidence_detector.detect(user_input, has_images)
+            workload = decision.workload
+            intent = _WORKLOAD_TO_INTENT.get(workload, IntentType.CONVERSATION)
+            confidence = float(decision.confidence)
+            relation = decision.relation if isinstance(decision.relation, Relation) else Relation(decision.relation)
+            router_state = decision.state
+            router_reasoning = decision.reasoning
+            # Persist updated state
+            if conversation_id:
+                self.conversation_state_store.set(conversation_id, router_state)
+
+        # Evidence derived from router workload (no keyword detection)
+        evidence = self.evidence_detector.detect_from_workload(workload, has_images=has_images)
         complexity = self.complexity.estimate(user_input, intent)
         grounding = self._resolve_grounding(intent, evidence, user_input)
 
@@ -237,6 +262,10 @@ class Orchestrator:
             confidence=confidence,
             grounding=grounding,
             retrieval_plan=retrieval_plan,
+            relation=relation,
+            router_state=router_state.to_dict() if router_state else None,
+            router_workload=workload,
+            router_reasoning=router_reasoning,
         )
 
         log.debug(
@@ -272,22 +301,20 @@ class Orchestrator:
         force_model: Optional[str] = None,
         force_intent: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        attachments: Optional[list[dict]] = None,
     ) -> ExecutionPlan:
-        """Turn user input into an ExecutionPlan.
+        """Turn verbatim user_input into an ExecutionPlan (dispatcher).
+
+        Invariant: original user_input is delivered unchanged to the selected
+        workload via ExecutionPlan.goal.text. Router decision is metadata only.
 
         Overrides (force_capability / force_model / force_intent) bypass
-        detection. ``force_intent`` re-runs the analysis as that intent (used
-        by explicit user modes like Deep Research); ``force_capability`` fixes
-        the resolved capability set; ``force_model`` fixes the model name.
-        Uses analyze() for the analysis phase, then builds the plan.
-
-        When a ``task_store`` is wired, the request creates or loads a Task at
-        this boundary and the resulting plan references it via ``task_id``.
-        Without a task_store, no Task is managed and ``task_id`` stays empty.
+        router. ``force_intent`` re-runs analysis as that intent (Deep Research).
         """
-        # 1–2. Analyze: intent + evidence + complexity + capabilities → TaskAnalysis
+        # 1–2. Analyze: router workload → capabilities → TaskAnalysis
         analysis = self.analyze(
-            user_input, history, has_images, force_intent=force_intent)
+            user_input, history, has_images, force_intent=force_intent,
+            conversation_id=conversation_id, attachments=attachments)
 
         # 3. Use capabilities from analysis (single source of truth)
         cap_ids = analysis.capabilities
@@ -310,12 +337,10 @@ class Orchestrator:
             confidence=analysis.confidence,
         )
 
-        # 6. Build plan. No model is baked here — the Runtime resolves the
-        #    configured workload model at execution time (Phase 2). model_spec
-        #    carries only the capability + tool-support signals used by the
-        #    Runtime for capability validation.
+        # 6. Build plan. Verbatim user message is preserved for dispatcher.
+        # Runtime resolves workload model at execution time.
         plan = ExecutionPlan(
-            goal=Goal(text=user_input[:500], intent=analysis.intent),
+            goal=Goal(text=user_input, intent=analysis.intent),  # VERBATIM, not truncated to 500
             strategy=strategy,
             capabilities=resolved_caps,
             tools=tool_names,
@@ -330,20 +355,31 @@ class Orchestrator:
                 "has_images": has_images,
                 "analysis": analysis,
                 "evidence": analysis.evidence,
+                # Dispatcher context: router state is additive, never replacement
+                "router_state": analysis.router_state,
+                "router_workload": analysis.router_workload,
+                "relation": analysis.relation.value,
+                "original_message": user_input,  # invariant check
             },
         )
 
-        supports_tools = bool(tool_names) and analysis.intent != IntentType.VISION
+        supports_tools = bool(tool_names)
         plan.model_spec["supports_tools"] = supports_tools
 
-        # 7. Task ownership: create or load a Task for this request. This is
-        #    the universal-currency boundary — the plan references the Task.
+        # 7. Task ownership: create or load a Task for this request.
+        # Store truncated goal_text for display, but preserve original via analysis.
         if self.task_store is not None:
             task = self.task_store.get_or_create(
                 conversation_id=conversation_id or "",
-                goal_text=user_input[:500],
+                goal_text=user_input[:800],
                 intent=analysis.intent,
             )
+            # Persist router state for continuation semantics
+            if analysis.router_state:
+                task.metadata["router_state"] = analysis.router_state
+                task.metadata["relation"] = analysis.relation.value
+                task.metadata["router_workload"] = analysis.router_workload
+                self.task_store.update(task)
             plan.task_id = task.id
             plan.context["task_id"] = task.id
 

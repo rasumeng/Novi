@@ -1,59 +1,123 @@
+# ============================================================
 # Python
+# ============================================================
+
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.egg
 dist/
 build/
-*.egg
 
-# Virtual environment
+# Virtual environments
 venv/
 .venv/
 env/
-.env/
-# Frontend is in novi/webui/ — tracked, not ignored
-# (WebUi/ was a stale entry from a different layout)
 
-# IDE
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+
+# ============================================================
 # OS
+# ============================================================
+
 .DS_Store
 Thumbs.db
 
-# Novi data (user-local, not shared) — anchored to the repo root so the
-# same names are still allowed as code directories deeper in the tree.
-data/
-chroma_db/
+
+# ============================================================
+# Node / Frontend
+# ============================================================
+
+node_modules/
+
+# Frontend build output
+novi/webui/dist/
+
+# Tauri build output
+novi/webui/src-tauri/target/
+novi/webui/src-tauri/gen/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+
+
+# ============================================================
+# Novi Local / User Data
+# ============================================================
+
+# User-local application data
+/data/
+/chroma_db/
 /.novi/
-# Legacy pre-rebrand profile dirs in old checkouts
+
+# Legacy pre-rebrand profile directories
 /.cozmo/
 /workspace/
 /knowledge/
 
-# Dev utilities
-node_modules/
 
-# Test cache
+# ============================================================
+# Tests / Tool Caches
+# ============================================================
+
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Environment
-.env
 
-# Large files
+# ============================================================
+# Local AI / Model Artifacts
+# ============================================================
+
+# GGUF / downloaded model files
+*.gguf
+*.gguf.part
+
+# Local model caches
+/models/
+/model_cache/
+
+# Benchmark outputs
+bench_*.json
+bench_*.csv
+bench_*.log
+
+
+# ============================================================
+# Local AI Development Tools
+# ============================================================
+
+# OpenCode local state
+/.opencode/
+
+# Claude Code local state
+/.claude/
+
+# Superpowers local state
+/.superpowers/
+
+
+# ============================================================
+# Generated / Temporary Files
+# ============================================================
+
+*.log
+*.tmp
+*.temp
+
+# Local archives
 novi.zip
-
-# Tauri desktop
-novi/webui/src-tauri/target
-novi/webui/src-tauri/gen
-desktop/src-tauri/target/
-desktop/src-tauri/gen/
-
-# Misc
-.opencode/
-.claude/
-.superpowers

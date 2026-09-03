@@ -33,6 +33,8 @@ class ModelCapabilities:
     """Capability facts of the SELECTED model.
 
     Descriptive only — never used to pick or substitute a different model.
+    Canonical backend capabilities: vision, tools, reasoning, audio, coding.
+    Reasoning is canonical; Thinking is UI label for reasoning.
     """
 
     capabilities: frozenset = field(default_factory=frozenset)
@@ -40,6 +42,23 @@ class ModelCapabilities:
     supports_vision: bool = False
     supports_reasoning: bool = False
     supports_coding: bool = False
+    supports_audio: bool = False
+
+    @property
+    def supports_thinking(self) -> bool:
+        """UI alias: Thinking == reasoning."""
+        return self.supports_reasoning
+
+    def to_dict(self) -> dict:
+        return {
+            "vision": self.supports_vision,
+            "tools": self.supports_tools,
+            "reasoning": self.supports_reasoning,
+            "thinking": self.supports_thinking,
+            "audio": self.supports_audio,
+            "coding": self.supports_coding,
+            "capabilities": sorted(self.capabilities),
+        }
 
 
 def model_capabilities(model_name: str) -> ModelCapabilities:
@@ -49,6 +68,10 @@ def model_capabilities(model_name: str) -> ModelCapabilities:
     capabilities from the metadata cache. Weak name inference is deliberately
     excluded — the runtime never trusts a name substring for capability
     validation. Detection only — capabilities never influence selection.
+
+    Canonical set is vision/tools/reasoning/audio(+coding). Reasoning is
+    canonical; thinking is UI alias. Audio is strictly model-derived, never
+    inferred from tools.
 
     Unknown models stay unknown: no fabricated capability claims.
     """
@@ -62,12 +85,15 @@ def model_capabilities(model_name: str) -> ModelCapabilities:
     if not caps and fact is None:
         return ModelCapabilities()
 
+    # Seed supports_* are canonical model-derived evidence (audio strictly model-derived)
+    supports_audio = bool(fact and getattr(fact, "supports_audio", False)) or "audio" in caps
     return ModelCapabilities(
         capabilities=frozenset(caps),
         supports_tools=bool(fact and fact.supports_tools) or "tools" in caps,
         supports_vision=bool((fact and fact.supports_vision) or "vision" in caps),
         supports_reasoning="reasoning" in caps,
         supports_coding="coding" in caps,
+        supports_audio=supports_audio,
     )
 
 
@@ -97,10 +123,11 @@ class ModelSelector:
         """Capability facts of the selected model. Detection only; advisory."""
         return model_capabilities(self.resolve(workload))
 
-    def validate(self, workload: str, *, supports_vision: bool = False) -> None:
+    def validate(self, workload: str, *, supports_vision: bool = False, supports_audio: bool = False, supports_tools: bool = False, supports_reasoning: bool = False) -> None:
         """Requirement check on the SELECTED model.
 
         May reject with ``ModelUnavailableError``; never returns a substitute.
+        All checks are strictly model-derived (audio never inferred from tools).
         """
         model_name = self.resolve(workload)
         caps = model_capabilities(model_name)
@@ -108,12 +135,48 @@ class ModelSelector:
             raise ModelUnavailableError(
                 workload, model_name, [],
                 detail=(f"Model '{model_name}' for workload '{workload}' "
-                        f"does not support image input."),
+                        f"does not support image input. Select a vision-capable model for the {workload} workload."),
+            )
+        if supports_audio and not caps.supports_audio:
+            raise ModelUnavailableError(
+                workload, model_name, [],
+                detail=(f"Model '{model_name}' for workload '{workload}' "
+                        f"does not support audio input. Select an audio-capable model for the {workload} workload."),
+            )
+        if supports_tools and not caps.supports_tools:
+            raise ModelUnavailableError(
+                workload, model_name, [],
+                detail=(f"Model '{model_name}' for workload '{workload}' "
+                        f"does not support tool calling. Select a tool-capable model for the {workload} workload."),
+            )
+        if supports_reasoning and not caps.supports_reasoning:
+            raise ModelUnavailableError(
+                workload, model_name, [],
+                detail=(f"Model '{model_name}' for workload '{workload}' "
+                        f"does not support reasoning. Select a reasoning-capable model for the {workload} workload."),
             )
 
     @staticmethod
     def _check_workload(workload: str):
+        # Deep is an implementation alias for research — normalize before validation.
+        if workload == "deep":
+            workload = "research"
         if workload not in WORKLOADS:
             raise ValueError(
                 f"Unknown workload '{workload}'. Valid workloads: {', '.join(WORKLOADS)}"
             )
+
+    def workload_capabilities(self, workload: str) -> ModelCapabilities:
+        """Capabilities of the currently assigned model for ``workload``.
+
+        Deep is an alias for research. Never substitutes models.
+        """
+        if workload == "deep":
+            workload = "research"
+        try:
+            model = self.resolve(workload)
+        except Exception:
+            return ModelCapabilities()
+        if not model:
+            return ModelCapabilities()
+        return model_capabilities(model)

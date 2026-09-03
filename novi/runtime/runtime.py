@@ -37,19 +37,20 @@ from .model_selector import ModelSelector, model_capabilities
 from .tracer import RuntimeTracer
 from .trace import TraceAction
 
-_INTENT_TO_CAP_IDS = {"conversation": ["conversation"], "research": ["research", "conversation"], "coding": ["coding", "filesystem", "terminal"], "planning": ["planning", "conversation"], "vision": ["vision", "conversation"]}
-# Phase 2: capability/intent → workload. The workload's configured model is
-# the ONLY model used. Capabilities never upgrade, substitute, or rank.
+# Beta: exactly 3 intents map to 3 workloads. No vision/planning as workloads.
+_INTENT_TO_CAP_IDS = {"conversation": ["conversation"], "research": ["research", "conversation"], "coding": ["coding", "filesystem", "terminal"]}
+# capability/intent → workload (beta 3 only). Legacy capabilities map to beta workloads.
 _CAPABILITY_TO_WORKLOAD = {
     "coding": "code",
-    "planning": "research",
     "research": "research",
     "conversation": "general",
-    "vision": "general",
     "filesystem": "general",
     "terminal": "general",
     "memory": "general",
     "search": "general",
+    # legacy aliases
+    "planning": "code",
+    "vision": "general",
 }
 
 log = logging.getLogger("novi.runtime")
@@ -478,13 +479,18 @@ class NoviRuntime:
                 if not ctx.allowed_tools:
                     ctx.allowed_tools = self._capability_registry.get_tool_names(ctx.cap_ids)
             elif self._orchestrator is not None:
-                ctx.analysis = self._orchestrator.analyze(user_input, self.history, has_images)
+                ctx.analysis = self._orchestrator.analyze(
+                    user_input, self.history, has_images,
+                    conversation_id=ctx.conversation_id,
+                    attachments=ctx.attachments,
+                )
+                # Dispatcher invariant: analysis router workload is metadata only —
+                # ctx.user_input remains verbatim original message for workload processing
                 ctx.allowed_tools = self._capability_registry.get_tool_names(ctx.cap_ids)
             else:
-                intent = classify_intent(user_input, self.simple_llm, self.history, has_images)
-                cap_name = ctx.force_capability or intent.value
-                ctx.allowed_tools = self._capability_registry.get_tool_names(
-                    self._intent_cap_ids.get(cap_name, ["conversation"]))
+                # Headless fallback: no orchestrator, no keyword routing — use conversation fallback
+                # Preserve dispatcher: user_input unchanged, default to conversation
+                ctx.allowed_tools = self._capability_registry.get_tool_names(["conversation"])
 
             if ctx.analysis is not None:
                 ctx.trace.complexity_score = ctx.analysis.complexity.score
@@ -600,14 +606,27 @@ class NoviRuntime:
             if ctx.execution_plan is None and intent_str == "vision":
                 ctx.model_supports_tools = False
 
-            # Capability validation on the SELECTED model: images require a
-            # vision-capable model. Reject explicitly — never substitute.
-            if ctx.has_images:
+            # Capability validation on the SELECTED model: reject explicitly — never substitute.
+            # All checks are strictly model-derived; audio never inferred from tools.
+            has_audio = any(
+                (a.get("mime") or "").startswith("audio/")
+                for a in (ctx.attachments or [])
+            )
+            if ctx.has_images or has_audio:
                 caps = model_capabilities(ctx.model_name)
-                if not caps.supports_vision:
+                if ctx.has_images and not caps.supports_vision:
                     msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
                            f"does not support image input. Select a vision-capable "
-                           f"model for the general workload.")
+                           f"model for the {ctx.workload} workload.")
+                    self.tracer.finalize(ctx.trace, "error")
+                    yield ("status", f"Model unavailable: {msg}")
+                    yield ("error", msg)
+                    yield (_LOOP_DONE, msg, "error", False)
+                    return
+                if has_audio and not caps.supports_audio:
+                    msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
+                           f"does not support audio input. Select an audio-capable "
+                           f"model for the {ctx.workload} workload.")
                     self.tracer.finalize(ctx.trace, "error")
                     yield ("status", f"Model unavailable: {msg}")
                     yield ("error", msg)

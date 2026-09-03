@@ -289,18 +289,34 @@ class NoviContext:
         if not hasattr(self, "_orchestrator"):
             self._orchestrator = None
         if self._orchestrator is None:
-            # The orchestrator resolves ExecutionPlan.tools through its
-            # capability registry; an empty registry silently plans zero-tool
-            # runs on every surface wired through this composition root.
             capability_registry = CapabilityRegistry()
             register_builtin_capabilities(capability_registry)
+            # Semantic router — control plane, independent placement (CPU vs GPU)
+            from ..orchestrator.router import WorkloadRouter, OllamaRouterLLM, router_model_from_config, router_placement_from_config
+            from ..orchestrator.conversation_state import ConversationStateStore
+            cfg = self.config
+            # Router uses its own Ollama adapter with per-model num_gpu, not SimpleLLM (which is workload-bound)
+            placement = router_placement_from_config(cfg)
+            try:
+                router_llm = OllamaRouterLLM(
+                    model=router_model_from_config(cfg),
+                    base_url=cfg.get("providers", {}).get("ollama", {}).get("url", "http://localhost:11434"),
+                    keep_alive=placement["keep_alive"],
+                    num_gpu=placement["num_gpu"],
+                )
+            except Exception:
+                router_llm = None
+            router = WorkloadRouter(llm=router_llm, config=cfg)
             self._orchestrator = Orchestrator(
-                intent_detector=IntentDetector(llm=self.simple_llm),
+                intent_detector=IntentDetector(llm=self.simple_llm, router=router),
                 complexity_estimator=ComplexityEstimator(),
                 evidence_detector=EvidenceDetector(llm=self.simple_llm),
                 capability_registry=capability_registry,
                 task_store=TaskStore(),
                 planner_engine=PlannerEngine(),
+                router=router,
+                conversation_state_store=ConversationStateStore(),
+                config=cfg,
             )
         return self._orchestrator
 

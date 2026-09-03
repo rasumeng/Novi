@@ -1,14 +1,17 @@
-"""Milestone 5 Phase 5A/5B — continuation detection + resolution (read-only).
+"""Milestone 5 Phase 5A/5B — continuation via Relation (semantic router).
 
 Covers:
-  - 5A: IntentDetector classifies continuation requests as CONTINUATION.
+  - 5A: WorkloadRouter classifies continuation via relation=continue (semantic),
+        not IntentType.CONTINUATION workload.
   - 5B: ContinuationService resolves resumable work by joining TaskStore +
         JobStore, ranks candidates, never executes and never mutates.
 """
 
+import json
 import pytest
 
 from novi.orchestrator.intent import IntentDetector, classify_intent
+from novi.orchestrator.router import WorkloadRouter, RouterState
 from novi.orchestrator.task_types import IntentType, Task, TaskStatus
 from novi.orchestrator.task_store import TaskStore
 from novi.jobs.job import Checkpoint, Job, JobStatus
@@ -79,7 +82,19 @@ def _three_step_plan(task_id="task-1"):
     return plan
 
 
-# ── 5A: continuation intent detection ─────────────────────────────────────
+# ── 5A: continuation via semantic relation (router) ────────────────────────
+
+class _SemanticMock:
+    def __init__(self, mapping: dict):
+        self.mapping = mapping
+    def invoke(self, prompt: str) -> str:
+        for k, v in self.mapping.items():
+            if k.lower() in prompt.lower():
+                return json.dumps(v)
+        return json.dumps({"workload": "general", "confidence": 0.8, "relation": "new", "state": {}, "reasoning": ""})
+
+def _router_for_phrase(mapping):
+    return WorkloadRouter(llm=_SemanticMock(mapping))
 
 @pytest.mark.parametrize("phrase", [
     "continue the task",
@@ -93,7 +108,14 @@ def _three_step_plan(task_id="task-1"):
     "previous task",
 ])
 def test_continuation_phrases_classify_as_continuation(phrase):
-    assert classify_intent(phrase) is IntentType.CONTINUATION
+    # Semantic router with prior state should return relation=continue
+    mapping = {phrase: {"workload": "code", "confidence": 0.9, "relation": "continue", "state": {"topic": "widget", "workload": "code", "status": "in_progress", "active_context": ""}, "reasoning": "continue"}}
+    prior = RouterState(topic="widget", workload="code", status="in_progress", active_context="task")
+    router = _router_for_phrase(mapping)
+    dec = router.route(phrase, state=prior, history=[])
+    assert dec.relation.value == "continue"
+    # classify_intent no longer returns CONTINUATION workload (legacy shim returns conversation without LLM)
+    assert classify_intent(phrase) is not IntentType.CONTINUATION
 
 
 @pytest.mark.parametrize("phrase", [
@@ -104,19 +126,34 @@ def test_continuation_phrases_classify_as_continuation(phrase):
     "add a feature to the app",
 ])
 def test_non_continuation_phrases_not_continuation(phrase):
+    # Without prior state and without LLM, classify_intent returns conversation (not continuation)
     assert classify_intent(phrase) is not IntentType.CONTINUATION
+    # Semantic router new relation for fresh requests
+    router = WorkloadRouter(llm=_SemanticMock({phrase: {"workload": "general", "confidence": 0.85, "relation": "new", "state": {}, "reasoning": ""}}))
+    dec = router.route(phrase, state=None, history=[])
+    assert dec.relation.value == "new"
 
 
 def test_continuation_has_high_confidence():
+    mapping = {"continue what we started": {"workload": "code", "confidence": 0.92, "relation": "continue", "state": {"topic": "widget", "workload": "code", "status": "in_progress"}, "reasoning": ""}}
+    router = _router_for_phrase(mapping)
+    dec = router.route("continue what we started", state=RouterState(topic="widget", workload="code", status="in_progress"), history=[])
+    assert dec.relation.value == "continue"
+    # Heuristic gives 0.85 for continue (Beta deterministic), LLM gave 0.92
+    assert dec.confidence >= 0.7
+    # Legacy detector still usable but returns CONVERSATION without LLM
     detector = IntentDetector()
     intent, confidence = detector.detect("continue what we started")
-    assert intent is IntentType.CONTINUATION
-    assert confidence >= 0.9
+    assert intent is IntentType.CONVERSATION  # no longer CONTINUATION workload
 
 
 def test_continuation_beats_coding_keyword():
-    # "continue" must not fall through to coding
-    assert classify_intent("continue the code review") is IntentType.CONTINUATION
+    # Semantic: "continue the code review" with prior code state is continue, not fresh code
+    mapping = {"continue the code review": {"workload": "code", "confidence": 0.9, "relation": "continue", "state": {"topic": "review", "workload": "code", "status": "in_progress"}, "reasoning": ""}}
+    router = _router_for_phrase(mapping)
+    dec = router.route("continue the code review", state=RouterState(topic="review", workload="code", status="in_progress"), history=[])
+    assert dec.relation.value == "continue"
+    assert dec.workload == "code"
 
 
 # ── 5B: same-conversation resolution ─────────────────────────────────────

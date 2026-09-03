@@ -561,17 +561,35 @@ class ExecutionCoordinator:
 
     def _resolve_continuation(self, user_input: str,
                               conversation_id: str) -> Optional[dict]:
-        """Read-only continuation resolution (mirrors Session behavior).
+        """Read-only continuation resolution via router relation (semantic).
 
-        Returns None when nothing is resumable (fresh planning happens) or
-        when the request is not a continuation. Returns ``{"ambiguous": True,
-        "candidates": [...]}`` when there is resumable work but no clear
-        single target — the caller surfaces candidates to the user.
+        Relation is semantic continuation (new/continue/switch), not a workload.
+        Only relation==continue triggers resume; relation is derived from router.
         """
         if self._continuation is None or self._task_store is None:
             return None
-        intent, _ = self._orchestrator.intent_detector.detect(user_input)
-        if intent is not IntentType.CONTINUATION:
+        # Use orchestrator router to get relation (semantic, not keyword)
+        try:
+            # Prefer orchestrator.analyze which already returns TaskAnalysis with relation
+            # but _resolve_continuation is lightweight; use router directly if available
+            router = getattr(self._orchestrator, 'router', None)
+            if router is not None:
+                prior = None
+                store = getattr(self._orchestrator, 'conversation_state_store', None)
+                if store is not None and conversation_id:
+                    prior = store.get(conversation_id)
+                decision = router.route(
+                    user_message=user_input,
+                    state=prior,
+                    history=None,
+                    has_images=False,
+                )
+                if decision.relation.value != "continue":
+                    return None
+            else:
+                # Fallback: no router — do not guess via keywords
+                return None
+        except Exception:
             return None
         target = self._continuation.recommended(
             conversation_id=conversation_id or None)
@@ -586,14 +604,9 @@ class ExecutionCoordinator:
         return {"target": target, "task": task, "ambiguous": False}
 
     def _continuation_exec_plan(self, task, target) -> ExecutionPlan:
-        """Rebuild an ExecutionPlan from the Task's stored plan.
-
-        The Task already owns a Plan (PlannerEngine attached it at creation).
-        The plan object is reused — no replanning. ``resume_from`` is threaded
-        separately into run_stream, not baked into the plan.
-        """
+        """Rebuild an ExecutionPlan from the Task's stored plan."""
         plan = task.plan if isinstance(task.plan, Plan) else None
-        goal = task.goal or Goal(text=task.raw_goal, intent=IntentType.CONTINUATION)
+        goal = task.goal or Goal(text=task.raw_goal, intent=IntentType.CONVERSATION)
         return ExecutionPlan(
             task_id=task.id,
             goal=goal,

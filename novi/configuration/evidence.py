@@ -67,6 +67,13 @@ def assemble_capability_evidence(
         for cap in fact.capabilities:
             _evidence(known, cap, True, "seed", 0.9,
                       "curated seed metadata (non-authoritative)")
+        # Model-derived boolean flags are strictly model-derived (audio never inferred from tools)
+        if getattr(fact, "supports_audio", False) and "audio" not in known:
+            _evidence(known, "audio", True, "seed", 0.9, "curated seed metadata (non-authoritative)")
+        if fact.supports_tools and "tools" not in known:
+            _evidence(known, "tools", True, "seed", 0.9, "curated seed metadata (non-authoritative)")
+        if fact.supports_vision and "vision" not in known:
+            _evidence(known, "vision", True, "seed", 0.9, "curated seed metadata (non-authoritative)")
 
     # 3. Weak name inference (advisory only, lowest confidence).
     for hint in inference_hints or ():

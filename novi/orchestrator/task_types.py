@@ -129,7 +129,16 @@ class IntentType(str, Enum):
     PLANNING = "planning"
     AUTONOMOUS = "autonomous"
     VISION = "vision"
-    CONTINUATION = "continuation"
+    # CONTINUATION removed: continuation is a relation (new/continue/switch), not a workload.
+    # Kept as alias for deserialization of persisted tasks only.
+    CONTINUATION = "continuation"  # deprecated: do not route to this; Relation handles continuation
+
+
+class Relation(str, Enum):
+    """Router-level relationship between current message and conversation state."""
+    NEW = "new"
+    CONTINUE = "continue"
+    SWITCH = "switch"
 
 
 class ExecutionStrategy(str, Enum):
@@ -145,7 +154,12 @@ class TaskAnalysis:
     """Complete analysis of a user task. Single object from the analysis pipeline.
 
     Bundles intent, evidence, complexity, capabilities, strategy, confidence,
-    grounding, and retrieval plan. The runtime consumes this directly.
+    grounding, retrieval plan, plus semantic router outputs (workload/relation/state).
+    The runtime consumes this directly.
+
+    Dispatcher invariant: TaskAnalysis is metadata only — the original
+    user_message is always delivered verbatim to the selected workload via
+    ExecutionPlan.goal.text. Router decision never replaces the message.
     """
     intent: IntentType = IntentType.CONVERSATION
     evidence: EvidenceAnalysis = field(default_factory=EvidenceAnalysis)
@@ -155,6 +169,11 @@ class TaskAnalysis:
     confidence: float = 1.0
     grounding: GroundingDecision = field(default_factory=GroundingDecision)
     retrieval_plan: 'RetrievalPlan' = field(default_factory=_default_retrieval_plan)
+    # ── Semantic router outputs (dispatcher metadata) ───────────────────────
+    relation: 'Relation' = field(default_factory=lambda: Relation.NEW)
+    router_state: Optional[dict] = None
+    router_workload: str = ""
+    router_reasoning: str = ""
 
 
 @dataclass

@@ -233,6 +233,14 @@ def test_cli_session_routes_fresh_run_through_coordinator(task_store, job_manage
     _assert_fresh_invariants(task_store, job_manager, "cli:abc")
 
 
+def _set_continuation_router(ctx):
+    import json
+    from novi.orchestrator.router import WorkloadRouter
+    class _MC:
+        def invoke(self, prompt): return json.dumps({"workload": "code", "confidence": 0.92, "relation": "continue", "state": {"topic": "test", "workload": "code", "status": "in_progress", "active_context": ""}, "reasoning": ""})
+    ctx.orchestrator.router = WorkloadRouter(llm=_MC())
+    return ctx
+
 def test_cli_session_continuation_reopens_new_attempt(task_store, job_store):
     from novi.cli import CliSessionAdapter
 
@@ -241,7 +249,7 @@ def test_cli_session_continuation_reopens_new_attempt(task_store, job_store):
     continuation = ContinuationService(task_store=task_store, job_store=job_store,
                                        job_manager=jm)
     ctx = _FakeCtx(task_store, jm, continuation=continuation)
-    ctx.orchestrator.intent_detector = _ContIntent()
+    _set_continuation_router(ctx)
 
     session = CliSessionAdapter(ctx, session_id="abc")
     out = session.run("continue the task")
@@ -318,7 +326,7 @@ def test_telegram_continuation_uses_coordinator_path(task_store, job_store):
     continuation = ContinuationService(task_store=task_store, job_store=job_store,
                                        job_manager=jm)
     ctx = _FakeCtx(task_store, jm, continuation=continuation)
-    ctx.orchestrator.intent_detector = _ContIntent()
+    _set_continuation_router(ctx)
 
     out = _handle_sync(ctx, "12345", "continue the task")
     assert "build it" in out

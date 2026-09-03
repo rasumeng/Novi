@@ -44,6 +44,7 @@ class ModelFact:
     works_with_memory: bool = False
     supports_tools: bool = False
     supports_vision: bool = False
+    supports_audio: bool = False
     # Structured identity metadata (classification only, never routing logic).
     family: Optional[str] = None
     variant: Optional[str] = None
@@ -71,6 +72,7 @@ class ModelFact:
             "worksWithMemory": self.works_with_memory,
             "supportsTools": self.supports_tools,
             "supportsVision": self.supports_vision,
+            "supportsAudio": self.supports_audio,
             "family": self.family,
             "variant": self.variant,
             "sizeTier": self.size_tier,
