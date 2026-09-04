@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { MessageSquare, Brain, Sparkles, History, RefreshCw, MoveRight } from 'lucide-react'
 import { TimelineEntry } from '@/types'
 import { EmptyState } from '@/components/common/EmptyState'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { mergeTimeline, groupByDay, timelineTime } from '@/utils/timeline'
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
   onOpenConversation?: (id: string) => void
   error?: string | null
   status?: 'ok' | 'unavailable' | 'disabled'
+  loading?: boolean
 }
 
 const KIND_META: Record<string, { icon: React.ElementType; color: string; iconBg: string }> = {
@@ -25,7 +27,7 @@ function metaFor(kind: string) {
   return KIND_META[kind] ?? KIND_META['knowledge.extracted']
 }
 
-export function TimelinePage({ entries, onRefresh, onOpenConversation, error, status }: Props) {
+export function TimelinePage({ entries, onRefresh, onOpenConversation, error, status, loading = false }: Props) {
   const sorted = useMemo(() => mergeTimeline(entries), [entries])
   const groups = useMemo(() => groupByDay(sorted), [sorted])
   const isError = !!error || status === 'unavailable'
@@ -44,7 +46,9 @@ export function TimelinePage({ entries, onRefresh, onOpenConversation, error, st
       </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        {isError ? (
+        {loading ? (
+          <LoadingSkeleton rows={5} compact />
+        ) : isError ? (
           <div className="max-w-2xl mx-auto rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-4 text-center">
             <p className="text-sm font-medium text-amber-300">Brain store unavailable — check logs</p>
             <p className="text-xs text-base-400 mt-1">{error || 'Timeline unavailable.'}</p>

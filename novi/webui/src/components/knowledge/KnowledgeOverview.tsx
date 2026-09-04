@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { fetchKnowledgeOverview } from '@/services/novi'
 import type { KnowledgeOverview as KnowledgeOverviewData } from '@/types'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
+import { EmptyState } from '@/components/common/EmptyState'
+import { Brain, RefreshCw } from 'lucide-react'
 
 /**
  * What Novi noticed — human-facing projection of memory.
@@ -11,12 +14,11 @@ export function KnowledgeOverview() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let alive = true
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
     fetchKnowledgeOverview()
       .then((data: any) => {
-        if (!alive) return
-        // degraded vs empty: distinguish via brainAvailable/status
         if (data && data.brainAvailable === false) {
           setError(data.error || 'Brain store unavailable — check logs')
         } else {
@@ -24,13 +26,16 @@ export function KnowledgeOverview() {
         }
         setOverview(data)
       })
-      .catch(() => { if (alive) setError('Brain store unavailable — check logs') })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
+      .catch(() => setError('Brain store unavailable — check logs'))
+      .finally(() => setLoading(false))
   }, [])
 
+  useEffect(() => {
+    load()
+  }, [load])
+
   if (loading) {
-    return <p className="text-xs text-base-500">Loading what Novi noticed…</p>
+    return <LoadingSkeleton rows={5} compact />
   }
 
   if (error) {
@@ -38,6 +43,9 @@ export function KnowledgeOverview() {
       <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-6 text-center">
         <p className="text-sm font-medium text-amber-300">Brain store unavailable — check logs</p>
         <p className="text-xs text-base-500 mt-1">{error}</p>
+        <button onClick={load} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-base-800 border border-base-700 text-xs text-base-300 hover:bg-base-700 transition-colors">
+          <RefreshCw size={12} /> Retry
+        </button>
       </div>
     )
   }
@@ -45,10 +53,11 @@ export function KnowledgeOverview() {
   const categories: any[] = overview?.categories ?? []
   if (categories.length === 0) {
     return (
-      <div className="rounded-xl border border-base-700/40 bg-base-900/30 px-4 py-6 text-center">
-        <p className="text-sm font-medium text-base-300">No knowledge yet — start a conversation</p>
-        <p className="text-xs text-base-500 mt-1 leading-relaxed">It will notice preferences and facts as you chat — they will appear here with where they came from and when.</p>
-      </div>
+      <EmptyState
+        icon={Brain}
+        title="No knowledge yet — start a conversation"
+        description="It will notice preferences and facts as you chat — they will appear here with where they came from and when."
+      />
     )
   }
 

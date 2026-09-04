@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, X, MessageSquareText, SearchX, WifiOff } from 'lucide-react'
+import { Search, X, MessageSquareText, SearchX, WifiOff, RefreshCw } from 'lucide-react'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
@@ -25,6 +25,7 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
 
@@ -59,22 +60,31 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
     }
   }, [open, onClose, onSelect, results])
 
-  useEffect(() => {
-    if (!query.trim()) { setResults([]); setError(false); return }
+  const doSearch = (q: string) => {
     setLoading(true)
     setError(false)
+    setErrorMessage(null)
+    fetch(`${API_BASE}/api/conversations/search?q=${encodeURIComponent(q)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(r.statusText || 'search request failed')
+        return r.json()
+      })
+      .then((list) => setResults(list))
+      .catch((e: unknown) => {
+        setResults([])
+        setError(true)
+        setErrorMessage(e instanceof Error ? e.message : 'Search failed')
+      })
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); setError(false); setErrorMessage(null); return }
+    setLoading(true)
+    setError(false)
+    setErrorMessage(null)
     const timeout = setTimeout(() => {
-      fetch(`${API_BASE}/api/conversations/search?q=${encodeURIComponent(query)}`)
-        .then((r) => {
-          if (!r.ok) throw new Error('search request failed')
-          return r.json()
-        })
-        .then((list) => setResults(list))
-        .catch(() => {
-          setResults([])
-          setError(true)
-        })
-        .finally(() => setLoading(false))
+      doSearch(query.trim())
     }, 200)
     return () => clearTimeout(timeout)
   }, [query])
@@ -125,7 +135,15 @@ export function SearchModal({ open, onClose, onSelect }: Props) {
                   tone="error"
                   icon={WifiOff}
                   title="Search couldn't be completed"
-                  description="Check your connection and try again."
+                  description={errorMessage || 'Check your connection and try again.'}
+                  action={
+                    <button
+                      onClick={() => doSearch(query.trim())}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-base-800 border border-base-700 text-xs text-base-300 hover:bg-base-700 transition-colors"
+                    >
+                      <RefreshCw size={12} /> Retry
+                    </button>
+                  }
                 />
               )}
               {!loading && !error && query && results.length === 0 && (

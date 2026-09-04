@@ -1,13 +1,16 @@
-import { useState, useEffect, useCallback } from 'react'
-import { PlayCircle, Square, RefreshCw, Clock, CheckCircle, XCircle, PauseCircle, Play, Loader2 } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { PlayCircle, Square, RefreshCw, Clock, CheckCircle, XCircle, PauseCircle, Play, Loader2, AlertTriangle } from 'lucide-react'
 import { BackgroundRunInfo } from '@/types'
 import { EmptyState } from '@/components/common/EmptyState'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 interface Props {
   runs: BackgroundRunInfo[]
   onStart: (goal: string) => void
   onStop: (runId: string) => void
   onRefresh: () => void
+  loading?: boolean
+  error?: string | null
 }
 
 const STATUS_ICONS: Record<string, React.ElementType> = {
@@ -60,7 +63,7 @@ function isActive(status: string): boolean {
   return status === 'running' || status === 'paused' || status === 'pending'
 }
 
-export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
+export function JobsPage({ runs, onStart, onStop, onRefresh, loading = false, error = null }: Props) {
   const [goal, setGoal] = useState('')
   const [showNew, setShowNew] = useState(false)
 
@@ -113,7 +116,21 @@ export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
           </div>
         )}
 
-        {active.length > 0 && (
+        {loading && <LoadingSkeleton rows={5} compact />}
+
+        {!loading && error && (
+          <div className="max-w-2xl mx-auto rounded-xl border border-err/30 bg-err/5 px-4 py-4 text-center">
+            <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-err">
+              <AlertTriangle size={14} /> Jobs could not be loaded
+            </p>
+            <p className="text-xs text-base-400 mt-1">{error}</p>
+            <button onClick={onRefresh} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-base-800 border border-base-700 text-xs text-base-300 hover:bg-base-700 transition-colors">
+              <RefreshCw size={12} /> Retry
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && active.length > 0 && (
           <section className="mb-8">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-base-500 mb-3">Active ({active.length})</h3>
             <div className="space-y-2">
@@ -124,7 +141,7 @@ export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
           </section>
         )}
 
-        {completed.length > 0 && (
+        {!loading && !error && completed.length > 0 && (
           <section>
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-base-500 mb-3">Completed ({completed.length})</h3>
             <div className="space-y-2">
@@ -135,7 +152,7 @@ export function JobsPage({ runs, onStart, onStop, onRefresh }: Props) {
           </section>
         )}
 
-        {runs.length === 0 && (
+        {!loading && !error && runs.length === 0 && (
           <EmptyState
             icon={Loader2}
             title="No jobs yet"

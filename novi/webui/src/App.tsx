@@ -106,6 +106,9 @@ export default function App() {
             generating={chat.generating}
             onStop={chat.stop}
             onOpenFull={handleSelectConversation}
+            loading={(chat as any).projectsLoading}
+            error={(chat as any).projectsError}
+            onRetry={(chat as any).refreshProjects}
           />
         )
       case 'jobs':
@@ -115,6 +118,8 @@ export default function App() {
             onStart={chat.startBackgroundRun}
             onStop={chat.stopBackgroundRun}
             onRefresh={chat.refreshBackgroundRuns}
+            loading={(chat as any).jobsLoading}
+            error={(chat as any).jobsError}
           />
         )
       case 'timeline':
@@ -125,6 +130,7 @@ export default function App() {
             onOpenConversation={handleSelectConversation}
             error={(chat as any).timelineError}
             status={(chat as any).timelineStatus}
+            loading={(chat as any).timelineLoading}
           />
         )
       default:

@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, FolderKanban, Trash2, Search, X } from 'lucide-react'
+import { Plus, FolderKanban, Trash2, Search, X, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { ProjectForm } from './ProjectForm'
 import { ProjectDetail } from './ProjectDetail'
 import { useConfirm } from '@/hooks/useConfirm'
 import { EmptyState } from '@/components/common/EmptyState'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 interface Props {
   projects: Project[]
@@ -24,6 +25,9 @@ interface Props {
   generating?: boolean
   onStop?: () => void
   onOpenFull?: (id: string) => void
+  loading?: boolean
+  error?: string | null
+  onRetry?: () => void
 }
 
 export function ProjectsPanel({
@@ -43,6 +47,9 @@ export function ProjectsPanel({
   generating,
   onStop,
   onOpenFull,
+  loading = false,
+  error = null,
+  onRetry,
 }: Props) {
   const { confirm, dialog } = useConfirm()
   const [showForm, setShowForm] = useState(false)
@@ -135,7 +142,21 @@ export function ProjectsPanel({
 
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-2xl mx-auto">
-          {projects.length > 0 && (
+          {loading && <LoadingSkeleton rows={5} compact />}
+          {!loading && error && (
+            <div className="rounded-xl border border-err/30 bg-err/5 px-4 py-4 text-center">
+              <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-err">
+                <AlertTriangle size={14} /> Could not load projects
+              </p>
+              <p className="text-xs text-base-400 mt-1">{error}</p>
+              {onRetry && (
+                <button onClick={onRetry} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-base-800 border border-base-700 text-xs text-base-300 hover:bg-base-700 transition-colors">
+                  <RefreshCw size={12} /> Retry
+                </button>
+              )}
+            </div>
+          )}
+          {!loading && !error && projects.length > 0 && (
             <div className="relative mb-6">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-500" />
               <input
@@ -155,27 +176,28 @@ export function ProjectsPanel({
               )}
             </div>
           )}
-          {projects.length === 0 ? (
-            <EmptyState
-              icon={FolderKanban}
-              title="No projects yet"
-              description="Create a project to group related conversations."
-              action={
-                <button
-                  onClick={() => setShowForm(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
-                >
-                  <Plus size={14} />
-                  New project
-                </button>
-              }
-            />
-          ) : filteredProjects.length === 0 ? (
-            <div className="py-10 text-center">
-              <p className="text-sm text-base-300">No matches for “{search}”</p>
-              <button onClick={() => setSearch('')} className="mt-2 text-xs text-accent hover:text-accent-soft transition-colors">Clear search</button>
-            </div>
-          ) : (
+          {!loading && !error && (
+            projects.length === 0 ? (
+              <EmptyState
+                icon={FolderKanban}
+                title="No projects yet"
+                description="Create a project to group related conversations."
+                action={
+                  <button
+                    onClick={() => setShowForm(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+                  >
+                    <Plus size={14} />
+                    New project
+                  </button>
+                }
+              />
+            ) : filteredProjects.length === 0 ? (
+              <div className="py-10 text-center">
+                <p className="text-sm text-base-300">No matches for “{search}”</p>
+                <button onClick={() => setSearch('')} className="mt-2 text-xs text-accent hover:text-accent-soft transition-colors">Clear search</button>
+              </div>
+            ) : (
               <div className="space-y-1">
               {filteredProjects.map(p => {
                 const matchConvos = q ? p.conversationIds.map(cid => conversations.find(c => c.id === cid)).filter(c => c && c.title.toLowerCase().includes(q)) as typeof conversations : []
@@ -210,6 +232,7 @@ export function ProjectsPanel({
                 )
               })}
             </div>
+            )
           )}
           </div>
         </div>

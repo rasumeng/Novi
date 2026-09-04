@@ -12,6 +12,28 @@ const entry = (over: Partial<TimelineEntry>): TimelineEntry => ({
   ...over,
 })
 
+describe('TimelinePage consistent states', () => {
+  it('shows loading skeleton when loading', () => {
+    const { container } = render(<TimelinePage entries={[]} onRefresh={vi.fn()} loading />)
+    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+  })
+
+  it('shows error banner with Retry and calls onRefresh', () => {
+    const onRefresh = vi.fn()
+    render(<TimelinePage entries={[]} onRefresh={onRefresh} error="Brain store unavailable — check logs" status="unavailable" />)
+    expect(screen.getAllByText('Brain store unavailable — check logs').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByText('Retry'))
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('error → retry shows loading', () => {
+    const { rerender, container } = render(<TimelinePage entries={[]} onRefresh={vi.fn()} error="oops" status="unavailable" />)
+    expect(screen.getByText('Retry')).toBeTruthy()
+    rerender(<TimelinePage entries={[]} onRefresh={vi.fn()} loading />)
+    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+  })
+})
+
 describe('TimelinePage', () => {
   it('shows an empty state when there are no entries', () => {
     render(<TimelinePage entries={[]} onRefresh={vi.fn()} />)

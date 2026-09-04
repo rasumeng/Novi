@@ -56,6 +56,7 @@ vi.mock('@/services/novi', () => ({
   deleteProjectApi: vi.fn(async () => {}),
   fetchProjectConversations: vi.fn(async () => []),
   fetchTimeline: vi.fn(async () => []),
+  fetchTimelineEnvelope: vi.fn(async () => ({ status: 'ok', brainAvailable: true, data: [] })),
 }))
 
 // Imported after the mock so the hook picks up MockNoviClient.

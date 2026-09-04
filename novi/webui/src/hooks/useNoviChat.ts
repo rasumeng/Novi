@@ -74,10 +74,16 @@ export function useNoviChat() {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([])
   const [timelineError, setTimelineError] = useState<string | null>(null)
   const [timelineStatus, setTimelineStatus] = useState<'ok' | 'unavailable' | 'disabled'>('ok')
+  const [timelineLoading, setTimelineLoading] = useState(true)
+  const [projectsLoading, setProjectsLoading] = useState(true)
+  const [projectsError, setProjectsError] = useState<string | null>(null)
+  const [jobsLoading, setJobsLoading] = useState(false)
+  const [jobsError, setJobsError] = useState<string | null>(null)
   const pushTimelineEntry = useCallback((entry: TimelineEntry) => {
     setTimeline(prev => mergeTimeline([entry, ...prev]))
   }, [])
   const refreshTimeline = useCallback(() => {
+    setTimelineLoading(true)
     fetchTimelineEnvelope().then((env) => {
       setTimelineStatus(env.status)
       setTimelineError(env.error ?? null)
@@ -88,8 +94,20 @@ export function useNoviChat() {
     }).catch(() => {
       setTimelineStatus('unavailable')
       setTimelineError('Brain store unavailable — check logs')
-    })
+    }).finally(() => setTimelineLoading(false))
   }, [])
+  const refreshProjects = useCallback(() => {
+    setProjectsLoading(true)
+    setProjectsError(null)
+    fetchProjects()
+      .then((list) => setProjects(list))
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : "Couldn't load your projects."
+        setProjectsError(msg || "Couldn't load your projects.")
+        showError("Couldn't load your projects.")
+      })
+      .finally(() => setProjectsLoading(false))
+  }, [showError])
   // Id of the conversation with unsaved changes, or null. Deliberately not a
   // boolean: persistence must save the conversation that actually changed
   // (the generation owner), not whatever is currently on screen.
@@ -112,12 +130,8 @@ export function useNoviChat() {
         setConversations([])
         showError("Couldn't load your conversations. Is Novi's backend running?")
       })
-    fetchProjects()
-      .then((list) => setProjects(list))
-      .catch(() => {
-        showError("Couldn't load your projects.")
-      })
-  }, [showError])
+    refreshProjects()
+  }, [refreshProjects, showError])
 
   useEffect(() => clearStopFallback, [])
 
@@ -512,6 +526,8 @@ export function useNoviChat() {
         }
         case 'background_run_list':
           setBackgroundRuns(ev.runs)
+          setJobsLoading(false)
+          setJobsError(null)
           break
         case 'schedule_list':
         case 'schedule_created':
@@ -722,7 +738,16 @@ export function useNoviChat() {
   }, [])
 
   const handleRefreshBackgroundRuns = useCallback(() => {
-    clientRef.current?.listBackgroundRuns()
+    setJobsLoading(true)
+    setJobsError(null)
+    const ok = clientRef.current?.listBackgroundRuns() ?? false
+    if (!ok) {
+      setJobsError('Could not refresh jobs — not connected')
+      setJobsLoading(false)
+      return
+    }
+    // WS reply will clear loading via background_run_list; fallback timeout
+    window.setTimeout(() => setJobsLoading(false), 2000)
   }, [])
 
   const newChat = useCallback((projectId?: string | null) => {
@@ -896,10 +921,16 @@ export function useNoviChat() {
     plan: activeIsGenerating ? plan : null,
     permission: activeIsGenerating ? permission : null,
 backgroundRuns,
+    jobsError,
+    jobsLoading,
     timeline,
     timelineError,
     timelineStatus,
+    timelineLoading,
     refreshTimeline,
+    projectsLoading,
+    projectsError,
+    refreshProjects,
     sendMessage,
     deepResearch,
     toggleDeepResearch,
