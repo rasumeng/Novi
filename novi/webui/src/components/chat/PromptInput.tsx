@@ -92,6 +92,9 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(false)
   const [workloadCaps, setWorkloadCaps] = useState<Record<string, { vision: boolean; tools: boolean; reasoning: boolean; thinking: boolean; audio: boolean; coding: boolean }> | null>(null)
+  const [micError, setMicError] = useState<string | null>(null)
+  // Privacy: Transcription currently uses Google Speech API (sends audio to google.com). Offline alternative planned. Disable mic to avoid.
+  const TRANSCRIPTION_PRIVACY_NOTE = "Transcription currently uses Google Speech API (sends audio to google.com). Offline alternative planned. Disable mic to avoid."
 
   const transcribeAudio = useCallback(async (blob: Blob): Promise<string | null> => {
     const form = new FormData()
@@ -99,10 +102,30 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
     try {
       const r = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: form })
       if (r.ok) {
-        const { text } = await r.json()
-        return text ?? null
+        const data = await r.json()
+        if (data.ok === true) {
+          setMicError(null)
+          return data.text ?? null
+        }
+        if (data.ok === false) {
+          const detail = data.detail ? `: ${data.detail}` : ""
+          const msg = data.error ? `${data.error}${detail}` : "transcription failed"
+          if (data.error !== "no_speech") setMicError(msg.slice(0, 300))
+          // no_speech is not an error tospam; silently ignore
+          if (data.error === "no_speech") setMicError(null)
+          return null
+        }
+        // legacy fallback: {text:""} shape
+        if (typeof data.text === "string" && data.text) {
+          setMicError(null)
+          return data.text
+        }
+        return null
       }
-    } catch { /* ignore */ }
+      setMicError(`transcription failed: HTTP ${r.status}`)
+    } catch (e) {
+      setMicError(e instanceof Error ? e.message.slice(0, 300) : "transcription failed")
+    }
     return null
   }, [])
 
@@ -466,6 +489,15 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           )}
         </div>
       )}
+      {micError && (
+        <div className="mx-2 mb-2 p-2 rounded-xl border border-red-500/30 bg-red-500/10 flex items-start gap-2">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5 text-red-400" />
+          <span className="text-[11px] leading-relaxed text-red-300">{micError}</span>
+          <button onClick={() => setMicError(null)} aria-label="Dismiss transcription error" className="ml-auto p-1 -mr-1 rounded-lg text-red-300 hover:text-red-100 hover:bg-red-500/20 transition-colors">
+            <X size={12} />
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between px-2.5 pb-1.5">
         <div className="flex items-center gap-1">
           
@@ -521,8 +553,8 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
                   : 'text-red-400 bg-red-500/10 border border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.25)]'
             }`}
             title={
-              micState === 'idle' ? 'Voice input' :
-              micState === 'listening' ? 'Listening — tap to stop' : 'Recording — tap to stop'
+              (micState === 'idle' ? 'Voice input' :
+              micState === 'listening' ? 'Listening — tap to stop' : 'Recording — tap to stop') + ` — ${TRANSCRIPTION_PRIVACY_NOTE}`
             }
           >
             <Mic size={16} className={micState !== 'idle' ? 'animate-pulse' : ''} />

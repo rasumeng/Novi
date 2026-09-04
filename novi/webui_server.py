@@ -1435,36 +1435,99 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         b = get_backend()
         return build_knowledge_overview(b.get("brain"))
 
+    # Privacy disclosure: Transcription currently uses Google Speech API (sends audio to google.com).
+    # Offline alternative planned. Disable mic to avoid sending audio externally.
     @app.post("/api/transcribe")
     async def transcribe_audio(file: UploadFile = File(...)):
-        import tempfile, os
-        import speech_recognition as sr
-        from pydub import AudioSegment
+        """
+        Transcribe audio to text via Google Speech API.
+
+        Privacy: Transcription currently uses Google Speech API (sends audio to google.com).
+        Offline alternative planned. Disable mic to avoid sending audio externally.
+
+        Returns:
+            Success: {"text": "...", "ok": true}
+            Failure: {"text": "", "ok": false, "error": "<category>", "detail": "<message[:500]>"}
+                error categories: "speech_recognition missing" | "pydub missing" | "ffmpeg missing" | "network" | "no_speech" | "empty_audio" | "unknown"
+        """
+        import tempfile
+        import os
+
         data = await file.read()
         if not data:
-            return {"text": ""}
+            return {"text": "", "ok": False, "error": "empty_audio", "detail": "no audio data received"}
         src_path = ""
         wav_path = ""
         try:
+            try:
+                import speech_recognition as sr
+            except ImportError as e:
+                return {"text": "", "ok": False, "error": "speech_recognition missing", "detail": str(e)[:500]}
+            try:
+                from pydub import AudioSegment
+                from pydub.exceptions import CouldntDecodeError
+            except ImportError as e:
+                return {"text": "", "ok": False, "error": "pydub missing", "detail": str(e)[:500]}
+
             with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
                 f.write(data)
                 src_path = f.name
-            seg = AudioSegment.from_file(src_path)
+            try:
+                seg = AudioSegment.from_file(src_path)
+            except FileNotFoundError as e:
+                return {"text": "", "ok": False, "error": "ffmpeg missing", "detail": str(e)[:500]}
+            except OSError as e:
+                msg = str(e).lower()
+                if "ffmpeg" in msg or "ffprobe" in msg or "no such file" in msg or "couldn't find" in msg:
+                    return {"text": "", "ok": False, "error": "ffmpeg missing", "detail": str(e)[:500]}
+                raise
+            except CouldntDecodeError as e:
+                return {"text": "", "ok": False, "error": "ffmpeg missing", "detail": str(e)[:500]}
+            except Exception as e:
+                if "ffmpeg" in str(e).lower() or "ffprobe" in str(e).lower():
+                    return {"text": "", "ok": False, "error": "ffmpeg missing", "detail": str(e)[:500]}
+                raise
+
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 seg.export(f.name, format="wav")
                 wav_path = f.name
             r = sr.Recognizer()
             with sr.AudioFile(wav_path) as src:
                 audio = r.record(src)
-            text = r.recognize_google(audio)
-            return {"text": text}
-        except sr.UnknownValueError:
-            return {"text": ""}
-        except Exception:
-            return {"text": ""}
+            try:
+                text = r.recognize_google(audio)
+            except sr.UnknownValueError as e:
+                return {"text": "", "ok": False, "error": "no_speech", "detail": (str(e)[:500] or "speech not understood")}
+            except sr.RequestError as e:
+                return {"text": "", "ok": False, "error": "network", "detail": str(e)[:500]}
+            return {"text": text, "ok": True}
+        except Exception as e:
+            msg = str(e)
+            # Preserve distinct categories for import-type failures that escaped inner handling
+            if isinstance(e, ImportError):
+                low = msg.lower()
+                if "speech_recognition" in low:
+                    return {"text": "", "ok": False, "error": "speech_recognition missing", "detail": msg[:500]}
+                if "pydub" in low:
+                    return {"text": "", "ok": False, "error": "pydub missing", "detail": msg[:500]}
+                return {"text": "", "ok": False, "error": "unknown", "detail": msg[:500]}
+            # Network-ish fallback for RequestError-like names
+            if type(e).__name__ == "RequestError":
+                return {"text": "", "ok": False, "error": "network", "detail": msg[:500]}
+            if "ffmpeg" in msg.lower() or "ffprobe" in msg.lower():
+                return {"text": "", "ok": False, "error": "ffmpeg missing", "detail": msg[:500]}
+            return {"text": "", "ok": False, "error": "unknown", "detail": msg[:500]}
         finally:
-            if src_path: os.unlink(src_path)
-            if wav_path: os.unlink(wav_path)
+            try:
+                if src_path and os.path.exists(src_path):
+                    os.unlink(src_path)
+            except Exception:
+                pass
+            try:
+                if wav_path and os.path.exists(wav_path):
+                    os.unlink(wav_path)
+            except Exception:
+                pass
 
     # ── Projects ───────────────────────────────────────────────
 
