@@ -98,6 +98,10 @@ class ExecutionContext:
     grounding_error: str | None = None
     grounding_quality: str = ""
     """Serialized RetrievalQuality value. Empty string means no retrieval was attempted."""
+    grounding_status: str = ""
+    """Honest search state: grounded | not_configured | no_results | failed | "" (no attempt)."""
+    search_error: str | None = None
+    """Optional searchError surfaced when grounding_status is not_configured or failed."""
     evidence_context: Optional[EvidenceContext] = None
     """Phase 7 structured evidence (frozen contract). Observational only —
        never set by runtime; populated by an optional downstream consumer.
@@ -233,6 +237,12 @@ class ExecutionContext:
             d["grounding_length"] = len(self.grounding_text)
         if self.grounding_quality:
             d["grounding_quality"] = self.grounding_quality
+        if self.grounding_status:
+            d["grounding_status"] = self.grounding_status
+        if self.grounding_error:
+            d["grounding_error"] = self.grounding_error
+        if self.search_error:
+            d["search_error"] = self.search_error
         d["retrieval_strategy"] = self.retrieval_plan.strategy.value
         d["retrieval_sources"] = [s.value for s in self.retrieval_plan.sources]
         d["retrieval_escalated"] = self.retrieval_escalated

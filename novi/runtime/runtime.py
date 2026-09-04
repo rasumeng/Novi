@@ -333,6 +333,8 @@ class NoviRuntime:
     def _system_prompt(self, user_input: str, intent: str = "conversation",
                        grounding: str = "",
                        grounding_error: str | None = None,
+                       grounding_status: str = "",
+                       search_error: str | None = None,
                        attachments: list[dict] | None = None,
                        activated_skills: list[dict] | None = None,
                        allowed_tools: list[str] | None = None,
@@ -388,7 +390,15 @@ class NoviRuntime:
                 parts.append(f"\nFiles used: {', '.join(workspace_files[:5])}")
         if grounding:
             parts.append(f"\nSearch results (use as primary source — prioritize over internal knowledge):\n{grounding}\n")
+        elif grounding_status == "not_configured":
+            parts.append("\n[Search disabled] Search not configured — set Brave API key or SearXNG URL in Settings → Connectors.\n")
+        elif grounding_status == "no_results":
+            parts.append("\nSearch returned no results for this query. Rely on internal knowledge and note that no sources were found.\n")
+        elif grounding_status == "failed":
+            detail = search_error or grounding_error or "unknown error"
+            parts.append(f"\nSearch failed: {detail}. Rely on internal knowledge or suggest retry. Do NOT pretend info exists.\n")
         elif grounding_error:
+            # legacy fallback
             parts.append("\nSearch failed. Rely on internal knowledge or suggest retry. Do NOT pretend info exists.")
 
         return "\n\n".join(parts)
@@ -776,6 +786,8 @@ class NoviRuntime:
             base_msgs = [SystemMessage(content=self._system_prompt(
                 user_input, intent_str, full_grounding,
                 grounding_error=ctx.grounding_error,
+                grounding_status=getattr(ctx, "grounding_status", "") or "",
+                search_error=getattr(ctx, "search_error", None),
                 attachments=ctx.attachments, activated_skills=ctx.activated_skills,
                 allowed_tools=ctx.allowed_tools, analysis=ctx.analysis, trace=ctx.trace,
                 memory_context=ctx.memory_context, project_context=ctx.project_context,

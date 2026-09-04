@@ -364,16 +364,30 @@ export function useNoviChat() {
           appendToken(ev.text)
           break
         case 'thinking':
-        case 'status':
+        case 'status': {
+          // Honest search state: surface distinct icons per grounding_status
+          const txt = (ev as any).text || ''
+          let icon = 'Brain'
+          let st: 'running' | 'error' = 'running'
+          if (txt.includes('Search not configured')) {
+            icon = 'Settings'
+            st = 'error'
+          } else if (txt.includes('Search failed')) {
+            icon = 'AlertTriangle'
+            st = 'error'
+          } else if (txt.includes('No search results')) {
+            icon = 'SearchX'
+          }
           pushStep({
             type: 'thinking',
-            icon: 'Brain',
-            label: ev.text,
-            detail: ev.detail,
-            query: ev.query,
-            status: 'running',
+            icon,
+            label: txt,
+            detail: (ev as any).detail,
+            query: (ev as any).query,
+            status: st,
           })
           break
+        }
         case 'reasoning':
           pushReasoning(ev.text)
           break

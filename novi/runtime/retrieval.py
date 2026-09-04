@@ -32,6 +32,8 @@ from .unified_retrieval import SourceBinding, UnifiedRetriever
 
 log = logging.getLogger("novi.retrieval")
 
+NOT_CONFIGURED_MSG = "Search not configured — set Brave API key or SearXNG URL in Settings → Connectors."
+
 _SEARCH_STOPWORDS = {
     "what", "is", "the", "are", "how", "to", "in", "of", "for", "a", "an",
     "and", "or", "on", "at", "by", "with", "from", "do", "does", "can",
@@ -382,11 +384,70 @@ class RetrievalExecutor:
     def reformulate_query(original: str, key_terms: list[str]) -> str:
         return " ".join(key_terms[:6])
 
+    def _is_search_configured(self) -> bool:
+        """Whether a search backend is configured per WebSearchService."""
+        try:
+            from ..search import WebSearchService
+            return WebSearchService().is_configured()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _classify_grounding_status(bundle: EvidenceBundle) -> str:
+        """Map an EvidenceBundle to honest grounding_status."""
+        err = (bundle.error or "")
+        low = err.lower()
+        if err and ("not configured" in low or "isn't configured" in low or "search not configured" in low):
+            return "not_configured"
+        if err:
+            return "failed"
+        if not bundle.results or bundle.source_count == 0:
+            return "no_results"
+        if bundle.quality == RetrievalQuality.EMPTY:
+            return "no_results"
+        if bundle.quality == RetrievalQuality.FAILED:
+            return "failed"
+        return "grounded"
+
+    def _finalize_grounding(self, ctx, bundle) -> str:
+        """Populate honest grounding fields on ctx/trace from bundle; return status."""
+        status = self._classify_grounding_status(bundle)
+        ctx.grounding_status = status
+        ctx.grounding_error = bundle.error
+        ctx.search_error = bundle.error
+        ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
+        # Legacy failed alias: if provider error already classified as FAILED with quality,
+        # keep quality as FAILED; for not_configured ensure FAILED too
+        if status in ("not_configured", "failed") and not ctx.grounding_quality:
+            ctx.grounding_quality = RetrievalQuality.FAILED.value
+        if ctx.trace is not None:
+            ctx.trace.grounding_status = status
+            ctx.trace.grounding_error = bundle.error
+            ctx.trace.grounding_quality = ctx.grounding_quality
+            ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error) or status in ("not_configured", "failed", "no_results")
+            ctx.trace.grounding_source_count = bundle.source_count
+            ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+        return status
+
     # ── low-level search ────────────────────────────────────────────────
 
     def execute_search(self, user_input: str, trace=None) -> EvidenceBundle:
         if not user_input or not user_input.strip():
             return EvidenceBundle(query=user_input)
+        if not self._is_search_configured():
+            # Honest not_configured without touching provider/network
+            bundle = EvidenceBundle(query=user_input, error=NOT_CONFIGURED_MSG, quality=RetrievalQuality.FAILED)
+            if trace is not None and self.debug_trace:
+                trace.debug_events.append(DebugTraceEvent(
+                    category="retrieval",
+                    data={
+                        "status": "not_configured",
+                        "error": bundle.error,
+                        "query": user_input,
+                        "quality": bundle.quality.value,
+                    },
+                ))
+            return bundle
         collector = self._web_source
         bundle = collector.collect(user_input, min_sources=2)
 
@@ -817,13 +878,22 @@ class RetrievalExecutor:
             t0 = time.time()
             bundle = self.execute_search(user_input, trace=ctx.trace)
             self._apply_web_evidence(ctx, bundle)
-            ctx.grounding_error = bundle.error
-            ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
-            ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+            status = self._finalize_grounding(ctx, bundle)
             ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
-            ctx.trace.grounding_quality = ctx.grounding_quality
-            ctx.trace.grounding_source_count = bundle.source_count
-            ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+            if status == "not_configured":
+                yield ("status", NOT_CONFIGURED_MSG)
+                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+                yield ("trace", ev2)
+            elif status == "failed":
+                err = bundle.error or "Search failed"
+                yield ("status", err)
+                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+                yield ("trace", ev2)
+            elif status == "no_results":
+                msg = "No search results found for this query."
+                yield ("status", msg)
+                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
+                yield ("trace", ev2)
             return
 
         if plan.strategy in (RetrievalStrategy.KNOWLEDGE_ONLY, RetrievalStrategy.PROJECT_FIRST):
@@ -885,13 +955,22 @@ class RetrievalExecutor:
             yield ("thinking", "Escalating to web search...", "", user_input)
             bundle = self.execute_search(user_input, trace=ctx.trace)
             self._apply_web_evidence(ctx, bundle)
-            ctx.grounding_error = bundle.error
-            ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
-            ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+            status = self._finalize_grounding(ctx, bundle)
             ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
-            ctx.trace.grounding_quality = ctx.grounding_quality
-            ctx.trace.grounding_source_count = bundle.source_count
-            ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+            if status == "not_configured":
+                yield ("status", NOT_CONFIGURED_MSG)
+                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+                yield ("trace", ev2)
+            elif status == "failed":
+                err = bundle.error or "Search failed"
+                yield ("status", err)
+                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+                yield ("trace", ev2)
+            elif status == "no_results":
+                msg = "No search results found for this query."
+                yield ("status", msg)
+                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
+                yield ("trace", ev2)
             return
 
     def _execute_grounding_search(
@@ -918,13 +997,22 @@ class RetrievalExecutor:
         t0 = time.time()
         bundle = self.execute_search(user_input, trace=ctx.trace)
         self._apply_web_evidence(ctx, bundle)
-        ctx.grounding_error = bundle.error
-        ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
-        ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+        status = self._finalize_grounding(ctx, bundle)
         ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
-        ctx.trace.grounding_quality = ctx.grounding_quality
-        ctx.trace.grounding_source_count = bundle.source_count
-        ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+        if status == "not_configured":
+            yield ("status", NOT_CONFIGURED_MSG)
+            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+            yield ("trace", ev2)
+        elif status == "failed":
+            err = bundle.error or "Search failed"
+            yield ("status", err)
+            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+            yield ("trace", ev2)
+        elif status == "no_results":
+            msg = "No search results found for this query."
+            yield ("status", msg)
+            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
+            yield ("trace", ev2)
 
     def _emit_no_grounding(
         self, ctx: ExecutionContext
@@ -967,10 +1055,19 @@ class RetrievalExecutor:
         t0 = time.time()
         bundle = self.execute_search(user_input, trace=ctx.trace)
         self._apply_web_evidence(ctx, bundle)
-        ctx.grounding_error = bundle.error
-        ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error)
+        status = self._finalize_grounding(ctx, bundle)
         ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
-        ctx.grounding_quality = bundle.quality.value if bundle.quality else ""
-        ctx.trace.grounding_quality = ctx.grounding_quality
-        ctx.trace.grounding_source_count = bundle.source_count
-        ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
+        if status == "not_configured":
+            yield ("status", NOT_CONFIGURED_MSG)
+            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+            yield ("trace", ev2)
+        elif status == "failed":
+            err = bundle.error or "Search failed"
+            yield ("status", err)
+            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
+            yield ("trace", ev2)
+        elif status == "no_results":
+            msg = "No search results found for this query."
+            yield ("status", msg)
+            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
+            yield ("trace", ev2)

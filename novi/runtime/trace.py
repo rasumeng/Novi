@@ -112,6 +112,8 @@ class ExecutionTrace:
     grounding_quality: str = ""
     grounding_source_count: int = 0
     grounding_relevance_score: float = 0.0
+    grounding_status: str = ""
+    grounding_error: str | None = None
 
     recovery_attempts: int = 0
     recovery_action: str = ""
@@ -163,6 +165,8 @@ class ExecutionTrace:
             "grounding_quality": self.grounding_quality,
             "grounding_source_count": self.grounding_source_count,
             "grounding_relevance_score": round(self.grounding_relevance_score, 2),
+            "grounding_status": self.grounding_status,
+            "grounding_error": self.grounding_error,
             "recovery_attempts": self.recovery_attempts,
             "recovery_action": self.recovery_action,
             "retrieval_strategy": self.retrieval_strategy,
