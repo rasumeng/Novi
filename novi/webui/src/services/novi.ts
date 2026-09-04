@@ -26,7 +26,7 @@ export type ServerEvent =
   | { type: 'recent_conversations'; conversations: { id: string; title: string; updatedAt: string }[] }
   | { type: 'project_created'; project: Project; indexed: number }
   | { type: 'project_selected'; project: Project }
-  | { type: 'permission_request'; tool: string; args: Record<string, unknown>; id: string }
+  | { type: 'permission_request'; tool: string; args: Record<string, unknown>; id: string; timeoutMs?: number; expiresAt?: string }
   | { type: 'reasoning'; text: string }
   | { type: 'model'; text: string }
   | { type: 'phase'; phase: string; attempt?: number; reason?: string;

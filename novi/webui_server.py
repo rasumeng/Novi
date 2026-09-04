@@ -46,7 +46,7 @@ import threading
 import mimetypes
 from collections.abc import Callable
 from typing import Any
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
@@ -445,6 +445,7 @@ class Session:
         self._perm_event = threading.Event()
         self._perm_allowed = False
         self._perm_request_id = ""
+        self._perm_timed_out = False
         self._perm_lock = threading.Lock()
         self._plan_event = threading.Event()
         self._plan_approved = False
@@ -510,14 +511,23 @@ class Session:
     # runs in worker thread — block until the browser answers
     def _ask_permission(self, tool: str, args: dict) -> bool:
         req_id = f"perm-{uuid.uuid4().hex[:8]}"
+        timeout_ms = 120000
+        expires_at = (datetime.now(timezone.utc) + timedelta(milliseconds=timeout_ms)).isoformat()
         with self._perm_lock:
             self._perm_request_id = req_id
             self._perm_allowed = False
+            self._perm_timed_out = False
             self._perm_event.clear()
-        self._emit({"type": "permission_request", "id": req_id, "tool": tool, "args": args})
-        if not self._perm_event.wait(timeout=120):
+        self._emit({"type": "permission_request", "id": req_id, "tool": tool, "args": args, "timeoutMs": timeout_ms, "expiresAt": expires_at})
+        if not self._perm_event.wait(timeout=timeout_ms / 1000):
+            with self._perm_lock:
+                self._perm_timed_out = True
+                self._perm_request_id = ""
             return False
-        return self._perm_allowed
+        with self._perm_lock:
+            if self._perm_timed_out:
+                return False
+            return self._perm_allowed
 
     def answer_permission(self, allowed: bool, request_id: str | None = None):
         # Correlate the response with the in-flight request. A stale response
@@ -644,6 +654,7 @@ class Session:
         with self._perm_lock:
             self._perm_request_id = ""
             self._perm_allowed = False
+            self._perm_timed_out = False
             self._perm_event.set()
         self._plan_approved = False
         self._plan_event.set()

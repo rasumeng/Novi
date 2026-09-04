@@ -212,10 +212,55 @@ class ToolExecutor:
 
         # Stage 3: Permission gate
         if not self._check_permission(name, args, perm_mode, permission_callback):
-            out = (
-                f"Error: the user DENIED permission for {name}. Do not retry "
-                f"this call — explain what you wanted to do and ask the user."
-            )
+            timed_out = self._is_permission_timeout(permission_callback)
+            if timed_out:
+                out = (
+                    f"Error: Permission for {name} timed out — approve within 2 min or set Permissions → {name} to Allow"
+                )
+                # Runtime emits honest trace: permission_denied with reason timeout, distinct from explicit deny.
+                if trace is not None:
+                    try:
+                        from .trace import DebugTraceEvent, TraceAction, TraceEvent
+                        trace.user_events.append(TraceEvent(
+                            action=TraceAction.EXECUTING,
+                            category="permission_denied",
+                            summary=f"permission_denied: {name} reason=timeout",
+                        ))
+                        trace.debug_events.append(DebugTraceEvent(
+                            category="permission_denied",
+                            data={"tool": name, "reason": "timeout", "timeout_ms": 120000},
+                        ))
+                    except Exception:
+                        pass
+                if self.event_bus is not None:
+                    try:
+                        self.event_bus.emit("trace", category="permission_denied", reason="timeout", tool=name)
+                    except Exception:
+                        pass
+            else:
+                out = (
+                    f"Error: the user DENIED permission for {name}. Do not retry "
+                    f"this call — explain what you wanted to do and ask the user."
+                )
+                if trace is not None:
+                    try:
+                        from .trace import DebugTraceEvent, TraceAction, TraceEvent
+                        trace.user_events.append(TraceEvent(
+                            action=TraceAction.EXECUTING,
+                            category="permission_denied",
+                            summary=f"permission_denied: {name} reason=denied",
+                        ))
+                        trace.debug_events.append(DebugTraceEvent(
+                            category="permission_denied",
+                            data={"tool": name, "reason": "denied"},
+                        ))
+                    except Exception:
+                        pass
+                if self.event_bus is not None:
+                    try:
+                        self.event_bus.emit("trace", category="permission_denied", reason="denied", tool=name)
+                    except Exception:
+                        pass
             self.lesson_store.record(name, args, out)
             if coord is not None:
                 coord.record(name, args, out)
@@ -354,6 +399,30 @@ class ToolExecutor:
         if cb:
             return cb(name, args)
         return False
+
+    def _is_permission_timeout(self, permission_callback: Callable | None = None) -> bool:
+        """Return True if the last permission callback timed out (honest expiry).
+
+        Inspects the callback host's ``_perm_timed_out`` flag set by
+        ``Session._ask_permission`` on 120s expiry. Falls back to False for
+        explicit deny or non-Session callbacks so timeout is distinct.
+        """
+        cb = permission_callback or self._permission_callback
+        if cb is None:
+            return False
+        try:
+            host = getattr(cb, "__self__", None)
+            if host is None:
+                return False
+            if not hasattr(host, "_perm_timed_out"):
+                return False
+            lock = getattr(host, "_perm_lock", None)
+            if lock is not None:
+                with lock:
+                    return bool(getattr(host, "_perm_timed_out", False))
+            return bool(getattr(host, "_perm_timed_out", False))
+        except Exception:
+            return False
 
     def _sanitize(self, text: str) -> str:
         # L1: compress via ContextManager before generic truncation — keep paths/errors/counts

@@ -11,6 +11,8 @@ export interface PermissionRequest {
   tool: string
   args: Record<string, unknown>
   id: string
+  timeoutMs?: number
+  expiresAt?: string
 }
 
 // The backend agent session is single-flight: only one generation can be in
@@ -519,9 +521,14 @@ export function useNoviChat() {
         case 'assistant_event':
           pushTimelineEntry(ev.entry)
           break
-        case 'permission_request':
-          setPermission({ tool: ev.tool, args: ev.args, id: ev.id })
+        case 'permission_request': {
+          setPermission({ tool: ev.tool, args: ev.args, id: ev.id, timeoutMs: (ev as any).timeoutMs, expiresAt: (ev as any).expiresAt })
+          // Notification on pending — honest expiry visible even when user is elsewhere
+          try {
+            pushNotification({ severity: 'info', title: 'Permission required', message: `Novi wants to run ${ev.tool} — approve or deny` })
+          } catch {}
           break
+        }
         case 'done': {
           const finishedId = owner?.conversationId
           const wasViewing = !!finishedId && finishedId === resolvedActiveId

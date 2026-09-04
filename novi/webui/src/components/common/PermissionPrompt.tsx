@@ -7,13 +7,16 @@
 // WHAT will happen, shows clear Allow / Deny, and is fully keyboard-usable
 // (auto-focus on a safe default, Escape to deny, arrow keys to move focus).
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ShieldAlert, Check, X } from 'lucide-react'
+import { ShieldAlert, Check, X, Clock } from 'lucide-react'
 
 export interface PermissionRequest {
   tool: string
   args: Record<string, unknown>
+  id?: string
+  timeoutMs?: number
+  expiresAt?: string
 }
 
 interface Props {
@@ -64,6 +67,27 @@ function summarizeAction(request: PermissionRequest): string {
 export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Props) {
   const denyRef = useRef<HTMLButtonElement>(null)
   const allowRef = useRef<HTMLButtonElement>(null)
+  const [remainingSec, setRemainingSec] = useState<number | null>(null)
+
+  // Countdown from expiresAt (honest expiry). Updates every second; shows "Deny in 1:58".
+  useEffect(() => {
+    if (!request.expiresAt) {
+      setRemainingSec(null)
+      return
+    }
+    const expires = new Date(request.expiresAt).getTime()
+    if (isNaN(expires)) {
+      setRemainingSec(null)
+      return
+    }
+    const tick = () => {
+      const diff = Math.max(0, expires - Date.now())
+      setRemainingSec(Math.ceil(diff / 1000))
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => window.clearInterval(id)
+  }, [request.expiresAt, request.id])
 
   // Focus a safe default (Deny) and make Escape a deny — never an allow.
   useEffect(() => {
@@ -84,6 +108,8 @@ export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Prop
     }
   }
 
+  const formatRemaining = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
   const body = (
     <div>
       <p className="text-[13px] text-base-200 leading-relaxed">
@@ -102,6 +128,13 @@ export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Prop
         </div>
       )}
 
+      {remainingSec !== null && (
+        <p className="flex items-center gap-1.5 text-[11px] text-base-400 mt-2" aria-live="polite">
+          <Clock size={12} className="shrink-0" />
+          Deny in {formatRemaining(remainingSec)}
+        </p>
+      )}
+
       <div className="flex gap-2 mt-4" role="group" aria-label="Permission decision" onKeyDown={handleArrowKey}>
         <button
           ref={denyRef}
@@ -109,7 +142,7 @@ export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Prop
           className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 py-2 text-[13px] font-medium text-red-400 transition-colors"
         >
           <X size={14} />
-          Deny
+          {remainingSec !== null ? `Deny in ${formatRemaining(remainingSec)}` : 'Deny'}
         </button>
         <button
           ref={allowRef}

@@ -16,6 +16,8 @@ interface PermissionRequest {
   tool: string
   args: Record<string, unknown>
   id: string
+  timeoutMs?: number
+  expiresAt?: string
 }
 
 interface Props {
