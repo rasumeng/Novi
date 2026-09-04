@@ -124,6 +124,18 @@ Environment variables honored by the shell: `NOVI_REPO_ROOT`,
   (`splash::error_url`) instead of only in those logs.
 - First release build downloads WebView2 bootstrapper — needs network.
 
+## Attachments
+
+- Storage: `~/.novi/attachments/` (per-file cap 100 MB, `webui_server.py:MAX_UPLOAD_SIZE`).
+  Thumbnails in `~/.novi/attachments/thumbs/` (128 px, best-effort; failures logged
+  via `log.warning("thumb failed for %s: %s", id, e)`).
+- Lifecycle: attachments are referenced from conversation `.md` via `@attachments` JSON
+  markers. On `DELETE /api/conversations/{id}` and `DELETE /api/attachments/{id}`
+  the server sweeps any files/thumbs no longer referenced by any `.md` (immediate
+  for dereferenced). Startup/shutdown also sweep orphans older than 7 days
+  (`novi/services/attachment_gc.py:DEFAULT_GRACE_SECONDS`), so a fresh upload not
+  yet saved is not deleted on restart. Sweep is best-effort and logs failures.
+
 ## Validation
 
 - `tauri dev` (requires rust + node).

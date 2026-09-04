@@ -104,6 +104,7 @@ _backend_lock = threading.Lock()
 _CONVERSATIONS_LOCK = threading.RLock()
 _PROJECTS_LOCK = threading.RLock()
 _PERSIST_LOGGER = logging.getLogger("novi.webui_server.persistence")
+log = logging.getLogger("novi.webui_server")
 
 # Background agent runs (run_id -> run info + thread).
 _background_runs: dict[str, dict] = {}
@@ -667,6 +668,12 @@ def _shutdown_backend():
     subprocesses, connections, or runtime tools behind. Idempotent: stops are
     safe when the backend (or the subsystem) was never started.
     """
+    # Attachment GC shutdown sweep — delete orphans before exit (with grace)
+    try:
+        from .services.attachment_gc import DEFAULT_GRACE_SECONDS, sweep_orphan_attachments
+        sweep_orphan_attachments(ATTACHMENTS_DIR, CHATS_DIR, DEFAULT_GRACE_SECONDS)
+    except Exception as e:
+        log.warning("attachment GC shutdown sweep failed: %s", e)
     with _backend_lock:
         backend = _shared_backend
     if backend is None:
@@ -709,9 +716,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     CHATS_DIR.mkdir(parents=True, exist_ok=True)
 
     def _atomic_write_text(path: Path, data: str) -> None:
+        import time as _time
+
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(data, "utf-8")
-        tmp.replace(path)
+        # Windows: replace may hit PermissionError if file is concurrently read;
+        # retry briefly rather than failing the request.
+        for _attempt in range(5):
+            try:
+                tmp.replace(path)
+                return
+            except PermissionError:
+                if _attempt == 4:
+                    raise
+                _time.sleep(0.02 * (_attempt + 1))
 
     def _escape_body(text: str) -> str:
         return re.sub(r'^## ', r'\#\# ', text, flags=re.MULTILINE)
@@ -919,6 +937,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         # Canonical: no prune needed — project.conversationIds is derived from conversation.projectId.
         if md_path.exists():
             md_path.unlink()
+        # Attachment GC: sweep orphans no longer referenced by any .md
+        try:
+            from .services.attachment_gc import sweep_orphan_attachments
+            sweep_orphan_attachments(ATTACHMENTS_DIR, CHATS_DIR)
+        except Exception as e:
+            log.warning("attachment GC after conversation delete failed: %s", e)
         return {"ok": True}
 
     def _conversation_by_id(conv_id: str) -> dict | None:
@@ -2008,6 +2032,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Attachments stored locally in ~/.novi/attachments — pruned when
+    # conversations deleted or on next restart (startup/shutdown GC sweep).
+    # Per-file cap is 100 MB (MAX_UPLOAD_SIZE).
     MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 
     @app.post("/api/attachments")
@@ -2044,8 +2071,10 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 img.thumbnail((128, 128))
                 img.save(thumb_path)
                 att["thumbnail"] = f"/api/attachments/{att_id}/thumb"
-            except ImportError:
-                pass
+            except ImportError as e:
+                log.warning("thumb failed for %s: %s", att_id, e)
+            except Exception as e:
+                log.warning("thumb failed for %s: %s", att_id, e)
 
         return att
 
@@ -2079,9 +2108,26 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 p.unlink()
                 thumb = ATTACHMENTS_DIR / "thumbs" / p.name
                 if thumb.exists():
-                    thumb.unlink()
-                return {"ok": True}
+                    try:
+                        thumb.unlink()
+                    except Exception as e:
+                        log.warning("thumb delete failed for %s: %s", att_id, e)
+                break
+        # sweep any other orphans no longer referenced by any .md
+        try:
+            from .services.attachment_gc import sweep_orphan_attachments
+            sweep_orphan_attachments(ATTACHMENTS_DIR, CHATS_DIR)
+        except Exception as e:
+            log.warning("attachment GC after delete failed: %s", e)
         return {"ok": True}
+
+    # startup GC (synchronous, best-effort) — lifespan also sweeps async on server start
+    try:
+        from .services.attachment_gc import DEFAULT_GRACE_SECONDS
+        from .services.attachment_gc import sweep_orphan_attachments as _sweep_startup
+        _sweep_startup(ATTACHMENTS_DIR, CHATS_DIR, DEFAULT_GRACE_SECONDS)
+    except Exception as e:
+        log.warning("attachment GC startup sweep failed: %s", e)
 
     # ── task queue ────────────────────────────────────────────────────────
     from .task_queue import TaskQueue, TaskStatus
