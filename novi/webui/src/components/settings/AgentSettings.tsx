@@ -1,15 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Thermometer, ListOrdered, MessageSquareText, UserRound, Cpu, RefreshCw } from 'lucide-react'
-import type { SettingsData } from './types'
-import type { AgentConfig } from '@/types'
 import { fetchKnowledgeOverview } from '@/services/novi'
 import type { KnowledgeOverview } from '@/types'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
+import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 
 interface Props {
-  config: SettingsData | null
-  setConfig: (c: SettingsData) => void
-  setDirty: (d: boolean) => void
+  framework: ReturnType<typeof useFrameworkSettings>
 }
 
 /**
@@ -19,20 +16,19 @@ interface Props {
  * read-only context projection. There is deliberately no personality
  * selector here — personality is not a user-configurable static field.
  */
-export function AgentSettings({ config, setConfig, setDirty }: Props) {
-  const agentCfg: AgentConfig = {
-    system_prompt: (config as any)?.agent?.system_prompt ?? '',
-    max_steps: (config as any)?.agent?.max_steps ?? 10,
-    temperature: (config as any)?.agent?.temperature ?? 0.2,
+export function AgentSettings({ framework }: Props) {
+  const agentDict = (framework.values['agent'] as Record<string, unknown>) ?? {}
+  const agentCfg = {
+    system_prompt: (agentDict as any)?.system_prompt ?? '',
+    max_steps: (agentDict as any)?.max_steps ?? 10,
+    temperature: (agentDict as any)?.temperature ?? 0.2,
   }
 
-  const agentModel = (config?.models as Record<string, string>)?.['agent'] ?? ''
+  const agentModel = (framework.values['models.agent'] as string) ?? ''
 
-  const updateAgent = (patch: Partial<AgentConfig>) => {
-    if (!config) return
-    const agent = { ...((config as any).agent ?? {}), ...patch }
-    setConfig({ ...config, agent } as SettingsData)
-    setDirty(true)
+  const updateAgent = (patch: Record<string, unknown>) => {
+    const next = { ...(agentDict as Record<string, unknown>), ...patch }
+    void framework.set('agent', next)
   }
 
   return (

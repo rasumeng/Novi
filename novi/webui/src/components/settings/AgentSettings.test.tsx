@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { AgentSettings } from './AgentSettings'
-import type { SettingsData } from './types'
 
 vi.mock('@/services/novi', () => ({
   fetchKnowledgeOverview: vi.fn().mockResolvedValue({
@@ -14,18 +13,23 @@ vi.mock('@/services/novi', () => ({
   }),
 }))
 
-function makeConfig(over: Partial<SettingsData> = {}): SettingsData {
+function makeFramework(over: Record<string, unknown> = {}) {
   return {
-    llm: {},
-    models: { agent: 'llama3.1:8b' },
-    agent: { system_prompt: 'Be brief', max_steps: 8, temperature: 0.3 },
-    ...over,
-  }
+    values: {
+      agent: { system_prompt: 'Be brief', max_steps: 8, temperature: 0.3 },
+      'models.agent': 'llama3.1:8b',
+      ...over,
+    },
+    set: vi.fn(),
+    schema: null,
+    discovery: null,
+    loading: false,
+  } as any
 }
 
 describe('AgentSettings (M4.2a)', () => {
   it('shows identity/context projection from the Brain, not a personality selector', async () => {
-    render(<AgentSettings config={makeConfig()} setConfig={vi.fn()} setDirty={vi.fn()} />)
+    render(<AgentSettings framework={makeFramework()} />)
     await waitFor(() => expect(screen.getByText('What Novi knows about you')).toBeTruthy())
     expect(screen.getByText('Prefers concise answers')).toBeTruthy()
     // No personality controls allowed.
@@ -35,7 +39,7 @@ describe('AgentSettings (M4.2a)', () => {
   })
 
   it('keeps autonomy/behavior controls (system prompt, max steps, temperature)', () => {
-    render(<AgentSettings config={makeConfig()} setConfig={vi.fn()} setDirty={vi.fn()} />)
+    render(<AgentSettings framework={makeFramework()} />)
     expect(screen.getByText('Extra instructions')).toBeTruthy()
     expect(screen.getByText('Max steps')).toBeTruthy()
     expect(screen.getByText('Temperature')).toBeTruthy()
@@ -43,7 +47,7 @@ describe('AgentSettings (M4.2a)', () => {
   })
 
   it('shows the effective model as read-only reference', () => {
-    render(<AgentSettings config={makeConfig()} setConfig={vi.fn()} setDirty={vi.fn()} />)
+    render(<AgentSettings framework={makeFramework()} />)
     expect(screen.getByText('Effective model')).toBeTruthy()
     expect(screen.getByText('llama3.1:8b')).toBeTruthy()
   })

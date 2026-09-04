@@ -1,23 +1,6 @@
-import type { SettingsData } from './types'
-
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8765' : ''
 
 export { API_BASE }
-
-// ── Legacy config (kept for non-settings consumers) ─────────────────────
-
-export async function fetchConfig(): Promise<SettingsData> {
-  const r = await fetch(`${API_BASE}/api/config`)
-  return r.json()
-}
-
-export async function saveConfig(patch: Record<string, unknown>) {
-  await fetch(`${API_BASE}/api/configuration`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  })
-}
 
 // ── Configuration Framework API (Settings V2) ───────────────────────────
 

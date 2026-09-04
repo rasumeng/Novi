@@ -423,43 +423,11 @@ def register_defaults(reg: ConfigRegistry):
         ],
     ))
 
-    # Top-level configuration roots that the legacy web UI still writes as whole
-    # dicts (flushLegacy -> PUT /api/config). Registering them as namespaces
-    # keeps those writes on the single authoritative config framework path
-    # (validate -> persist -> apply -> emit) with no secondary raw-merge. The
-    # granular children (models.agent, llm.*, runtime.*, memory.*, embedding.*,
-    # mcp.servers.*, ...) are owned by the roots; unknown unknown keys still
-    # surface an explicit error rather than silently writing raw state.
-    reg.register_group(SettingGroup(
-        key="config_roots",
-        label="Configuration roots",
-        category=Category.GENERAL,
-        owner="runtime",
-        description="Top-level namespace roots so whole-dict compatibility writes route through the framework.",
-        settings=[
-            Setting(id="mcp", label="MCP", category=Category.CONNECTORS,
-                    owner="mcp", type=SettingType.JSON, default={},
-                    visibility=Visibility.HIDDEN, namespace=True),
-            Setting(id="models", label="Models", category=Category.MODELS,
-                    owner="runtime", type=SettingType.JSON, default={},
-                    visibility=Visibility.HIDDEN, namespace=True),
-            Setting(id="llm", label="LLM", category=Category.MODELS,
-                    owner="runtime", type=SettingType.JSON, default={},
-                    visibility=Visibility.HIDDEN, namespace=True),
-            Setting(id="runtime", label="Runtime", category=Category.GENERAL,
-                    owner="runtime", type=SettingType.JSON, default={},
-                    visibility=Visibility.HIDDEN, namespace=True),
-            Setting(id="memory", label="Memory", category=Category.MEMORY,
-                    owner="memory", type=SettingType.JSON, default={},
-                    visibility=Visibility.HIDDEN, namespace=True),
-            Setting(id="embedding", label="Embedding", category=Category.MEMORY,
-                    owner="memory", type=SettingType.JSON, default={},
-                    visibility=Visibility.HIDDEN, namespace=True),
-            Setting(id="personality", label="Personality", category=Category.DEVELOPER,
-                    owner="runtime", type=SettingType.STRING, default="",
-                    visibility=Visibility.HIDDEN),
-        ],
-    )) 
+    # config_roots removed (Task 4.1): whole-root bulk writes were the sole
+    # consumer. All mutations now go through per-setting framework PATCH/POST
+    # (e.g. permissions.*, mcp.servers, agent.*, search.*, memory.*,
+    # runtime.*). No production code writes whole roots like
+    # configuration.set("mcp", …) — audit confirmed zero consumers outside tests.
 
 
 # Workload human labels/descriptions. A workload is a model selection slot;

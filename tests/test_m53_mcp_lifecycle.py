@@ -234,7 +234,8 @@ def test_failed_connection_does_not_modify_config(mcp, tmp_path):
     cfg = _cfg(enabled=True, servers={"bad": {"command": "nope"}})
     for name, host in cfg["mcp"]["servers"].items():
         host.setdefault("enabled", True)
-    configuration.set("mcp", {"servers": cfg["mcp"]["servers"]}, by="test")
+    # Task 4.1: whole-root "mcp" removed — use granular mcp.servers
+    configuration.set("mcp.servers", cfg["mcp"]["servers"], by="test")
     configuration.set("mcp.enabled", True, by="test")
     intent = {"servers": cfg["mcp"]["servers"], "enabled": True}
 
@@ -243,11 +244,11 @@ def test_failed_connection_does_not_modify_config(mcp, tmp_path):
 
     # intent survives even though the server failed to connect
     assert configuration.get("mcp.enabled") is True
-    assert configuration.get("mcp") == intent
+    assert configuration.snapshot()["mcp"] == intent
     second = Configuration(reg, tmp_path / "cfg.toml")
     second.initialize()
     assert second.get("mcp.enabled") is True
-    assert set(second.get("mcp").keys()) == {"servers", "enabled"}
+    assert set(second.snapshot()["mcp"].keys()) == {"servers", "enabled"}
 
 
 # ── per-server enabled ────────────────────────────────────────────────────

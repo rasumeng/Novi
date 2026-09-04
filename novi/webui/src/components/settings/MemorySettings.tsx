@@ -1,18 +1,16 @@
 import { useState, useEffect } from 'react'
 import { Trash2, Brain } from 'lucide-react'
 import { API_BASE } from './api'
-import type { SettingsData } from './types'
 import { useToast } from '@/hooks/useToast'
 import { useConfirm } from '@/hooks/useConfirm'
 import { KnowledgeOverview } from '@/components/knowledge/KnowledgeOverview'
+import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 
 interface Props {
-  config: SettingsData | null
-  setConfig: (c: SettingsData) => void
-  setDirty: (d: boolean) => void
+  framework: ReturnType<typeof useFrameworkSettings>
 }
 
-export function MemorySettings({ config, setConfig, setDirty }: Props) {
+export function MemorySettings({ framework }: Props) {
   const { showError } = useToast()
   const { confirm, dialog } = useConfirm()
   const [searchQuery, setSearchQuery] = useState('')
@@ -76,10 +74,8 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
     }
   }
 
-  const setMemoryPref = (key: 'max_turns_before_summary' | 'max_short_term_pairs', value: number) => {
-    if (!config) return
-    setConfig({ ...config, memory: { ...config.memory, [key]: value } })
-    setDirty(true)
+  const setMemoryPref = (key: 'memory.max_turns_before_summary' | 'memory.max_short_term_pairs', value: number) => {
+    void framework.set(key, value)
   }
 
   useEffect(() => {
@@ -188,8 +184,8 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
             <input
               type="number"
               min={1}
-              value={config?.memory?.max_turns_before_summary ?? 5}
-              onChange={(e) => setMemoryPref('max_turns_before_summary', Math.max(1, parseInt(e.target.value) || 1))}
+              value={(framework.values['memory.max_turns_before_summary'] as number) ?? 5}
+              onChange={(e) => setMemoryPref('memory.max_turns_before_summary', Math.max(1, parseInt(e.target.value) || 1))}
               className="w-16 bg-base-900 border border-base-700 rounded-lg px-2 py-1.5 text-sm text-base-200 text-right outline-none focus:border-accent/40"
             />
           </div>
@@ -201,8 +197,8 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
             <input
               type="number"
               min={1}
-              value={config?.memory?.max_short_term_pairs ?? 10}
-              onChange={(e) => setMemoryPref('max_short_term_pairs', Math.max(1, parseInt(e.target.value) || 1))}
+              value={(framework.values['memory.max_short_term_pairs'] as number) ?? 10}
+              onChange={(e) => setMemoryPref('memory.max_short_term_pairs', Math.max(1, parseInt(e.target.value) || 1))}
               className="w-16 bg-base-900 border border-base-700 rounded-lg px-2 py-1.5 text-sm text-base-200 text-right outline-none focus:border-accent/40"
             />
           </div>

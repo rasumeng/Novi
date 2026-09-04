@@ -1,14 +1,18 @@
 import { PermissionSelect } from './PermissionSelect'
-import type { ToolInfo, SettingsData } from './types'
+import type { ToolInfo } from './types'
+import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 
 interface Props {
   tools: ToolInfo[]
-  config: SettingsData | null
-  updateToolPermission: (toolId: string, mode: string) => void
+  framework: ReturnType<typeof useFrameworkSettings>
 }
 
-export function ToolsSettings({ tools, config, updateToolPermission }: Props) {
-  const permissions = (config?.permissions ?? {}) as Record<string, unknown>
+export function ToolsSettings({ tools, framework }: Props) {
+  const permissions = (framework.values['permissions'] as Record<string, unknown>) ?? {}
+
+  const updateToolPermission = (toolId: string, mode: string) => {
+    void framework.set(`permissions.${toolId}`, mode)
+  }
 
   return (
     <div className="space-y-2">

@@ -23,8 +23,8 @@ import { fetchMcpCatalog, fetchMcpStatus, fetchServerDetail } from '@/services/n
 import type { McpCatalogEntry, McpStatusResponse, McpServerTool, McpServerDetail } from '@/types'
 import { API_BASE } from './api'
 import { CAPABILITY_DEFS, PERMISSION_DEFS } from './constants'
-import type { SettingsData } from './types'
 import { useConfirm } from '@/hooks/useConfirm'
+import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 import { CapabilityBadge } from '@/components/common/CapabilityBadge'
 
 function formatTimeAgo(ms: number): string {
@@ -37,9 +37,7 @@ function formatTimeAgo(ms: number): string {
 }
 
 interface Props {
-  config: SettingsData | null
-  setConfig: (c: SettingsData) => void
-  setDirty: (d: boolean) => void
+  framework: ReturnType<typeof useFrameworkSettings>
 }
 
 interface SearchConfigShape {
@@ -62,16 +60,17 @@ const SEARCH_STATE_STYLE: Record<string, { pill: string; label: string }> = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Web Search — isolated module, not mixed with MCP
 // ─────────────────────────────────────────────────────────────────────────────
-export function WebSearchCard({ config, setConfig, setDirty }: Props) {
-  const search: SearchConfigShape = ((config as any)?.search ?? {}) as SearchConfigShape
+export function WebSearchCard({ framework }: Props) {
+  const search: SearchConfigShape = {
+    backend: (framework.values['search.backend'] as string) ?? '',
+    brave_api_key: (framework.values['search.brave_api_key'] as string) ?? '',
+    url: (framework.values['search.url'] as string) ?? '',
+  } as SearchConfigShape
   const [testing, setTesting] = useState(false)
   const [result, setResult] = useState<SearchTestState | null>(null)
 
   const setSearchField = (key: keyof SearchConfigShape, value: string) => {
-    if (!config) return
-    const current = ((config as any).search ?? {}) as Record<string, unknown>
-    setConfig({ ...config, search: { ...current, [key]: value } } as SettingsData)
-    setDirty(true)
+    void framework.set(`search.${key}`, value)
   }
 
   const runTest = async () => {
@@ -291,7 +290,7 @@ function PatchbayHeader({
   )
 }
 
-export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
+export function ConnectorsSection({ framework }: Props) {
   const { confirm, dialog } = useConfirm()
   const [addOpen, setAddOpen] = useState(false)
   const [addName, setAddName] = useState('')
@@ -311,8 +310,8 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
   const [installedQuery, setInstalledQuery] = useState('')
   const [capFilter, setCapFilter] = useState<string | null>(null)
 
-  const devMode = !!(config as any)?.devMode
-  const servers = (config?.mcp as { servers?: Record<string, { command: string; args?: string[]; env?: Record<string, string>; permissions?: Record<string, boolean> }> })?.servers ?? {}
+  const devMode = !!((framework.values as any)?.devMode ?? (framework.values as any)?.['developer.devMode'])
+  const servers = (framework.values['mcp.servers'] as Record<string, { command: string; args?: string[]; env?: Record<string, string>; permissions?: Record<string, boolean> }>) ?? {}
   const entries = Object.entries(servers)
 
   useEffect(() => {
@@ -322,7 +321,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
     poll()
     const id = setInterval(poll, 5000)
     return () => clearInterval(id)
-  }, [config])
+  }, [framework.values])
 
   const catalogByName = useMemo(() => {
     const map: Record<string, McpCatalogEntry> = {}
@@ -414,7 +413,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
   }
 
   const handleAdd = () => {
-    if (!addName.trim() || !addCommand.trim() || !config) return
+    if (!addName.trim() || !addCommand.trim()) return
     const args = addArgs.trim() ? addArgs.split(',').map((s) => s.trim()).filter(Boolean) : undefined
     let env: Record<string, string> | undefined
     if (selectedCatalog && Object.keys(catalogEnvVars).length > 0) {
@@ -430,12 +429,8 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
       }
     }
     if (env && !Object.keys(env).length) env = undefined
-    const mcp = (config.mcp as any) ?? { servers: {} }
-    setConfig({
-      ...config,
-      mcp: { ...mcp, servers: { ...mcp.servers, [addName.trim()]: { command: addCommand.trim(), args, env } } },
-    })
-    setDirty(true)
+    const currentServers = (framework.values['mcp.servers'] as Record<string, any>) ?? {}
+    void framework.set('mcp.servers', { ...currentServers, [addName.trim()]: { command: addCommand.trim(), args, env } })
     setAddOpen(false)
     clearForm()
   }
@@ -446,11 +441,10 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
       description: 'Novi will lose access to any tools this connector provides. You can add it again later.',
       confirmLabel: 'Remove',
     })
-    if (!ok || !config) return false
-    const mcp = (config.mcp as any) ?? { servers: {} }
-    const { [name]: _, ...rest } = mcp.servers
-    setConfig({ ...config, mcp: { ...mcp, servers: rest } })
-    setDirty(true)
+    if (!ok) return false
+    const currentServers = (framework.values['mcp.servers'] as Record<string, any>) ?? {}
+    const { [name]: _, ...rest } = currentServers
+    void framework.set('mcp.servers', rest)
     return true
   }
 
@@ -485,15 +479,10 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
   }
 
   const setPermission = (serverName: string, permKey: string, value: boolean) => {
-    if (!config) return
-    const mcp = (config.mcp as any) ?? { servers: {} }
-    const server = mcp.servers[serverName] ?? {}
+    const currentServers = (framework.values['mcp.servers'] as Record<string, any>) ?? {}
+    const server = currentServers[serverName] ?? {}
     const perms = { ...server.permissions, [permKey]: value }
-    setConfig({
-      ...config,
-      mcp: { ...mcp, servers: { ...mcp.servers, [serverName]: { ...server, permissions: perms } } },
-    })
-    setDirty(true)
+    void framework.set('mcp.servers', { ...currentServers, [serverName]: { ...server, permissions: perms } })
   }
 
   const filteredCatalog = catalogSearch
@@ -511,7 +500,11 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
     catalogGroups[e.category].push(e)
   }
 
-  const searchShape: SearchConfigShape = ((config as any)?.search ?? {}) as SearchConfigShape
+  const searchShape: SearchConfigShape = {
+    backend: (framework.values['search.backend'] as string) ?? '',
+    brave_api_key: (framework.values['search.brave_api_key'] as string) ?? '',
+    url: (framework.values['search.url'] as string) ?? '',
+  } as SearchConfigShape
   const searchReady = !!searchShape.backend && (searchShape.backend === 'searxng' ? !!searchShape.url : !!searchShape.brave_api_key)
 
   return (
@@ -528,7 +521,7 @@ export function ConnectorsSection({ config, setConfig, setDirty }: Props) {
       />
 
       {/* Web Search — distinct module */}
-      <WebSearchCard config={config} setConfig={setConfig} setDirty={setDirty} />
+      <WebSearchCard framework={framework} />
 
       {/* Installed controls */}
       <div className="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">

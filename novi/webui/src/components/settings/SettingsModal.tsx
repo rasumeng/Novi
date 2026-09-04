@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Search, Settings, SlidersHorizontal } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/novi'
-import { fetchConfig, saveConfig, type SchemaResponse } from './api'
-import { useToast } from '@/hooks/useToast'
+import type { SchemaResponse } from './api'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
@@ -16,7 +15,7 @@ import { SkillsSection } from './SkillsSection'
 import { ConnectorsSection } from './ConnectorsSection'
 import { AgentSettings } from './AgentSettings'
 import { PermissionsSettings } from './PermissionsSettings'
-import type { SectionId, SettingsData, ToolInfo } from './types'
+import type { SectionId, ToolInfo } from './types'
 import type { Skill } from '@/types'
 
 export type { SectionId }
@@ -40,52 +39,16 @@ const PAGE_LABEL: Record<string, string> = {
 }
 
 export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: Props) {
-  const { showError } = useToast()
   const framework = useFrameworkSettings()
   const [section, setSection] = useState<SectionId>('general')
   const [search, setSearch] = useState('')
-  const [legacyConfig, setLegacyConfig] = useState<SettingsData | null>(null)
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const modalRef = useRef<HTMLDivElement>(null)
-  const initialLegacyRef = useRef<SettingsData | null>(null)
 
   useFocusTrap(modalRef, open)
 
-  // The framework schema is the single source of truth for every page.
   const schema = framework.schema
-
-  const updateLegacy = (next: SettingsData) => {
-    setLegacyConfig(next)
-    flushLegacy(next)
-  }
-
-  // Legacy nested config (memory/tools/agent/mcp) persists live through the
-  // framework endpoint; the legacy PUT is kept only as a compat fallback.
-  const flushLegacy = (next: SettingsData) => {
-    if (!legacyConfig) return
-    const prev = legacyConfig
-    const ids = new Set(schema?.settings.map((s) => s.id) ?? [])
-    for (const path of collectLeafPaths(prev, next)) {
-      if (ids.has(path)) {
-        const val = readLeaf(next, path)
-        void framework.set(path, val)
-      }
-    }
-    const patch = legacyPatch(next, initialLegacyRef.current)
-    if (Object.keys(patch).length > 0) {
-      void saveConfig(patch).catch(() => showError("Some advanced settings didn't persist."))
-    }
-  }
-
-  const updateToolPermission = (toolId: string, mode: string) => {
-    if (!legacyConfig) return
-    const next = {
-      ...legacyConfig,
-      permissions: { ...((legacyConfig.permissions as Record<string, unknown>) ?? {}), [toolId]: mode },
-    } as SettingsData
-    updateLegacy(next)
-  }
 
   const migrateSection = (target: SectionId) => setSection(target)
 
@@ -99,10 +62,6 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   const reloadData = () => {
     if (!open) return
     if (initialSection) setSection(initialSection)
-    void fetchConfig().then((cfg) => {
-      setLegacyConfig(cfg)
-      initialLegacyRef.current = JSON.parse(JSON.stringify(cfg))
-    }).catch(() => {})
     void fetchTools().then(setTools).catch(() => {})
     void fetchSkills().then(setSkills).catch(() => {})
   }
@@ -114,7 +73,6 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   useEffect(() => { reloadData() }, [open, initialSection]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const close = () => {
-    if (legacyConfig) flushLegacy(legacyConfig)
     onClose()
   }
 
@@ -217,11 +175,11 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 )}
 
                 {!framework.loading && section === 'agent' && (
-                  <AgentSettings config={legacyConfig} setConfig={updateLegacy} setDirty={() => {}} />
+                  <AgentSettings framework={framework} />
                 )}
 
                 {!framework.loading && section === 'memory' && (
-                  <MemorySettings config={legacyConfig} setConfig={updateLegacy} setDirty={() => {}} />
+                  <MemorySettings framework={framework} />
                 )}
 
                 {!framework.loading && section === 'skills' && (
@@ -234,15 +192,15 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                 )}
 
                 {!framework.loading && section === 'connectors' && (
-                  <ConnectorsSection config={legacyConfig} setConfig={updateLegacy} setDirty={() => {}} />
+                  <ConnectorsSection framework={framework} />
                 )}
 
                 {!framework.loading && section === 'permissions' && (
-                  <PermissionsSettings tools={tools} config={legacyConfig} updateToolPermission={updateToolPermission} />
+                  <PermissionsSettings tools={tools} framework={framework} />
                 )}
 
                 {!framework.loading && section === 'developer' && (
-                  <DeveloperPage schema={schema} framework={framework} config={legacyConfig} updateConfig={updateLegacy} />
+                  <DeveloperPage schema={schema} framework={framework} />
                 )}
               </div>
             </div>
@@ -253,11 +211,9 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
   )
 }
 
-function DeveloperPage({ schema, framework, config, updateConfig }: {
+function DeveloperPage({ schema, framework }: {
   schema: SchemaResponse | null
   framework: ReturnType<typeof useFrameworkSettings>
-  config: SettingsData | null
-  updateConfig: (next: SettingsData) => void
 }) {
   const developer = schema?.settings.filter((s) => s.category === 'developer') ?? []
   const embedding = schema?.settings.filter((s) => s.owner === 'memory') ?? []
@@ -313,59 +269,4 @@ function DeveloperPage({ schema, framework, config, updateConfig }: {
       </section>
     </div>
   )
-}
-
-// ── nested-config leaf diffing ────────────────────────────────────────────
-
-function collectLeafPaths(prev: Record<string, unknown>, next: Record<string, unknown>): string[] {
-  const out: string[] = []
-  const walk = (a: Record<string, unknown>, b: Record<string, unknown>, prefix: string) => {
-    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
-      const path = prefix ? `${prefix}.${key}` : key
-      const av = a[key]
-      const bv = b[key]
-      if (typeof av === 'object' && av !== null && typeof bv === 'object' && bv !== null) {
-        walk(av as Record<string, unknown>, bv as Record<string, unknown>, path)
-      } else if (av !== bv) {
-        out.push(path)
-      }
-    }
-  }
-  walk(prev, next, '')
-  return out
-}
-
-function readLeaf(obj: Record<string, unknown>, path: string): unknown {
-  let cur: unknown = obj
-  for (const part of path.split('.')) {
-    if (cur && typeof cur === 'object' && part in (cur as Record<string, unknown>)) {
-      cur = (cur as Record<string, unknown>)[part]
-    } else {
-      return undefined
-    }
-  }
-  return cur
-}
-
-export function legacyPatch(next: SettingsData, initial: SettingsData | null): Record<string, unknown> {
-  // Framework-owned roots are never bulk-written: workload model selection and
-  // the llm namespace persist through the framework (selection endpoint /
-  // schema settings), not through the legacy PATCH. Only roots a legacy page may
-  // have actually changed are PATCHed, and only when they differ from the snapshot
-  // taken when the modal opened — a stale root must never clobber a change made
-  // elsewhere in the same session (this was reverting the workload selection
-  // back to the pre-open value on modal close).
-  const keys = ['permissions', 'runtime', 'agent', 'mcp', 'personality', 'memory', 'embedding'] as const
-  const patch: Record<string, unknown> = {}
-  for (const k of keys) {
-    const nv = (next as unknown as Record<string, unknown>)[k]
-    if (nv === undefined || nv === null) continue
-    if (typeof nv === 'object' && Object.keys(nv).length === 0) continue
-    if (initial) {
-      const iv = (initial as unknown as Record<string, unknown>)[k]
-      if (JSON.stringify(iv) === JSON.stringify(nv)) continue
-    }
-    patch[k] = nv
-  }
-  return patch
 }

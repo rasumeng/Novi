@@ -1,11 +1,11 @@
 import { ShieldCheck } from 'lucide-react'
 import { ToolsSettings } from './ToolsSettings'
-import type { ToolInfo, SettingsData } from './types'
+import type { ToolInfo } from './types'
+import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 
 interface Props {
   tools: ToolInfo[]
-  config: SettingsData | null
-  updateToolPermission: (toolId: string, mode: string) => void
+  framework: ReturnType<typeof useFrameworkSettings>
 }
 
 /**
@@ -16,7 +16,7 @@ interface Props {
  * Connectors: a connector is an external capability source, while a
  * permission decides whether and how Novi may act.
  */
-export function PermissionsSettings({ tools, config, updateToolPermission }: Props) {
+export function PermissionsSettings({ tools, framework }: Props) {
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-3">
@@ -30,7 +30,7 @@ export function PermissionsSettings({ tools, config, updateToolPermission }: Pro
           </p>
         </div>
       </div>
-      <ToolsSettings tools={tools} config={config} updateToolPermission={updateToolPermission} />
+      <ToolsSettings tools={tools} framework={framework} />
     </div>
   )
 }
