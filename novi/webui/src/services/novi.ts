@@ -327,20 +327,41 @@ export async function fetchMcpCatalog(): Promise<McpCatalogEntry[]> {
 
 // ── Milestone 4: assistant timeline + knowledge overview ────────────────
 
-export async function fetchTimeline(limit = 200): Promise<TimelineEntry[]> {
-  try {
-    const r = await fetch(`${API_BASE}/api/timeline?limit=${limit}`)
-    if (r.ok) return r.json()
-  } catch { /* ignore */ }
-  return []
+export interface TimelineEnvelope {
+  status: 'ok' | 'unavailable' | 'disabled'
+  brainAvailable: boolean
+  error?: string
+  detail?: string
+  data: TimelineEntry[]
 }
 
-export async function fetchKnowledgeOverview(): Promise<KnowledgeOverview> {
+export async function fetchTimeline(limit = 200): Promise<TimelineEntry[]> {
+  const env = await fetchTimelineEnvelope(limit)
+  return env.data
+}
+
+export async function fetchTimelineEnvelope(limit = 200): Promise<TimelineEnvelope> {
+  try {
+    const r = await fetch(`${API_BASE}/api/timeline?limit=${limit}`)
+    if (r.ok) {
+      const j = await r.json()
+      if (Array.isArray(j)) return { status: 'ok', brainAvailable: true, data: j }
+      if (j && Array.isArray(j.data)) return { status: j.status ?? 'ok', brainAvailable: j.brainAvailable ?? true, error: j.error, detail: j.detail, data: j.data }
+      // fallback — treat legacy shape as ok
+      if (j && j.status) return { status: j.status, brainAvailable: j.brainAvailable ?? false, error: j.error, detail: j.detail, data: j.data ?? [] }
+    }
+  } catch { /* ignore */ }
+  return { status: 'unavailable', brainAvailable: false, error: 'Brain store unavailable — check logs', data: [] }
+}
+
+export type KnowledgeOverviewEnvelope = KnowledgeOverview & { brainAvailable?: boolean; status?: 'ok' | 'unavailable' | 'disabled'; error?: string; detail?: string }
+
+export async function fetchKnowledgeOverview(): Promise<KnowledgeOverviewEnvelope> {
   try {
     const r = await fetch(`${API_BASE}/api/knowledge/overview`)
     if (r.ok) return r.json()
   } catch { /* ignore */ }
-  return { categories: [], total: 0, updated: '' }
+  return { categories: [], total: 0, updated: '', brainAvailable: false, status: 'unavailable', error: 'Brain store unavailable — check logs' }
 }
 
 export { deleteConversationApi as deleteConversation }

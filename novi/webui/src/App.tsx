@@ -123,6 +123,8 @@ export default function App() {
             entries={chat.timeline}
             onRefresh={chat.refreshTimeline}
             onOpenConversation={handleSelectConversation}
+            error={(chat as any).timelineError}
+            status={(chat as any).timelineStatus}
           />
         )
       default:

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo, TimelineEntry } from '@/types'
-import { NoviClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations, fetchTimeline } from '@/services/novi'
+import { NoviClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations, fetchTimeline, fetchTimelineEnvelope } from '@/services/novi'
 import { useToast } from '@/hooks/useToast'
 import { useNotificationCenter } from '@/hooks/useNotificationCenter'
 import { notifyPolicy } from '@/notifications/policy'
@@ -70,14 +70,25 @@ export function useNoviChat() {
   })
   // Milestone 4: assistant timeline feed. Live entries prepend from
   // `assistant_event`; history is hydrated via REST on mount.
+  // Distinguishes empty ("No knowledge yet") vs error ("Brain store unavailable").
   const [timeline, setTimeline] = useState<TimelineEntry[]>([])
+  const [timelineError, setTimelineError] = useState<string | null>(null)
+  const [timelineStatus, setTimelineStatus] = useState<'ok' | 'unavailable' | 'disabled'>('ok')
   const pushTimelineEntry = useCallback((entry: TimelineEntry) => {
     setTimeline(prev => mergeTimeline([entry, ...prev]))
   }, [])
   const refreshTimeline = useCallback(() => {
-    fetchTimeline().then((entries) => {
-      if (entries.length) setTimeline(prev => mergeTimeline([...entries, ...prev]))
-    }).catch(() => {})
+    fetchTimelineEnvelope().then((env) => {
+      setTimelineStatus(env.status)
+      setTimelineError(env.error ?? null)
+      if (env.data.length) setTimeline(prev => mergeTimeline([...env.data, ...prev]))
+      else if (env.status === 'ok') {
+        // keep timeline as-is for empty ok — UI shows empty banner
+      }
+    }).catch(() => {
+      setTimelineStatus('unavailable')
+      setTimelineError('Brain store unavailable — check logs')
+    })
   }, [])
   // Id of the conversation with unsaved changes, or null. Deliberately not a
   // boolean: persistence must save the conversation that actually changed
@@ -886,6 +897,8 @@ export function useNoviChat() {
     permission: activeIsGenerating ? permission : null,
 backgroundRuns,
     timeline,
+    timelineError,
+    timelineStatus,
     refreshTimeline,
     sendMessage,
     deepResearch,

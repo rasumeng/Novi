@@ -21,12 +21,22 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<'overview' | 'preferences' | 'dev'>('overview')
 
+  const [memoryError, setMemoryError] = useState<string | null>(null)
+  const unwrap = (j: any): { data: any[]; error?: string; status?: string } => {
+    if (Array.isArray(j)) return { data: j, status: 'ok' }
+    if (j && Array.isArray(j.data)) return { data: j.data, error: j.error, status: j.status }
+    return { data: [], error: j?.error, status: j?.status }
+  }
   const fetchAll = async () => {
     try {
       const r = await fetch(`${API_BASE}/api/memory/list`)
-      const data = await r.json()
+      const j = await r.json()
+      const { data, error, status } = unwrap(j)
+      if (status === 'unavailable') setMemoryError(error || 'Brain store unavailable — check logs')
+      else setMemoryError(null)
       setAllMemory(data)
     } catch {
+      setMemoryError('Brain store unavailable — check logs')
       showError("Couldn't load stored memories.")
     }
   }
@@ -39,7 +49,9 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
     setLoading(true)
     try {
       const r = await fetch(`${API_BASE}/api/memory/search?q=${encodeURIComponent(searchQuery)}`)
-      const data = await r.json()
+      const j = await r.json()
+      const { data, error, status } = unwrap(j)
+      if (status === 'unavailable') setMemoryError(error || 'Brain store unavailable — check logs')
       setSearchResults(data)
     } catch {
       showError('Memory search failed.')
@@ -121,6 +133,12 @@ export function MemorySettings({ config, setConfig, setDirty }: Props) {
 
       {tab === 'dev' && (
         <div className="space-y-3">
+          {memoryError && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-center">
+              <p className="text-xs font-medium text-amber-300">Brain store unavailable — check logs</p>
+              <p className="text-[11px] text-base-500 mt-0.5">{memoryError}</p>
+            </div>
+          )}
           <p className="text-xs text-base-500">Diagnostic view of the raw memory index. This is a troubleshooting surface — most people only need the “What I know” tab.</p>
           <div className="flex gap-2">
             <input

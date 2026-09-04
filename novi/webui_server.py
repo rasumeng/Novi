@@ -1378,23 +1378,32 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         b = get_backend()
         mem = b.get("memory")
         if not mem:
-            return []
-        return mem.list_all(limit=200)
+            return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "data": []}
+        try:
+            data = mem.list_all(limit=200)
+            return {"status": "ok", "brainAvailable": True, "data": data}
+        except Exception as e:
+            return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "detail": str(e)[:500], "data": []}
 
     @app.get("/api/memory/search")
     def search_memory(q: str = ""):
         if not q.strip():
-            return []
+            b0 = get_backend()
+            mem0 = b0.get("memory")
+            if not mem0:
+                return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "data": []}
+            return {"status": "ok", "brainAvailable": True, "data": []}
         b = get_backend()
         mem = b.get("memory")
         if not mem:
-            return []
+            return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "data": []}
         try:
             src = MemoryRetrievalSource(mem, distance_threshold=1.0)
             result = src.retrieve(q, ContextAllocation(max_results=10))
-            return _memory_items_to_dicts(result)
-        except Exception:
-            return []
+            data = _memory_items_to_dicts(result)
+            return {"status": "ok", "brainAvailable": True, "data": data}
+        except Exception as e:
+            return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "detail": str(e)[:500], "data": []}
 
     @app.delete("/api/memory/{item_id}")
     def delete_memory(item_id: str):
@@ -1415,15 +1424,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         """Stored assistant activity feed, newest first.
 
         User-facing only: kind/title/detail/timestamp + per-row instance id.
+
+        Distinguishes empty vs degraded: empty returns ok with empty data,
+        unavailable returns degraded envelope so UI can show
+        "Brain store unavailable — check logs" vs "No knowledge yet — start a conversation".
         """
         b = get_backend()
         service = b.get("timeline_service")
         if service is None:
-            return []
+            return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "data": []}
         try:
-            return service.recent(limit=min(limit, 500))
-        except Exception:
-            return []
+            entries = service.recent(limit=min(limit, 500))
+            return {"status": "ok", "brainAvailable": True, "data": entries}
+        except Exception as e:
+            return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "detail": str(e)[:500], "data": []}
 
     @app.get("/api/knowledge/overview")
     def knowledge_overview():
@@ -1431,9 +1445,22 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
         Only category / label / content / evidence. Never ids, scores,
         distances, embeddings, or storage paths.
+
+        Additive degraded flags: brainAvailable + status/error so UI can
+        distinguish Empty ("No knowledge yet — start a conversation") vs
+        Error ("Brain store unavailable — check logs").
         """
         b = get_backend()
-        return build_knowledge_overview(b.get("brain"))
+        brain = b.get("brain")
+        if brain is None:
+            return {"categories": [], "total": 0, "updated": "", "brainAvailable": False, "status": "unavailable", "error": "Brain store unavailable \u2014 check logs"}
+        try:
+            base = build_knowledge_overview(brain)
+            base["brainAvailable"] = True
+            base["status"] = "ok"
+            return base
+        except Exception as e:
+            return {"categories": [], "total": 0, "updated": "", "brainAvailable": False, "status": "unavailable", "error": "Brain store unavailable \u2014 check logs", "detail": str(e)[:500]}
 
     # Privacy disclosure: Transcription currently uses Google Speech API (sends audio to google.com).
     # Offline alternative planned. Disable mic to avoid sending audio externally.

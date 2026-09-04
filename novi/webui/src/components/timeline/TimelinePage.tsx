@@ -11,6 +11,8 @@ interface Props {
   onRefresh: () => void
   /** Open a referenced conversation (same pattern as notifications). */
   onOpenConversation?: (id: string) => void
+  error?: string | null
+  status?: 'ok' | 'unavailable' | 'disabled'
 }
 
 const KIND_META: Record<string, { icon: React.ElementType; color: string; iconBg: string }> = {
@@ -23,9 +25,10 @@ function metaFor(kind: string) {
   return KIND_META[kind] ?? KIND_META['knowledge.extracted']
 }
 
-export function TimelinePage({ entries, onRefresh, onOpenConversation }: Props) {
+export function TimelinePage({ entries, onRefresh, onOpenConversation, error, status }: Props) {
   const sorted = useMemo(() => mergeTimeline(entries), [entries])
   const groups = useMemo(() => groupByDay(sorted), [sorted])
+  const isError = !!error || status === 'unavailable'
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-base-950">
@@ -41,11 +44,19 @@ export function TimelinePage({ entries, onRefresh, onOpenConversation }: Props) 
       </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        {sorted.length === 0 ? (
+        {isError ? (
+          <div className="max-w-2xl mx-auto rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-4 text-center">
+            <p className="text-sm font-medium text-amber-300">Brain store unavailable — check logs</p>
+            <p className="text-xs text-base-400 mt-1">{error || 'Timeline unavailable.'}</p>
+            <button onClick={onRefresh} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-base-800 border border-base-700 text-xs text-base-300 hover:bg-base-700 transition-colors">
+              <RefreshCw size={12} /> Retry
+            </button>
+          </div>
+        ) : sorted.length === 0 ? (
           <EmptyState
             icon={History}
             title="No activity yet"
-            description="Novi's activity — conversations, memories, and learned knowledge — will appear here as you work together."
+            description="No knowledge yet — start a conversation. Novi's activity — conversations, memories, and learned knowledge — will appear here as you work together."
           />
         ) : (
           <div className="max-w-2xl mx-auto space-y-8">
