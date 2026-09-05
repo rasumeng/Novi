@@ -8,6 +8,11 @@ Pipeline:
 4. Rerank - Prioritize by freshness, authority, relevance
 
 The runtime handles any downstream synthesis from the raw facts.
+
+TODO(post-beta): duplicate search path vs novi/search/* — deferred per Task 4.2
+(2026-09-03 beta sprint review: explicitly deferred unless bug-proven). Do not
+merge/dedup before beta; revisit after beta. WebSearchService in novi/search/
+is the provider-agnostic service; this pipeline adds fetch/clean/rerank.
 """
 
 import logging

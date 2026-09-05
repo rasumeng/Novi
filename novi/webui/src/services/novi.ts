@@ -10,6 +10,8 @@ export type ServerEvent =
   | { type: 'plan'; plan: string; steps?: Array<{id: number; description: string; tool: string; depends_on: number[]; status: string}> }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown>; id: string; category?: string }
   | { type: 'tool_result'; tool: string; result: string; id: string; diff?: DiffData }
+  // TODO(post-beta): legacy WS event types — defer removal per Task 4.2 / 2026-09-03 beta sprint review.
+  // agent_config / agent_memory / agent_tasks duplicate WS paths; kept for beta stability. Remove after beta if proven unused.
   | { type: 'agent_config'; model?: string; system_prompt?: string; max_steps?: number; temperature?: number }
   | { type: 'agent_memory'; action: string; results?: Array<Record<string, unknown>>; error?: string }
   | { type: 'agent_tasks'; action: string; tasks?: TaskData[]; task?: TaskData; error?: string }

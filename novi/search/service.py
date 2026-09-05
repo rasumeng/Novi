@@ -7,6 +7,10 @@ framework (``search.backend``).
 No-silent-fallback guarantee: exactly one provider is attempted per call.
 Failures raise typed errors that surface to the user verbatim; the service
 never retries on another backend.
+
+TODO(post-beta): duplicate search path vs novi/tools/search_pipeline.py —
+deferred per Task 4.2 (2026-09-03 beta sprint). search_pipeline adds fetch/
+clean/rerank on top of this service; do not dedup before beta unless bug.
 """
 
 from __future__ import annotations
