@@ -802,12 +802,13 @@ class TestModelResolution:
         assert not any(k == "token" for k, *_ in events)
 
     def test_runtime_rejects_non_vision_model_for_images(self):
-        """Image input against a non-vision selected model: explicit rejection."""
+        """Image input against a KNOWN non-vision selected model: explicit rejection."""
         import types
         from novi.runtime.runtime import NoviRuntime
         from novi.runtime.execution_context import ExecutionContext
 
-        svc = self._service({"general": "gen-model"})
+        # Use a seeded model known without vision (qwen3:8b has chat/reasoning/tools, no vision)
+        svc = self._service({"general": "qwen3:8b"})
         runtime = NoviRuntime(model_service=svc)
         ctx = ExecutionContext(user_input="describe this")
         ctx.attachments = [{"type": "image", "path": "x.png", "mime": "image/png"}]

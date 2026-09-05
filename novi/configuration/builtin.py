@@ -420,6 +420,15 @@ def register_defaults(reg: ConfigRegistry):
                 default="",
                 visibility=Visibility.HIDDEN,
             ),
+            Setting(
+                id="models.recommendations.dismissed",
+                label="Dismissed recommendations",
+                category=Category.MODELS,
+                owner="runtime",
+                type=SettingType.JSON,
+                default=[],
+                visibility=Visibility.HIDDEN,
+            ),
         ],
     ))
 

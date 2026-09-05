@@ -12,7 +12,7 @@ Architecture:
   ModelSelector → Execution
 
 Constraints (Beta):
-  * Deterministic, no LLM, no llama.cpp
+  * Deterministic, no LLM, no local inference engine
   * Small, understandable, replaceable
   * No giant keyword dictionary, no regex rulebook
   * Priority: explicit intent (handled in orchestrator) > strong deterministic signals > state hint > general
