@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from runtime_parity_harness import compare, run_all, run_workload, _tc
+from tests.runtime_parity_harness import compare, run_all, run_workload, _tc
 
 
 def test_parity_matrix_zero_unexplained_differences():
@@ -93,6 +93,6 @@ def test_latency_same_magnitude():
 
 
 def _cfg(name):
-    from runtime_parity_harness import WORKLOADS
+    from tests.runtime_parity_harness import WORKLOADS
 
     return dict(WORKLOADS[name])
