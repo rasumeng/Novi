@@ -15,4 +15,4 @@ export const NAV_ITEMS: Record<NavItemId, NavItemConfig> = {
   settings: { label: 'Settings', icon: Settings },
 }
 
-export const NAV_ORDER: NavItemId[] = ['conversations', 'projects', 'jobs', 'timeline', 'settings']
+export const NAV_ORDER: NavItemId[] = ['conversations', 'projects', 'timeline', 'settings']

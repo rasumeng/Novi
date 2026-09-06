@@ -2,7 +2,6 @@ import { useState, useCallback } from 'react'
 import { Sidebar } from '@/components/sidebar/Sidebar'
 import { Conversation } from '@/components/chat/Conversation'
 import { ProjectsPanel } from '@/components/projects/ProjectsPanel'
-import { JobsPage } from '@/components/jobs/JobsPage'
 import { TimelinePage } from '@/components/timeline/TimelinePage'
 import { SearchModal } from '@/components/search/SearchModal'
 
@@ -111,17 +110,6 @@ export default function App() {
             onRetry={(chat as any).refreshProjects}
           />
         )
-      case 'jobs':
-        return (
-          <JobsPage
-            runs={chat.backgroundRuns}
-            onStart={chat.startBackgroundRun}
-            onStop={chat.stopBackgroundRun}
-            onRefresh={chat.refreshBackgroundRuns}
-            loading={(chat as any).jobsLoading}
-            error={(chat as any).jobsError}
-          />
-        )
       case 'timeline':
         return (
           <TimelinePage
@@ -197,7 +185,6 @@ export default function App() {
           onDelete={chat.deleteConversation}
           activeSection={activeSection}
           onSectionChange={handleSectionChange}
-          jobsCount={chat.backgroundRuns.length}
           generatingConversationId={chat.generatingConversationId}
           projects={chat.projects}
           activeProjectId={chat.activeProjectId}
