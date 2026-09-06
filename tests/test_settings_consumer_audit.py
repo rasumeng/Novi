@@ -11,9 +11,7 @@ from novi.configuration.schema import Visibility
 # This is the audit table; if a setting is missing, the guard fails.
 EXPECTED_CONSUMERS = {
     # llm
-    "llm.workloads.general.model": "novi/models/service.py:60 _get_workloads_config + webui_server.py:1094",
-    "llm.workloads.research.model": "novi/models/service.py:60",
-    "llm.workloads.code.model": "novi/models/service.py:60",
+    "llm.primary_model": "novi/models/service.py resolve_primary + webui_server.py selection endpoints",
     # providers
     "providers.ollama.reasoning": "novi/providers/base.py:99 reasoning",
     # runtime
@@ -26,6 +24,7 @@ EXPECTED_CONSUMERS = {
     # mcp
     "mcp.enabled": "novi/runtime/mcp/lifecycle.py + webui_server.py",
     # memory
+    "memory.enabled": "novi/webui_server.py list_memory/search_memory gate + runtime.py _remember + retrieval.py memory guards",
     "memory.max_turns_before_summary": "novi/services/context.py:152",
     "memory.max_short_term_pairs": "novi/services/context.py:153",
     # search
@@ -76,7 +75,7 @@ def test_every_user_setting_has_known_consumer():
 def test_models_agent_not_user_visible():
     reg = build_registry()
     s = reg.get("models.agent")
-    assert s.visibility == Visibility.HIDDEN, f"models.agent must be HIDDEN (workload is llm.workloads.*), got {s.visibility}"
+    assert s.visibility == Visibility.HIDDEN, f"models.agent must be HIDDEN (primary is llm.primary_model), got {s.visibility}"
 
 
 def test_runtime_temperature_is_canonical():

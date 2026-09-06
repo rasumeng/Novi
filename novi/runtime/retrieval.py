@@ -34,6 +34,19 @@ log = logging.getLogger("novi.retrieval")
 
 NOT_CONFIGURED_MSG = "Search not configured — set Brave API key or SearXNG URL in Settings → Connectors."
 
+
+def _memory_enabled() -> bool:
+    """Single retrieval memory gate: canonical ``memory.enabled`` flag.
+
+    Defaults to True so standalone executors without configuration behave
+    exactly as before.
+    """
+    try:
+        from ..configuration.bootstrap import get_configuration
+        return bool(get_configuration().get("memory.enabled", True))
+    except Exception:
+        return True
+
 _SEARCH_STOPWORDS = {
     "what", "is", "the", "are", "how", "to", "in", "of", "for", "a", "an",
     "and", "or", "on", "at", "by", "with", "from", "do", "does", "can",
@@ -535,7 +548,7 @@ class RetrievalExecutor:
         """
         bindings = []
         memory_store = self._brain if self._brain is not None else self._memory
-        if memory_store is not None:
+        if memory_store is not None and _memory_enabled():
             bindings.append(
                 SourceBinding("memory", MemoryRetrievalSource(memory_store))
             )
@@ -641,6 +654,8 @@ class RetrievalExecutor:
         Source participation is plan-driven (Phase 9 step 5): the executor
         queries memory only when the policy's plan lists it as a source.
         """
+        if not _memory_enabled():
+            return
         if self._memory is None and self._brain is None:
             return
         plan = self._retrieval_plan(ctx)

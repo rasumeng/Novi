@@ -27,7 +27,7 @@ CONFIG_PATH = profile_home() / "config.toml"
 DEFAULT_CONFIG: dict = {
     "llm": {
         "max_tokens": 65536,
-        "workloads": {workload: {"model": ""} for workload in ("general", "research", "code")},
+        "primary_model": "",
     },
     "embedding": {"backend": "ollama", "model": "", "dimension": 768},
     "ollama": {"url": "http://localhost:11434"},
@@ -36,7 +36,7 @@ DEFAULT_CONFIG: dict = {
         "ollama": {"url": "http://localhost:11434", "reasoning": True},
         "openai": {"api_key_env": "OPENAI_API_KEY"},
     },
-    "memory": {"max_turns_before_summary": 5, "max_short_term_pairs": 10},
+    "memory": {"enabled": True, "max_turns_before_summary": 5, "max_short_term_pairs": 10},
     "workspace": {"path": "~/.novi/workspace", "knowledge": "~/.novi/knowledge", "git_repo": ""},
     "personality": "",
     # Web search is opt-in for beta: empty backend = "not configured". Novi

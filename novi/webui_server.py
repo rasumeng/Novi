@@ -981,8 +981,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     from .configuration.install import ModelInstaller, delete_model
     from .configuration.resolver import (
         apply_selection,
+        get_primary_model,
         recommend,
-        WORKLOADS,
     )
     from .runtime.model_selector import model_capabilities
 
@@ -1015,7 +1015,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         """Model-set lifecycle seam.
 
         Runs after model install completion / explicit discovery refresh.
-        Recomputation here is advisory: it refreshes ``llm.workloads.*``
+        Recomputation here is advisory: it refreshes primary-model
         recommendation evidence and broadcasts it. It NEVER writes the user's
         selection — selections are authoritative and never rewritten.
         """
@@ -1153,69 +1153,38 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/configuration/models/selection")
     def get_models_selection():
-        """Read the persisted workload selection (llm.workloads.*)."""
-        workloads = {
-            workload: configuration.get(f"llm.workloads.{workload}.model", "")
-            for workload in WORKLOADS
-        }
-        return {"ok": True, "workloads": workloads}
+        """Read the persisted primary model (llm.primary_model)."""
+        model = get_primary_model(configuration=configuration)
+        return {"ok": True, "model": model, "primary": model}
 
     @app.post("/api/configuration/models/selection")
     def set_models_selection(body: dict):
-        """Persist the user's workload selection.
+        """Persist the user's primary model verbatim (llm.primary_model).
 
-        ``workloads``: {workload: model} mapping, written verbatim to
-        ``llm.workloads.*``. A model that is not installed is preserved and
-        never silently substituted. All writes route through the Configuration
-        Framework (validate -> persist -> apply -> emit).
-
-        Deliberately I/O-free: selection is a PERSIST operation. It does not
-        contact Ollama, does not re-scan hardware, and does not load any model.
-        The model loads lazily at first inference (runtime model resolution).
-        Availability status is computed by the separate discovery surface, not
-        by this save request — ``installed=None`` yields ``status="configured"``.
+        Deliberately I/O-free: selection is a PERSIST operation.
         """
-        by = body.get("by", "webui")
-        assign = body.get("workloads") or {}
-        cleaned = {
-            workload: (assign.get(workload) or "").strip() if isinstance(assign.get(workload), str) else ""
-            for workload in WORKLOADS
-        }
-        result = apply_selection(configuration, cleaned, installed=None, by=by)
+        by = (body or {}).get("by", "webui")
+        model = ""
+        if isinstance(body, dict):
+            for key in ("model", "primary", "primary_model"):
+                val = body.get(key)
+                if isinstance(val, str) and val.strip():
+                    model = val.strip()
+                    break
+        result = apply_selection(configuration, model=model, installed=None, by=by)
         return {"ok": True, **result}
 
     @app.post("/api/configuration/models/recommend")
     def models_recommend(body: dict):
-        """Advisory model recommendations, optionally applied.
-
-        Always recomputes and returns recommendation evidence (never writes).
-        When ``apply=true`` the recommendations are written via
-        ``apply_selection`` — the single, verbatim selection path. An optional
-        ``workloads`` list limits the apply to those workloads only; workloads
-        not listed keep their current selection untouched. Never installs or
-        downloads anything.
-        """
+        """Advisory primary-model recommendation, optionally applied."""
         url = configuration.get("ollama.url", "http://localhost:11434")
         discovered = ModelDiscovery(url).installed()
         recs = recommend(installed=discovered)
         data = recs.to_dict()
         body = body or {}
-        if body.get("apply"):
-            models = {workload: rec.model for workload, rec in recs.workloads.items()}
-            workloads = body.get("workloads")
-            if workloads is not None:
-                if not isinstance(workloads, list) or not all(
-                        isinstance(w, str) and w in WORKLOADS for w in workloads):
-                    return {"ok": False,
-                            "error": "unknown workload(s): %r" % (workloads,)}
-                models = {
-                    workload: (models.get(workload) if workload in workloads
-                               else configuration.get(
-                                   f"llm.workloads.{workload}.model", ""))
-                    for workload in WORKLOADS
-                }
+        if body.get("apply") and recs.primary is not None:
             data["selection"] = apply_selection(
-                configuration, models, installed=discovered, by="webui")
+                configuration, model=recs.primary.model, installed=discovered, by="webui")
         return {"ok": True, **data}
 
     @app.post("/api/configuration/models/setup/dismiss")
@@ -1225,7 +1194,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         Persists the user's "not now" choice under
         ``models.recommendations.dismissed`` through the Configuration Framework
         (sole persistence authority). It never installs anything and never
-        touches ``llm.workloads.*``; the model stays installable from the Model
+        touches ``llm.primary_model``; the model stays installable from the Model
         library with a fresh explicit consent.
         """
         name = (body.get("name") or "").strip()
@@ -1258,12 +1227,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         ]
         # Add availability/missing signal for models referenced in config.
         referenced = set()
-        workloads = configuration.get("llm.workloads", {}) or {}
-        for spec in workloads.values():
-            if isinstance(spec, dict) and spec.get("model"):
-                referenced.add(spec["model"])
-            elif isinstance(spec, str) and spec:
-                referenced.add(spec)
+        primary = get_primary_model(configuration=configuration)
+        if primary:
+            referenced.add(primary)
         emb = configuration.get("embedding.model", "")
         if emb:
             referenced.add(emb)
@@ -1272,40 +1238,27 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         payload["installedNames"] = sorted(installed_names)
         payload["dismissedRecommended"] = (
             configuration.get("models.recommendations.dismissed", []) or [])
-        payload["workloads"] = {
-            workload: configuration.get(f"llm.workloads.{workload}.model", "")
-            for workload in WORKLOADS
-        }
+        payload["model"] = primary
+        payload["primary"] = primary
         payload["recommended"] = recommend(installed=installed).to_dict()
-        # Workload capability signals: normalized ModelCapabilities per workload.
-        # All derived strictly from model facts (audio never inferred from tools).
-        # vision_capable kept for backward compat.
         def _caps_for(model_name: str) -> dict:
             if not model_name or not model_name.strip():
                 return {"vision": False, "tools": False, "reasoning": False, "thinking": False, "audio": False, "coding": False}
             c = model_capabilities(model_name.strip())
             return {"vision": c.supports_vision, "tools": c.supports_tools, "reasoning": c.supports_reasoning, "thinking": c.supports_thinking, "audio": c.supports_audio, "coding": c.supports_coding}
 
-        payload["workload_capabilities"] = {
-            w: _caps_for(payload["workloads"].get(w, "") or "")
-            for w in payload["workloads"]
-        }
-        # Tri-state capability states per workload model (additive, shared helper).
+        payload["capabilities"] = _caps_for(primary)
         from .runtime.model_selector import model_capability_state
         _caps_list = ("vision", "audio", "tools", "reasoning", "coding")
         payload["capabilityStates"] = {
-            w: {cap: model_capability_state((payload["workloads"].get(w, "") or "").strip(), cap).value for cap in _caps_list}
-            for w in payload["workloads"]
+            "primary": {cap: model_capability_state(primary.strip(), cap).value for cap in _caps_list}
         }
-        # Per-model capability states for library rows (authoritative, not name heuristics).
         payload["modelCapabilityStates"] = {
             m["name"]: {cap: model_capability_state(m["name"], cap).value for cap in _caps_list}
             for m in payload["models"] if m.get("name")
         }
-        # backward compat single flag
-        selected_general = (payload["workloads"].get("general") or "").strip()
         payload["vision_capable"] = bool(
-            selected_general and model_capabilities(selected_general).supports_vision)
+            primary.strip() and model_capabilities(primary.strip()).supports_vision)
         # ── Task 2.1 — honest discovery status (additive, never blocks) ──
         _ollama_reachable = bool(getattr(discovery, "last_reachable", True))
         _ollama_error = getattr(discovery, "last_error", None)
@@ -1365,7 +1318,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def delete_model_endpoint(body: dict):
         """Remove an installed model from disk (explicit user action).
 
-        Deletion is a disk operation only: ``llm.workloads.*`` is never
+        Deletion is a disk operation only: ``llm.primary_model`` is never
         modified. A selected-but-deleted model stays selected verbatim and
         simply becomes a configured-but-missing model. No substitution, no
         auto-apply of a recommendation.
@@ -1399,6 +1352,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/memory/list")
     def list_memory():
+        if not configuration.get("memory.enabled", True):
+            return {"status": "disabled", "brainAvailable": True, "data": []}
         b = get_backend()
         mem = b.get("memory")
         if not mem:
@@ -1411,6 +1366,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/memory/search")
     def search_memory(q: str = ""):
+        if not configuration.get("memory.enabled", True):
+            return {"status": "disabled", "brainAvailable": True, "data": []}
         if not q.strip():
             b0 = get_backend()
             mem0 = b0.get("memory")
@@ -1428,6 +1385,19 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             return {"status": "ok", "brainAvailable": True, "data": data}
         except Exception as e:
             return {"status": "unavailable", "brainAvailable": False, "error": "Brain store unavailable \u2014 check logs", "detail": str(e)[:500], "data": []}
+
+    @app.delete("/api/memory")
+    def clear_memory():
+        b = get_backend()
+        mem = b.get("memory")
+        if not mem:
+            return {"ok": False, "error": "unavailable"}
+        try:
+            items = mem.list_all(limit=500)
+        except Exception:
+            return {"ok": False, "error": "unavailable"}
+        n = sum(1 for i in items if mem.delete(i["id"]))
+        return {"ok": True, "deleted": n}
 
     @app.delete("/api/memory/{item_id}")
     def delete_memory(item_id: str):

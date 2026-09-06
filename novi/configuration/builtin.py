@@ -19,7 +19,7 @@ from .schema import (
     require_nonnegative_int,
 )
 
-WORKLOADS = ["general", "research", "code"]
+PRIMARY_MODEL_KEY = "llm.primary_model"
 
 DEFAULT_PROVIDER_OPTIONS = [
     Option("ollama", "Ollama", "Local models via Ollama"),
@@ -34,20 +34,17 @@ def register_defaults(reg: ConfigRegistry):
         label="Models",
         category=Category.MODELS,
         owner="runtime",
-        description="Which models Novi runs and how they map to workloads.",
+        description="Novi's primary model powering conversation, coding, research, and agent tasks.",
         settings=[
-            *[
-                Setting(
-                    id=f"llm.workloads.{workload}.model",
-                    label=_WORKLOAD_LABEL[workload],
-                    description=_WORKLOAD_DESC[workload],
-                    category=Category.MODELS,
-                    owner="runtime",
-                    type=SettingType.MODEL,
-                    default="",
-                )
-                for workload in WORKLOADS
-            ],
+            Setting(
+                id="llm.primary_model",
+                label="Novi Model",
+                description="This model powers Novi's conversations, coding, research, and agent tasks.",
+                category=Category.MODELS,
+                owner="runtime",
+                type=SettingType.MODEL,
+                default="",
+            ),
             Setting(
                 id="llm.max_tokens",
                 label="Max tokens",
@@ -277,6 +274,15 @@ def register_defaults(reg: ConfigRegistry):
         description="How Novi stores and recalls conversation memory.",
         settings=[
             Setting(
+                id="memory.enabled",
+                label="Memory enabled",
+                category=Category.MEMORY,
+                owner="memory",
+                type=SettingType.BOOL,
+                default=True,
+                visibility=Visibility.USER,
+            ),
+            Setting(
                 id="memory.max_turns_before_summary",
                 label="Turns before summary",
                 category=Category.MEMORY,
@@ -439,17 +445,7 @@ def register_defaults(reg: ConfigRegistry):
     # configuration.set("mcp", …) — audit confirmed zero consumers outside tests.
 
 
-# Workload human labels/descriptions. A workload is a model selection slot;
-# the selected model's capabilities (vision, reasoning, tools, coding) are
-# derived from the model itself, never configured here.
-_WORKLOAD_LABEL = {
-    "general": "General",
-    "research": "Deep Research",
-    "code": "Code",
-}
-_WORKLOAD_DESC = {
-    "general": "Model used for general interaction. Vision is a capability of "
-               "the selected model, not a separate selection.",
-    "research": "Model used for deep research and multi-step planning tasks.",
-    "code": "Model used for code generation and editing.",
-}
+# Strategies select execution behavior, never models. All strategies use
+# llm.primary_model. Capabilities (vision, reasoning, tools) belong to the
+# selected model itself.
+STRATEGIES = ("chat", "code", "research")

@@ -37,20 +37,42 @@ from .model_selector import ModelSelector, model_capabilities
 from .tracer import RuntimeTracer
 from .trace import TraceAction
 
-# Beta: exactly 3 intents map to 3 workloads. No vision/planning as workloads.
+# Intent → capability IDs. Strategies (chat/code/research) select behavior.
 _INTENT_TO_CAP_IDS = {"conversation": ["conversation"], "research": ["research", "conversation"], "coding": ["coding", "filesystem", "terminal"]}
-# capability/intent → workload (beta 3 only). Legacy capabilities map to beta workloads.
-_CAPABILITY_TO_WORKLOAD = {
+
+
+def _memory_enabled(cfg: dict | None) -> bool:
+    """Single runtime memory gate: reads the canonical ``memory.enabled`` flag.
+
+    Accepts both the nested snapshot shape (``{"memory": {"enabled": ...}}``)
+    and the flat framework shape (``{"memory.enabled": ...}``). Defaults to
+    True so standalone runtimes without configuration behave as before.
+    """
+    try:
+        if isinstance(cfg, dict):
+            if "memory.enabled" in cfg:
+                return bool(cfg.get("memory.enabled", True))
+            mem = cfg.get("memory", True)
+            if isinstance(mem, dict):
+                return bool(mem.get("enabled", True))
+        from ..configuration.bootstrap import get_configuration
+        return bool(get_configuration().get("memory.enabled", True))
+    except Exception:
+        return True
+# capability/intent → execution strategy. Strategies never select models.
+_CAPABILITY_TO_STRATEGY = {
     "coding": "code",
     "research": "research",
-    "conversation": "general",
-    "filesystem": "general",
-    "terminal": "general",
-    "memory": "general",
-    "search": "general",
-    # legacy aliases
+    "conversation": "chat",
+    "filesystem": "chat",
+    "terminal": "chat",
+    "memory": "chat",
+    "search": "chat",
     "planning": "code",
-    "vision": "general",
+    "vision": "chat",
+    "general": "chat",
+    "code": "code",
+    "chat": "chat",
 }
 
 log = logging.getLogger("novi.runtime")
@@ -346,6 +368,12 @@ class NoviRuntime:
                        workspace_files: list[str] | None = None,
                        stable_state_text: str = "") -> str:
         parts = [_IDENTITY.format(date=datetime.now().strftime("%A, %B %d, %Y"))]
+        try:
+            from .strategies import get_strategy_prompt, normalize_strategy
+            _strat = normalize_strategy(intent)
+            parts.append(get_strategy_prompt(_strat))
+        except Exception:
+            pass
         if self._agent_system_extra:
             parts.append(f"AGENT INSTRUCTIONS:\n{self._agent_system_extra}")
         personality = (self.cfg.get("personality") or "").strip()
@@ -431,19 +459,24 @@ class NoviRuntime:
             if sk and sk not in already and sk not in found:
                 found.append(sk)
         return found
-    def _workload_for(self, ctx, hint: str) -> str:
-        """Map capability/intent to a workload. ``general`` is the catch-all.
+    def _strategy_for(self, ctx, hint: str) -> str:
+        """Map capability/intent to an execution strategy. ``chat`` catch-all.
 
-        Phase 2: capabilities describe the task, never upgrade or substitute
-        the selected model — they only decide which workload slot is used.
+        Strategies select behavior only — every strategy uses the single
+        primary model (llm.primary_model). Never selects, influences, or maps
+        to a model.
         """
+        from .strategies import normalize_strategy
         cap = ctx.force_capability or hint
-        if cap in _CAPABILITY_TO_WORKLOAD:
-            return _CAPABILITY_TO_WORKLOAD[cap]
+        if cap in _CAPABILITY_TO_STRATEGY:
+            return _CAPABILITY_TO_STRATEGY[cap]
         for c in ctx.cap_ids:
-            if c in _CAPABILITY_TO_WORKLOAD:
-                return _CAPABILITY_TO_WORKLOAD[c]
-        return "general"
+            if c in _CAPABILITY_TO_STRATEGY:
+                return _CAPABILITY_TO_STRATEGY[c]
+        norm = normalize_strategy(cap)
+        if norm:
+            return norm
+        return "chat"
     def _build_multimodal_content(self, text: str, attachments: list[dict]) -> list:
         content: list = [{"type": "text", "text": text}]
         for att in attachments:
@@ -512,8 +545,8 @@ class NoviRuntime:
                     conversation_id=ctx.conversation_id,
                     attachments=ctx.attachments,
                 )
-                # Dispatcher invariant: analysis router workload is metadata only —
-                # ctx.user_input remains verbatim original message for workload processing
+                # Dispatcher invariant: analysis router strategy is metadata only —
+                # ctx.user_input remains verbatim original message for strategy processing
                 ctx.allowed_tools = self._capability_registry.get_tool_names(ctx.cap_ids)
             else:
                 # Headless fallback: no orchestrator, no keyword routing — use conversation fallback
@@ -559,35 +592,34 @@ class NoviRuntime:
             for kind_value in self.retrieval_executor.execute(ctx, user_input):
                 yield kind_value
 
-            # ── Model resolution (Phase 2): capabilities → workload → model ──
-            # The workload's configured model is used verbatim. No ranking,
-            # substitution, VRAM/loaded preference, or fallback. A missing or
-            # unset workload model raises ModelUnavailableError surfaced as an
-            # explicit error — never an alternate selection.
+            # ── Model resolution: strategy → primary model ──
+            # The user's primary model is used verbatim for every strategy.
+            # No ranking, substitution, or fallback. Missing primary raises
+            # ModelUnavailableError — never an alternate selection.
             try:
                 if ctx.execution_plan is not None:
                     ctx.model_name = ctx.execution_plan.model_spec.get("model", "") or ctx.force_model or ""
-                    ctx.workload = self._workload_for(ctx, intent_str)
+                    ctx.workload = self._strategy_for(ctx, intent_str)
                     if not ctx.model_name:
-                        ctx.model_name = self._model_selector.resolve(ctx.workload)
+                        ctx.model_name = self._model_selector.resolve()
                     ctx.temperature = ctx.execution_plan.temperature
                     ctx.max_steps = ctx.execution_plan.max_steps
                     ctx.model_supports_tools = ctx.execution_plan.model_spec.get("supports_tools", True)
                 elif ctx.analysis is not None:
                     if not ctx.model_name:
                         ctx.model_name = ctx.force_model or ""
-                    ctx.workload = self._workload_for(ctx, intent_str)
+                    ctx.workload = self._strategy_for(ctx, intent_str)
                     if not ctx.model_name:
-                        ctx.model_name = self._model_selector.resolve(ctx.workload)
+                        ctx.model_name = self._model_selector.resolve()
                     ctx.temperature = self.temperature
                     ctx.max_steps = ctx.analysis.complexity.max_steps
                 else:
                     cap_name = ctx.force_capability or intent_str
-                    ctx.workload = self._workload_for(ctx, cap_name)
+                    ctx.workload = self._strategy_for(ctx, cap_name)
                     if not ctx.model_name:
                         ctx.model_name = ctx.force_model or ""
                     if not ctx.model_name:
-                        ctx.model_name = self._model_selector.resolve(ctx.workload)
+                        ctx.model_name = self._model_selector.resolve()
                     ctx.temperature = self.temperature
                     ctx.max_steps = self.max_steps
             except ModelUnavailableError as e:
@@ -662,9 +694,8 @@ class NoviRuntime:
                 if ctx.has_images:
                     state = _verify_capability("vision")
                     if state == CapabilityState.UNSUPPORTED:
-                        msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
-                               f"does not support image input. Select a vision-capable "
-                               f"model for the {ctx.workload} workload.")
+                        msg = ("The model you're currently using doesn't support image input. "
+                               "Choose a vision-capable model to analyze images.")
                         self.tracer.finalize(ctx.trace, "error")
                         yield ("status", f"Model unavailable: {msg}")
                         yield ("error", msg)
@@ -686,9 +717,8 @@ class NoviRuntime:
                 if has_audio:
                     state = _verify_capability("audio")
                     if state == CapabilityState.UNSUPPORTED:
-                        msg = (f"Model '{ctx.model_name}' for workload '{ctx.workload}' "
-                               f"does not support audio input. Select an audio-capable "
-                               f"model for the {ctx.workload} workload.")
+                        msg = ("The model you're currently using doesn't support audio input. "
+                               "Choose an audio-capable model to analyze audio.")
                         self.tracer.finalize(ctx.trace, "error")
                         yield ("status", f"Model unavailable: {msg}")
                         yield ("error", msg)
@@ -718,8 +748,8 @@ class NoviRuntime:
                 ctx.trace.model_reason = "force_capability"
                 ctx.model_reason = "force_capability"
             else:
-                ctx.trace.model_reason = "workload_match"
-                ctx.model_reason = "workload_match"
+                ctx.trace.model_reason = "primary_model"
+                ctx.model_reason = "primary_model"
             yield ("model", ctx.model_name)
 
             if self.stop_event and self.stop_event.is_set():
@@ -1624,7 +1654,7 @@ class NoviRuntime:
         LangChain runnables inline. When ``tools`` is non-empty the model is
         bound to them (``bind_model``); otherwise a plain chat client is built
         (``client_for_model``). ``ctx.model_name`` was resolved verbatim from
-        ``llm.workloads.<workload>.model`` before this point — no selection,
+        ``llm.primary_model`` before this point — no selection,
         substitution, or fallback happens here.
         """
         temp = ctx.temperature if temperature is None else temperature
@@ -1643,6 +1673,8 @@ class NoviRuntime:
         self.history.append((user_input, final))
         if len(self.history) > self.max_history:
             self._compact()
+        if not _memory_enabled(self.cfg):
+            return
         if self.brain is not None:
             try:
                 self.brain.observe(Turn(

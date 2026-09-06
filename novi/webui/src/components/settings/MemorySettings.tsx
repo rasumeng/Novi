@@ -20,6 +20,8 @@ export function MemorySettings({ framework }: Props) {
   const [tab, setTab] = useState<'overview' | 'preferences' | 'dev'>('overview')
 
   const [memoryError, setMemoryError] = useState<string | null>(null)
+  const [memoryStatus, setMemoryStatus] = useState<'ok' | 'disabled' | 'unavailable'>('ok')
+  const memoryEnabled = (framework.values['memory.enabled'] as boolean) ?? true
   const unwrap = (j: any): { data: any[]; error?: string; status?: string } => {
     if (Array.isArray(j)) return { data: j, status: 'ok' }
     if (j && Array.isArray(j.data)) return { data: j.data, error: j.error, status: j.status }
@@ -30,10 +32,19 @@ export function MemorySettings({ framework }: Props) {
       const r = await fetch(`${API_BASE}/api/memory/list`)
       const j = await r.json()
       const { data, error, status } = unwrap(j)
-      if (status === 'unavailable') setMemoryError(error || 'Brain store unavailable — check logs')
-      else setMemoryError(null)
+      if (status === 'disabled') {
+        setMemoryStatus('disabled')
+        setMemoryError(null)
+      } else if (status === 'unavailable') {
+        setMemoryStatus('unavailable')
+        setMemoryError(error || 'Brain store unavailable — check logs')
+      } else {
+        setMemoryStatus('ok')
+        setMemoryError(null)
+      }
       setAllMemory(data)
     } catch {
+      setMemoryStatus('unavailable')
       setMemoryError('Brain store unavailable — check logs')
       showError("Couldn't load stored memories.")
     }
@@ -74,6 +85,23 @@ export function MemorySettings({ framework }: Props) {
     }
   }
 
+  const handleClearAll = async () => {
+    const ok = await confirm({
+      title: 'Delete all memories?',
+      description: "Novi won't be able to recall any of these anymore. This can't be undone.",
+      confirmLabel: 'Delete all',
+    })
+    if (!ok) return
+    try {
+      const r = await fetch(`${API_BASE}/api/memory`, { method: 'DELETE' })
+      if (!r.ok) throw new Error('request failed')
+      setAllMemory([])
+      setSearchResults([])
+    } catch {
+      showError("Couldn't delete memories.")
+    }
+  }
+
   const setMemoryPref = (key: 'memory.max_turns_before_summary' | 'memory.max_short_term_pairs', value: number) => {
     void framework.set(key, value)
   }
@@ -95,6 +123,36 @@ export function MemorySettings({ framework }: Props) {
         </div>
       </div>
       <p className="text-xs text-base-500">Novi remembers useful details from past conversations, so it doesn't have to be told twice.</p>
+
+      <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
+        <div>
+          <p className="text-sm text-base-100">Remember details from conversations</p>
+          <p className="text-xs text-base-500">When off, Novi won't store new memories or recall old ones</p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={memoryEnabled}
+          onClick={() => void framework.set('memory.enabled', !memoryEnabled)}
+          className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${memoryEnabled ? 'bg-accent' : 'bg-base-600'}`}
+        >
+          <span
+            className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${memoryEnabled ? 'left-[18px]' : 'left-0.5'}`}
+          />
+        </button>
+      </div>
+
+      {!memoryEnabled && (
+        <div className="rounded-xl border border-base-700 bg-base-800/50 px-3 py-2.5 text-center">
+          <p className="text-xs font-medium text-base-200">Memory is off</p>
+          <p className="text-[11px] text-base-500 mt-0.5">Turn it on to let Novi store and recall details again. Existing memories are kept.</p>
+        </div>
+      )}
+      {memoryEnabled && memoryStatus === 'unavailable' && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-center">
+          <p className="text-xs font-medium text-amber-300">Brain store unavailable — check logs</p>
+          {memoryError && <p className="text-[11px] text-base-500 mt-0.5">{memoryError}</p>}
+        </div>
+      )}
 
       <div className="flex gap-1 p-0.5 bg-base-800 rounded-lg">
         <button
@@ -163,7 +221,17 @@ export function MemorySettings({ framework }: Props) {
           )}
 
           <div className="space-y-1.5">
-            <p className="text-[11px] text-base-400 font-medium">All stored items ({allMemory.length})</p>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] text-base-400 font-medium">All stored items ({allMemory.length})</p>
+              {allMemory.length > 0 && (
+                <button
+                  onClick={handleClearAll}
+                  className="px-2 py-1 text-[11px] font-medium rounded-lg bg-base-700 text-base-200 hover:text-err transition-colors"
+                >
+                  Delete all
+                </button>
+              )}
+            </div>
             {allMemory.length === 0 && (
               <p className="text-xs text-base-500 py-4 text-center">No memories stored yet. Memories are created automatically from conversations.</p>
             )}
