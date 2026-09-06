@@ -1388,19 +1388,33 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.delete("/api/memory")
     def clear_memory():
+        if not configuration.get("memory.enabled", True):
+            return {"ok": False, "status": "disabled", "brainAvailable": True, "error": "disabled", "deleted": 0, "truncated": False}
         b = get_backend()
         mem = b.get("memory")
         if not mem:
             return {"ok": False, "error": "unavailable"}
         try:
-            items = mem.list_all(limit=500)
+            items = mem.list_all(limit=500) or []
         except Exception:
             return {"ok": False, "error": "unavailable"}
-        n = sum(1 for i in items if mem.delete(i["id"]))
-        return {"ok": True, "deleted": n}
+        truncated = len(items) >= 500
+        n = 0
+        for i in items:
+            _id = i.get("id") if isinstance(i, dict) else None
+            if not _id:
+                continue
+            try:
+                if mem.delete(_id):
+                    n += 1
+            except Exception:
+                continue
+        return {"ok": True, "deleted": n, "truncated": truncated}
 
     @app.delete("/api/memory/{item_id}")
     def delete_memory(item_id: str):
+        if not configuration.get("memory.enabled", True):
+            return {"ok": False, "status": "disabled", "brainAvailable": True, "error": "disabled"}
         b = get_backend()
         mem = b.get("memory")
         if not mem:
