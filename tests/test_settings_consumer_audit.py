@@ -27,6 +27,8 @@ EXPECTED_CONSUMERS = {
     "memory.enabled": "novi/webui_server.py list_memory/search_memory gate + runtime.py _remember + retrieval.py memory guards",
     "memory.max_turns_before_summary": "novi/services/context.py:152",
     "memory.max_short_term_pairs": "novi/services/context.py:153",
+    # embedding (USER-visible canonical default; Task 4)
+    "embedding.model": "novi/services/embedding_providers.py OllamaEmbeddingProvider + novi/configuration/install.py ensure_embedding_model",
     # search
     "search.backend": "novi/search/service.py:50 configuration.get('search.backend')",
     "search.brave_api_key": "novi/search/service.py brave_api_key",
@@ -40,7 +42,6 @@ EXPECTED_CONSUMERS = {
 # They are not checked as fake for the USER gate, but embedding must be respected.
 DEVELOPER_EXPECTED = {
     "llm.max_tokens": "novi/providers/base.py:_resolve_max_tokens -> ChatOllama num_predict / ChatOpenAI max_tokens",
-    "embedding.model": "novi/services/embedding_providers.py OllamaEmbeddingProvider",
     "embedding.backend": "novi/services/embedding.py EmbeddingService.provider",
     "embedding.dimension": "novi/services/embedding_providers.py dimension",
     "providers.default": "novi/models/service.py providers.default",
@@ -121,5 +122,7 @@ def test_embedding_respected():
     providers = pathlib.Path("novi/services/embedding_providers.py").read_text()
     assert "embedding" in providers and "model" in providers
     # At least one consumer for each DEVELOPER embedding setting
-    for sid in ["embedding.model", "embedding.backend", "embedding.dimension"]:
+    for sid in ["embedding.backend", "embedding.dimension"]:
         assert sid in DEVELOPER_EXPECTED
+    # embedding.model is USER-visible (canonical default) — must be audited
+    assert "embedding.model" in EXPECTED_CONSUMERS

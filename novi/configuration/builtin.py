@@ -1,12 +1,14 @@
 """Default configuration registration — seeds the framework's registry.
 
 Every core subsystem registers its settings here. Model names are left empty
-(default="") — never hardcoded. Defaults that do not exist are resolved by
-model discovery, not silently substituted.
+(default="") — never hardcoded — with one exception: ``embedding.model``
+defaults to the single canonical ``DEFAULT_EMBEDDING_MODEL``. Model defaults
+that do not exist are resolved by model discovery, not silently substituted.
 """
 
 from __future__ import annotations
 
+from .install import DEFAULT_EMBEDDING_MODEL
 from .registry import ConfigRegistry
 from .schema import (
     Category,
@@ -68,12 +70,12 @@ def register_defaults(reg: ConfigRegistry):
             Setting(
                 id="embedding.model",
                 label="Embedding model",
-                description="Powers Novi's memory and search.",
-                category=Category.DEVELOPER,
+                description=f"Powers Novi Memory ({DEFAULT_EMBEDDING_MODEL}).",
+                category=Category.MODELS,
                 owner="memory",
                 type=SettingType.MODEL,
-                default="",
-                visibility=Visibility.DEVELOPER,
+                default=DEFAULT_EMBEDDING_MODEL,
+                visibility=Visibility.USER,
             ),
             Setting(
                 id="embedding.backend",

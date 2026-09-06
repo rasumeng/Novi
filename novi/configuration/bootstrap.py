@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from .builtin import register_defaults
+from .install import DEFAULT_EMBEDDING_MODEL
 from .manager import Configuration
 from .migration import migrate
 from .registry import ConfigRegistry
@@ -23,13 +24,15 @@ CONFIG_PATH = profile_home() / "config.toml"
 
 
 # Defaults without hardcoded model names. Model settings default to "" and are
-# resolved via discovery/selection, never silently substituted.
+# resolved via discovery/selection, never silently substituted — except
+# ``embedding.model``, which resolves to the single canonical
+# ``DEFAULT_EMBEDDING_MODEL`` at runtime.
 DEFAULT_CONFIG: dict = {
     "llm": {
         "max_tokens": 65536,
         "primary_model": "",
     },
-    "embedding": {"backend": "ollama", "model": "", "dimension": 768},
+    "embedding": {"backend": "ollama", "model": DEFAULT_EMBEDDING_MODEL, "dimension": 768},
     "ollama": {"url": "http://localhost:11434"},
     "providers": {
         "default": "ollama",
