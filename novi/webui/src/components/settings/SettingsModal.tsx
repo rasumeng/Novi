@@ -13,7 +13,6 @@ import { SettingField } from './SettingField'
 import { MemorySettings } from './MemorySettings'
 import { SkillsSection } from './SkillsSection'
 import { ConnectorsSection } from './ConnectorsSection'
-import { AgentSettings } from './AgentSettings'
 import { PermissionsSettings } from './PermissionsSettings'
 import type { SectionId, ToolInfo } from './types'
 import type { Skill } from '@/types'
@@ -30,7 +29,6 @@ interface Props {
 const PAGE_LABEL: Record<string, string> = {
   general: 'General',
   models: 'Models',
-  agent: 'Agent',
   memory: 'Memory',
   skills: 'Skills',
   connectors: 'Connectors',
@@ -169,13 +167,9 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     onDismiss={framework.dismissRecommended}
                     onRefresh={framework.refreshDiscovery}
                     loading={false}
-                    onSaveSelection={framework.saveWorkloadSelection}
+                    onSaveSelection={framework.savePrimaryModel}
                     onApplyRecommended={framework.applyRecommended}
                   />
-                )}
-
-                {!framework.loading && section === 'agent' && (
-                  <AgentSettings framework={framework} />
                 )}
 
                 {!framework.loading && section === 'memory' && (

@@ -8,8 +8,9 @@ const mockDiscovery = {
   models: [],
   missingModels: [],
   installedNames: [],
-  workloads: { general: '', research: '', code: '' },
-  recommended: { workloads: {}, provisional: true },
+  primary: '',
+  model: '',
+  recommended: { primary: null, provisional: true },
   vision_capable: false,
 }
 
@@ -23,7 +24,7 @@ const frameworkMock = {
   set: vi.fn(),
   install: vi.fn().mockResolvedValue(true),
   refreshDiscovery: vi.fn().mockResolvedValue(undefined),
-  saveWorkloadSelection: vi.fn().mockResolvedValue({ ok: true }),
+  savePrimaryModel: vi.fn().mockResolvedValue({ ok: true }),
   applyRecommended: vi.fn().mockResolvedValue({ ok: true }),
   removeModel: vi.fn().mockResolvedValue(true),
   reload: vi.fn(),
@@ -54,7 +55,10 @@ vi.mock('@/services/novi', () => ({
   deleteSkill: () => Promise.resolve(true),
 }))
 
-vi.mock('./api', () => ({}))
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>()
+  return { ...actual }
+})
 
 vi.mock('@/hooks/useFrameworkSettings', () => ({
   useFrameworkSettings: () => frameworkMock,
@@ -62,7 +66,8 @@ vi.mock('@/hooks/useFrameworkSettings', () => ({
 
 import { SettingsModal } from './SettingsModal'
 
-const NAV = ['General', 'Models', 'Agent', 'Memory', 'Skills', 'Connectors', 'Permissions', 'Developer']
+const NAV = ['General', 'Models', 'Memory', 'Skills', 'Connectors', 'Permissions']
+// Developer asserted separately per Task 7
 
 function navButtonLabels(): string[] {
   return screen.getAllByRole('button').map((b) => (b.textContent ?? '').trim()).filter(Boolean)
@@ -75,12 +80,17 @@ describe('SettingsModal navigation (M4 IA)', () => {
     frameworkMock.installs = {}
   })
 
-  it('exposes all eight first-class navigation destinations', () => {
+  it('exposes all six beta navigation destinations', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
     const labels = navButtonLabels()
     for (const label of NAV) {
       expect(labels).toContain(label)
     }
+  })
+
+  it('does not expose Agent as a first-class destination (beta IA)', () => {
+    render(<SettingsModal open onClose={vi.fn()} />)
+    expect(navButtonLabels()).not.toContain('Agent')
   })
 
   it('does not expose Advanced as a first-class destination', () => {
@@ -101,14 +111,14 @@ describe('SettingsModal navigation (M4 IA)', () => {
     expect(screen.getByText('Model library')).toBeTruthy()
   })
 
-  it('has exactly eight first-class destinations', () => {
+  it('has exactly six beta destinations (Developer asserted separately per Task 7)', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
     // Leave General first so its content-area quick-link buttons don't get
     // counted alongside the sidebar nav buttons.
     fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
     const nav = navButtonLabels().filter((l) => NAV.includes(l))
-    expect(nav).toHaveLength(8)
-    expect(new Set(nav).size).toBe(8)
+    expect(nav).toHaveLength(6)
+    expect(new Set(nav).size).toBe(6)
   })
 
   it('keeps Permissions as a destination distinct from Connectors', () => {

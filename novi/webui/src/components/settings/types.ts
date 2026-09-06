@@ -1,4 +1,4 @@
-export type SectionId = 'general' | 'models' | 'agent' | 'memory' | 'skills' | 'connectors' | 'permissions' | 'developer'
+export type SectionId = 'general' | 'models' | 'memory' | 'skills' | 'connectors' | 'permissions' | 'developer'
 
 export interface ToolInfo {
   id: string
@@ -40,7 +40,7 @@ export interface AgentConfig {
 
 export interface LlmConfig {
   max_tokens?: number
-  workloads?: Record<string, { model?: string }>
+  primary_model?: string
 }
 
 export interface SettingsData {

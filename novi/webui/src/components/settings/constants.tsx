@@ -1,4 +1,4 @@
-import { Cpu, Bot, Brain, Puzzle, Cable, ShieldCheck, Settings, Server, Lightbulb, FileText, GitBranch, Globe, Database, Calendar, Mail, MessageSquare, Map, Search, Activity, Image, Cloud } from 'lucide-react'
+import { Cpu, Brain, Puzzle, Cable, ShieldCheck, Settings, Server, Lightbulb, FileText, GitBranch, Globe, Database, Calendar, Mail, MessageSquare, Map, Search, Activity, Image, Cloud } from 'lucide-react'
 import type { SectionId } from './types'
 
 // Every section here renders real content — no placeholders. Ordering matches
@@ -7,7 +7,6 @@ import type { SectionId } from './types'
 export const SECTIONS: { id: SectionId; label: string; icon: React.ElementType }[] = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'models', label: 'Models', icon: Cpu },
-  { id: 'agent', label: 'Agent', icon: Bot },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'skills', label: 'Skills', icon: Puzzle },
   { id: 'connectors', label: 'Connectors', icon: Cable },
