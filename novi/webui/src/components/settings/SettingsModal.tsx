@@ -167,7 +167,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     onDismiss={framework.dismissRecommended}
                     onRefresh={framework.refreshDiscovery}
                     loading={false}
-                    onSaveSelection={framework.savePrimaryModel}
+                    onSaveSelection={framework.saveWorkloadSelection}
                     onApplyRecommended={framework.applyRecommended}
                   />
                 )}

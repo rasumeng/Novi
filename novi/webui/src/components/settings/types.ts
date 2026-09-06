@@ -40,7 +40,7 @@ export interface AgentConfig {
 
 export interface LlmConfig {
   max_tokens?: number
-  primary_model?: string
+  workloads?: Record<string, { model?: string }>
 }
 
 export interface SettingsData {

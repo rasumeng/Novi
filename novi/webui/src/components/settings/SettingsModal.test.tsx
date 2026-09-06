@@ -8,9 +8,8 @@ const mockDiscovery = {
   models: [],
   missingModels: [],
   installedNames: [],
-  primary: '',
-  model: '',
-  recommended: { primary: null, provisional: true },
+  workloads: { general: '', research: '', code: '' },
+  recommended: { workloads: {}, provisional: true },
   vision_capable: false,
 }
 
@@ -18,13 +17,13 @@ const frameworkMock = {
   schema: { settings: [], groups: [] },
   values: mockValues,
   discovery: mockDiscovery as never,
-  settingsByCategory: { general: [], models: [], agent: [], memory: [], skills: [], connectors: [], permissions: [], developer: [] },
+  settingsByCategory: { general: [], models: [], memory: [], skills: [], connectors: [], permissions: [], developer: [] },
   loading: false,
   installs: {},
   set: vi.fn(),
   install: vi.fn().mockResolvedValue(true),
   refreshDiscovery: vi.fn().mockResolvedValue(undefined),
-  savePrimaryModel: vi.fn().mockResolvedValue({ ok: true }),
+  saveWorkloadSelection: vi.fn().mockResolvedValue({ ok: true }),
   applyRecommended: vi.fn().mockResolvedValue({ ok: true }),
   removeModel: vi.fn().mockResolvedValue(true),
   reload: vi.fn(),
@@ -55,10 +54,7 @@ vi.mock('@/services/novi', () => ({
   deleteSkill: () => Promise.resolve(true),
 }))
 
-vi.mock('./api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./api')>()
-  return { ...actual }
-})
+vi.mock('./api', () => ({}))
 
 vi.mock('@/hooks/useFrameworkSettings', () => ({
   useFrameworkSettings: () => frameworkMock,
