@@ -2,8 +2,8 @@ import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, Ale
 import type { DiscoveryPayload, SchemaResponse } from './api'
 import type { SectionId } from './types'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
-import { workloadsFromDiscovery } from './workloads'
-import { CapabilityChips, capsFromWorkloadMap } from '@/components/common/CapabilityChips'
+import { primaryModelFromDiscovery } from './api'
+import { CapabilityChips } from '@/components/common/CapabilityChips'
 
 interface Props {
   discovery: DiscoveryPayload | null
@@ -20,16 +20,26 @@ interface Props {
  * not a configuration dump. It offers quick links into the appropriate
  * settings pages rather than hosting the controls itself.
  */
+
+// Mirrors the dev hatch in SettingsModal.tsx (kept local to avoid an import
+// cycle: SettingsModal imports GeneralSettings). The "More settings"
+// QuickLink stays hidden until unlocked via `developer` search or
+// localStorage `novi_dev=1`.
+function isDevUnlocked(): boolean {
+  try {
+    return localStorage.getItem('novi_dev') === '1'
+  } catch {
+    return false
+  }
+}
+
 export function GeneralSettings({ discovery, schema, installing, onInstall, onNavigate, loading }: Props) {
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
 
   const hardware = discovery.hardware
   const missing = discovery.missingModels
-  const workloads = discovery.workloads ?? {}
+  const primary = primaryModelFromDiscovery(discovery)
   const isUnreachable = discovery.ollamaReachable === false || discovery.status === 'error' || discovery.status === 'degraded'
-  // Workload names come from the backend schema + discovery payload — never
-  // hardcoded in the frontend.
-  const WORKLOADS = workloadsFromDiscovery(discovery, schema)
 
   return (
     <div className="space-y-5">
@@ -63,27 +73,21 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
           </button>
         </div>
 
-        {WORKLOADS.some((w) => workloads[w.key]) ? (
+        {primary ? (
           <div className="space-y-1.5">
-            <p className="text-[11px] text-base-500 font-medium">Selected workloads</p>
-            {WORKLOADS.map((w) => {
-              const model = workloads[w.key] ?? ''
-              if (!model) return null
-              const caps = capsFromWorkloadMap(discovery.workload_capabilities as any, w.key, discovery.models.find((m) => m.name === model))
-              return (
-                <div key={w.key} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-base-900/40 border border-base-700/40">
-                  <span className="flex items-center gap-2 text-xs text-base-400">
-                    {w.label}
-                    {caps && <CapabilityChips caps={caps} />}
-                  </span>
-                  <span className="text-xs text-base-200 font-mono">{model}</span>
-                </div>
-              )
-            })}
+            <p className="text-[11px] text-base-500 font-medium">Novi Model</p>
+            <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-base-900/40 border border-base-700/40">
+              <span className="flex items-center gap-2 text-xs text-base-400">
+                Novi Model
+                {discovery.capabilities && <CapabilityChips caps={discovery.capabilities} />}
+              </span>
+              <span className="text-xs text-base-200 font-mono">{primary}</span>
+            </div>
+            <p className="text-[11px] text-base-500">This model powers Novi's conversations, coding, research, and agent tasks.</p>
           </div>
         ) : (
           <p className="text-xs text-base-500">
-            No workloads selected yet — Novi is running with its built-in defaults. Choose models from the Models page.
+            No model selected yet — choose Novi's brain from the Models page.
           </p>
         )}
       </div>
@@ -121,7 +125,9 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
         <div className="grid grid-cols-3 gap-2">
           <QuickLink icon={Cable} label="Connectors" onClick={() => onNavigate('connectors')} />
           <QuickLink icon={ShieldCheck} label="Permissions" onClick={() => onNavigate('permissions')} />
-          <QuickLink icon={Settings} label="More settings" onClick={() => onNavigate('developer')} />
+          {isDevUnlocked() && (
+            <QuickLink icon={Settings} label="More settings" onClick={() => onNavigate('developer')} />
+          )}
         </div>
       </div>
     </div>
