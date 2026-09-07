@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Search, Settings, SlidersHorizontal } from 'lucide-react'
+import { X, Search, Settings, Server, SlidersHorizontal } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/novi'
 import type { SchemaResponse } from './api'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -36,6 +36,19 @@ const PAGE_LABEL: Record<string, string> = {
   developer: 'Developer',
 }
 
+// Beta IA hides Developer from the sidebar nav. Advanced escape hatch:
+// typing `developer` (optionally `>developer`) in settings search, or
+// localStorage `novi_dev=1`, reveals the hidden Developer entry.
+const DEV_FLAG = 'novi_dev'
+
+function isDevUnlocked(): boolean {
+  try {
+    return localStorage.getItem(DEV_FLAG) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: Props) {
   const framework = useFrameworkSettings()
   const [section, setSection] = useState<SectionId>('general')
@@ -52,9 +65,15 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
 
   const filteredSections = useMemo(() => {
     const pages = SECTIONS.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))
-    if (!search) return pages
-    const q = search.toLowerCase()
-    return pages.filter((s) => s.label.toLowerCase().includes(q))
+    const q = search.trim().toLowerCase().replace(/^>/, '')
+    const devMatch = q !== '' && 'developer'.includes(q)
+    const devUnlocked = isDevUnlocked()
+    const all =
+      devUnlocked || devMatch
+        ? [...pages, { id: 'developer' as SectionId, label: 'Developer', icon: Server }]
+        : pages
+    if (!q) return all
+    return all.filter((s) => s.label.toLowerCase().includes(q))
   }, [search])
 
   const reloadData = () => {
@@ -161,6 +180,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                   <ModelsSettings
                     discovery={framework.discovery}
                     schema={framework.schema}
+                    embeddingModel={(framework.values['embedding.model'] as string) ?? ''}
                     installing={framework.installs}
                     onInstall={framework.install}
                     onDelete={framework.removeModel}
@@ -210,7 +230,9 @@ function DeveloperPage({ schema, framework }: {
   framework: ReturnType<typeof useFrameworkSettings>
 }) {
   const developer = schema?.settings.filter((s) => s.category === 'developer') ?? []
-  const embedding = schema?.settings.filter((s) => s.owner === 'memory') ?? []
+  // Expert-owned memory fields only — embedding.model (category models) already
+  // lives on the Models page (Task 4/5) and must not be duplicated here.
+  const expertMemory = schema?.settings.filter((s) => s.owner === 'memory' && s.category === 'developer') ?? []
   const providers = schema?.settings.filter((s) => s.owner === 'providers') ?? []
   return (
     <div className="space-y-5">
@@ -240,7 +262,7 @@ function DeveloperPage({ schema, framework }: {
 
       <section className="space-y-2 pt-2">
         <h3 className="text-xs uppercase tracking-wide text-base-500 font-semibold">Embeddings</h3>
-        {embedding.map((s) => (
+        {expertMemory.map((s) => (
           <SettingField
             key={s.id}
             setting={s}

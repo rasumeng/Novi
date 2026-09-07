@@ -3,7 +3,8 @@ import type { SectionId } from './types'
 
 // Every section here renders real content — no placeholders. Ordering matches
 // the locked M4 settings IA. There is no "Advanced" catch-all; Developer is
-// the home for expert/internal configuration.
+// hidden from beta nav (reachable via the settings-search / novi_dev escape
+// hatch in SettingsModal) and remains the home for expert/internal config.
 export const SECTIONS: { id: SectionId; label: string; icon: React.ElementType }[] = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'models', label: 'Models', icon: Cpu },
@@ -11,7 +12,6 @@ export const SECTIONS: { id: SectionId; label: string; icon: React.ElementType }
   { id: 'skills', label: 'Skills', icon: Puzzle },
   { id: 'connectors', label: 'Connectors', icon: Cable },
   { id: 'permissions', label: 'Permissions', icon: ShieldCheck },
-  { id: 'developer', label: 'Developer', icon: Server },
 ]
 
 export const PERM_MODES = ['allow', 'ask', 'deny'] as const

@@ -129,12 +129,24 @@ describe('SettingsModal navigation (M4 IA)', () => {
     expect(labels).toContain('Connectors')
   })
 
-  it('Developer is the home for internal/diagnostic settings, not capability routing', () => {
+  it('Developer is hidden from beta nav but reachable via search escape hatch', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
+    expect(navButtonLabels()).not.toContain('Developer')
+    fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'developer' } })
     fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Developer')!)
     expect(screen.getByText('Expert configuration')).toBeTruthy()
     expect(screen.queryByText('Internal model routing')).toBeNull()
     expect(screen.queryByText(/select capabilit/i)).toBeNull()
+  })
+
+  it('reveals Developer via localStorage novi_dev=1 escape hatch', () => {
+    localStorage.setItem('novi_dev', '1')
+    try {
+      render(<SettingsModal open onClose={vi.fn()} />)
+      expect(navButtonLabels()).toContain('Developer')
+    } finally {
+      localStorage.removeItem('novi_dev')
+    }
   })
 })
 
