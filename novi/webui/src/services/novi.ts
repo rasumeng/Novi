@@ -258,16 +258,19 @@ export async function fetchSkills(): Promise<Skill[]> {
   return []
 }
 
-export async function createSkill(data: { name: string; description?: string; content?: string }): Promise<Skill | null> {
+export async function createSkill(data: { name: string; description?: string; content?: string }): Promise<Skill> {
+  const r = await fetch(`${API_BASE}/api/skills`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (r.ok) return r.json()
+  let message = `Couldn't save this skill (HTTP ${r.status}).`
   try {
-    const r = await fetch(`${API_BASE}/api/skills`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    if (r.ok) return r.json()
+    const body = await r.json()
+    if (body?.error) message = String(body.error)
   } catch { /* ignore */ }
-  return null
+  throw new Error(message)
 }
 
 export async function deleteSkill(name: string): Promise<void> {

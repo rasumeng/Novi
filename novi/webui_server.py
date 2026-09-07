@@ -361,6 +361,11 @@ def _safe_child(base: Path, name: str, suffix: str = "") -> Path:
         raise ValueError("invalid name")
     return p
 
+
+# Beta Skills gate: valid skill names are 2-66 chars of lowercase alphanumerics,
+# '-' or '_'. Anything else is rejected with a 400 (never written to disk).
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-_]{1,64}$")
+
 def build_runtime(cfg: dict | None = None):
     """Construct a per-session runtime cheaply from the shared backend."""
     from .configuration.bootstrap import get_configuration
@@ -1827,34 +1832,54 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             skill_file = folder / "SKILL.md"
             if not skill_file.exists():
                 continue
-            content = skill_file.read_text("utf-8")
+            try:
+                content = skill_file.read_text("utf-8")
+            except Exception:
+                continue
             name = folder.name
             description = ""
             if content.startswith("---"):
                 import yaml
                 end = content.find("\n---", 3)
                 if end != -1:
-                    fm = yaml.safe_load(content[3:end])
+                    try:
+                        fm = yaml.safe_load(content[3:end])
+                    except Exception:
+                        continue
                     if isinstance(fm, dict):
-                        description = fm.get("description", "") or ""
+                        description = (fm.get("description", "") or "").strip()
+            # Invalid skills (missing frontmatter description, bad name) are
+            # never listed or activated — no silent auto-activate.
+            if not description:
+                continue
+            if not _SKILL_NAME_RE.match(name):
+                continue
             skills.append({"name": name, "description": description})
         return skills
 
     @app.post("/api/skills")
     def create_skill(body: dict):
+        from fastapi.responses import JSONResponse
         name = (body.get("name") or "").strip()
-        if not name:
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"error": "name required"}, status_code=400)
+        if not _SKILL_NAME_RE.match(name):
+            return JSONResponse(
+                {"error": "invalid name: use 2-66 chars of lowercase letters, digits, '-' or '_'"},
+                status_code=400,
+            )
+        desc = (body.get("description") or "").strip()
+        if not desc:
+            return JSONResponse({"error": "description required"}, status_code=400)
+        content = body.get("content") or ""
+        if not content.strip():
+            return JSONResponse({"error": "content required"}, status_code=400)
         try:
             skill_dir = _safe_child(SKILLS_DIR, name)
         except ValueError:
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": "invalid name"}, status_code=400)
         skill_dir.mkdir(parents=True, exist_ok=True)
-        content = body.get("content") or ""
-        desc = body.get("description", "")
-        frontmatter = f"---\nname: {name}\ndescription: \"{desc}\"\n---\n\n"
+        safe_desc = desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+        frontmatter = f"---\nname: {name}\ndescription: \"{safe_desc}\"\n---\n\n"
         (skill_dir / "SKILL.md").write_text(frontmatter + content, "utf-8")
         return {"name": name, "description": desc}
 

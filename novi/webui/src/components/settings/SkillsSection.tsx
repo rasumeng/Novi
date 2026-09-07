@@ -46,12 +46,14 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
   const handleWriteSubmit = async () => {
     if (!writeName.trim()) return
     setSaving(true)
-    const result = await createSkill({ name: writeName.trim(), description: writeDesc.trim(), content: writeContent })
-    setSaving(false)
-    if (!result) {
-      showError("Couldn't save this skill.")
+    try {
+      await createSkill({ name: writeName.trim(), description: writeDesc.trim(), content: writeContent })
+    } catch (e) {
+      setSaving(false)
+      showError(e instanceof Error ? e.message : "Couldn't save this skill.")
       return
     }
+    setSaving(false)
     setWriteOpen(false)
     setWriteName('')
     setWriteDesc('')

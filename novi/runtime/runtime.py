@@ -89,11 +89,19 @@ _SKILL_RE = re.compile(r"@skill\s+([a-z0-9][a-z0-9-]*)", re.IGNORECASE)
 
 _MAX_SKILL_FILES_CHARS = 6000
 
-def _load_all_skills() -> dict[str, dict]:
+def _load_all_skills(skills_dir: Path | None = None) -> dict[str, dict]:
+    """Load valid skills only (``skills_dir`` is a test seam; defaults to SKILLS_DIR).
+
+    Skills are prompt context — they hold NO execution authority. Any tool a
+    skill asks the model to call still flows through ToolExecutor.execute →
+    _check_permission, so a skill can never bypass the permission gate.
+    Invalid skills (missing frontmatter name/description) are never activated.
+    """
+    base = skills_dir if skills_dir is not None else SKILLS_DIR
     skills: dict[str, dict] = {}
-    if not SKILLS_DIR.is_dir():
+    if not base.is_dir():
         return skills
-    for folder in sorted(SKILLS_DIR.iterdir()):
+    for folder in sorted(base.iterdir()):
         if not folder.is_dir():
             continue
         skill_file = folder / "SKILL.md"
@@ -109,10 +117,14 @@ def _load_all_skills() -> dict[str, dict]:
                 try:
                     fm = yaml.safe_load(content[3:end])
                     if isinstance(fm, dict):
-                        description = fm.get("description", "") or ""
-                        name = fm.get("name", name)
+                        description = (fm.get("description", "") or "").strip()
+                        fm_name = (fm.get("name", "") or "").strip()
+                        if fm_name:
+                            name = fm_name
                 except Exception:
-                    pass
+                    continue
+        if not name.strip() or not description:
+            continue
         files: dict[str, str] = {}
         for f in folder.rglob("*"):
             if not f.is_file() or f.name == "SKILL.md":
