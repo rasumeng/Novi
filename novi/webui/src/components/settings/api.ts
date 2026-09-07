@@ -60,10 +60,8 @@ export interface DiscoveredModelEntry {
   stale?: boolean
 }
 
-export interface WorkloadRecommendation {
-  workload: string
+export interface PrimaryRecommendation {
   model: string
-  capability: string
   qualification: string
   hardwareConfidence: string
   reasons: string[]
@@ -97,7 +95,7 @@ export interface RecommendationExplanation {
 }
 
 export interface RecommendationsPayload {
-  workloads: Record<string, WorkloadRecommendation>
+  primary?: PrimaryRecommendation | null
   provisional: boolean
 }
 
@@ -111,7 +109,7 @@ export interface DiscoveryHardware {
   confidence: string
 }
 
-export interface WorkloadCaps {
+export interface ModelCaps {
   vision: boolean
   tools: boolean
   reasoning: boolean
@@ -126,10 +124,11 @@ export interface DiscoveryPayload {
   missingModels: string[]
   installedNames: string[]
   dismissedRecommended: string[]
-  workloads: Record<string, string>
+  model?: string
+  primary?: string
   recommended: RecommendationsPayload
   vision_capable: boolean
-  workload_capabilities?: Record<string, WorkloadCaps>
+  capabilities?: ModelCaps
   capabilityStates?: Record<string, Record<string, string>>
   modelCapabilityStates?: Record<string, Record<string, string>>
   // Task 2.1 — honest Ollama discovery status (additive)
@@ -164,10 +163,10 @@ export async function fetchDiscovery(): Promise<DiscoveryPayload> {
     missingModels: [],
     installedNames: [],
     dismissedRecommended: [],
-    workloads: { general: '', research: '', code: '' },
-    recommended: { workloads: {}, provisional: true },
+    model: '',
+    primary: '',
+    recommended: { primary: null, provisional: true },
     vision_capable: false,
-    workload_capabilities: {},
     status: 'error',
     ollamaReachable: false,
     ollamaUrl: 'http://localhost:11434',
@@ -197,15 +196,15 @@ export async function setSetting(settingId: string, value: unknown): Promise<boo
 }
 
 /**
- * Persist the user's workload -> model selection verbatim. The backend never
+ * Persist the user's primary model verbatim. The backend never
  * auto-populates selection; recommendations are advisory only.
  */
-export async function saveWorkloadSelection(workloads: Record<string, string>): Promise<{ ok: boolean; workloads?: Record<string, { status: string }>; error?: string }> {
+export async function savePrimaryModel(model: string): Promise<{ ok: boolean; model?: string; error?: string }> {
   try {
     const r = await fetch(`${API_BASE}/api/configuration/models/selection`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workloads }),
+      body: JSON.stringify({ model }),
     })
     return r.json()
   } catch {
@@ -213,23 +212,60 @@ export async function saveWorkloadSelection(workloads: Record<string, string>): 
   }
 }
 
+
+
 /**
- * Explicit "Use Recommended": apply the advisory recommendations as the
- * selection. Advisory-only unless ``apply`` is true — recommendations never
- * auto-apply and never install anything. An optional ``workloads`` list limits
- * the apply to those workloads; other workloads keep their current selection.
+ * Explicit "Use Recommended": apply the advisory primary recommendation.
+ * Never installs anything.
  */
-export async function applyRecommendedModels(workloads?: string[]): Promise<{ ok: boolean; workloads?: Record<string, string>; error?: string }> {
+export async function applyRecommendedModels(): Promise<{ ok: boolean; model?: string; error?: string }> {
   try {
     const r = await fetch(`${API_BASE}/api/configuration/models/recommend`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apply: true, workloads }),
+      body: JSON.stringify({ apply: true }),
     })
     return r.json()
   } catch {
     return { ok: false, error: 'request failed' }
   }
+}
+
+export function primaryModelFromDiscovery(d: DiscoveryPayload | null): string {
+  if (!d) return ''
+  return d.primary ?? d.model ?? ''
+}
+export function primaryRecommendation(d: DiscoveryPayload | null): PrimaryRecommendation | null {
+  const rec = d?.recommended
+  if (!rec) return null
+  if (rec.primary?.model) return rec.primary
+  return null
+}
+
+/**
+ * Canonical fallback for the Memory embedding model. Mirrors the backend
+ * ``DEFAULT_EMBEDDING_MODEL`` (novi/configuration/install.py); the live
+ * value arrives via framework ``embedding.model`` and the schema default.
+ */
+export const DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text:v1.5'
+
+/** Resolve the embedding model name: live value wins, then schema default. */
+export function embeddingModelFromSchema(schema: SchemaResponse | null, live?: string): string {
+  if (live && live.trim()) return live.trim()
+  const setting = schema?.settings.find((s) => s.id === 'embedding.model')
+  const dflt = typeof setting?.default === 'string' ? setting.default.trim() : ''
+  return dflt || DEFAULT_EMBEDDING_MODEL
+}
+
+/**
+ * True for embedding-only entries (capability ``embedding``/``embeddings``
+ * without any user-facing chat capability). Such models power Novi Memory
+ * and must never appear as chat-model choices.
+ */
+export function isEmbeddingOnly(entry: DiscoveredModelEntry): boolean {
+  const caps = entry.capabilities ?? {}
+  if (['chat', 'reasoning', 'coding', 'vision'].some((c) => caps[c])) return false
+  return !!(caps['embedding'] || caps['embeddings'])
 }
 
 /** Start a model install in the background. Progress arrives over WS. */
@@ -247,8 +283,9 @@ export async function installModel(name: string): Promise<{ ok: boolean; error?:
 }
 
 /**
- * Remove an installed model from disk. This never touches workload selections —
- * a selected-but-deleted model stays selected and simply becomes missing.
+ * Remove an installed model from disk. This never touches the primary
+ * selection — a selected-but-deleted model stays selected and simply
+ * becomes missing.
  */
 export async function deleteModel(name: string): Promise<{ ok: boolean; error?: string; name?: string }> {
   try {

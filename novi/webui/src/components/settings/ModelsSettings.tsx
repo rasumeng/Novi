@@ -12,39 +12,33 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react'
-import type { CapabilityEvidence, DiscoveryHardware, DiscoveryPayload, DiscoveredModelEntry, RecommendationExplanation, SchemaResponse, WorkloadRecommendation } from './api'
+import type { CapabilityEvidence, DiscoveryHardware, DiscoveryPayload, DiscoveredModelEntry, RecommendationExplanation, SchemaResponse, PrimaryRecommendation } from './api'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
-import { workloadsFromDiscovery } from './workloads'
-import { CapabilityChips, capsFromWorkloadMap, capsFromEntry } from '@/components/common/CapabilityChips'
+import { primaryModelFromDiscovery, primaryRecommendation, embeddingModelFromSchema, isEmbeddingOnly } from './api'
+import { CapabilityChips, capsFromEntry } from '@/components/common/CapabilityChips'
 
 interface Props {
   discovery: DiscoveryPayload | null
   schema: SchemaResponse | null
+  /** Live framework value for ``embedding.model``; falls back to schema default. */
+  embeddingModel?: string
   installing: Record<string, { phase: string; pct: number | null }>
   onInstall: (name: string) => Promise<boolean>
   onDelete: (name: string) => Promise<boolean>
   onDismiss?: (name: string) => Promise<boolean>
   onRefresh: () => Promise<void>
   loading: boolean
-  onSaveSelection: (workloads: Record<string, string>) => Promise<{ ok: boolean; error?: string }>
-  onApplyRecommended: (workloads?: string[]) => Promise<{ ok: boolean; error?: string }>
+  onSaveSelection: (model: string) => Promise<{ ok: boolean; error?: string }>
+  onApplyRecommended: () => Promise<{ ok: boolean; error?: string }>
 }
 
 /**
- * Models — workload-based configuration surface.
+ * Models — single primary-model configuration surface.
  *
- * Every workload (general / research / code) has an explicit selection the user
- * controls. Recommendations from the backend are strictly advisory: nothing is
- * selected or installed until the user acts — either through "Use Recommended"
- * or by picking models directly. Selections are persisted verbatim and never
- * rewritten by the backend.
- *
- * Page order is deliberately: hardware (context) → your selection (the thing
- * you're here to do) → recommendations (advisory help) → library (everything
- * else). Hardware is reference info, not a recommendation — it lives in its
- * own strip at the top rather than inside the Recommended card.
+ * One user-selected model ("Novi Model") powers conversation, coding,
+ * research, and agent tasks. Recommendations are strictly advisory.
  */
-export function ModelsSettings({ discovery, schema, installing, onInstall, onDelete, onDismiss, onRefresh, loading, onSaveSelection, onApplyRecommended }: Props) {
+export function ModelsSettings({ discovery, schema, embeddingModel, installing, onInstall, onDelete, onDismiss, onRefresh, loading, onSaveSelection, onApplyRecommended }: Props) {
   const [query, setQuery] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -54,9 +48,8 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
 
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
 
-  // Workload keys/labels/descriptions come from the backend schema + discovery
-  // payload — the frontend never hardcodes the workload universe.
-  const WORKLOADS = workloadsFromDiscovery(discovery, schema)
+  const PRIMARY_LABEL = 'Novi Model'
+  const PRIMARY_DESC = "This model powers Novi's conversations, coding, research, and agent tasks."
 
   const refresh = async () => {
     setRefreshing(true)
@@ -64,14 +57,20 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
     setRefreshing(false)
   }
 
-  const selection = discovery.workloads ?? {}
+  const primary = primaryModelFromDiscovery(discovery)
   const installedModels = discovery.models.filter((m) => m.status === 'installed')
+  // Embedding-only models power Memory, not chat — never offer them as the
+  // Novi Model. Unknown-capability entries ({}) stay selectable.
+  const chatModels = installedModels.filter((m) => !isEmbeddingOnly(m))
+  const embeddingName = embeddingModelFromSchema(schema, embeddingModel)
+  const embeddingEntry = embeddingName ? modelByName(discovery, embeddingName) : undefined
+  const embeddingInstalled = embeddingName !== '' &&
+    (discovery.installedNames.includes(embeddingName) || embeddingEntry?.status === 'installed')
 
-  const onSelect = async (wk: string, model: string) => {
-    const next = { ...selection, [wk]: model }
+  const onSelect = async (model: string) => {
     setSaving(true)
     setStateError(null)
-    const res = await onSaveSelection(next)
+    const res = await onSaveSelection(model)
     if (!res.ok) setStateError(res.error ?? "Couldn't save model selection.")
     setSaving(false)
   }
@@ -80,16 +79,12 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
     setApplying(true)
     setStateError(null)
     const res = await onApplyRecommended()
-    if (!res.ok) setStateError(res.error ?? "Couldn't apply recommended models.")
+    if (!res.ok) setStateError(res.error ?? "Couldn't apply recommended model.")
     setApplying(false)
   }
 
-  const useRecommendedFor = async (wk: string) => {
-    setApplying(true)
-    setStateError(null)
-    const res = await onApplyRecommended([wk])
-    if (!res.ok) setStateError(res.error ?? "Couldn't apply recommended models.")
-    setApplying(false)
+  const useRecommendedFor = async () => {
+    await useRecommended()
   }
 
   const rows = discovery.models
@@ -114,8 +109,8 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
       Object.keys(m.capabilities ?? {}).some((c) => ['chat', 'reasoning', 'coding', 'vision'].includes(c)),
   )
 
-  const recs = Object.values(discovery.recommended?.workloads ?? {})
-  const anyRecommended = recs.length > 0
+  const singleRec = primaryRecommendation(discovery)
+  const anyRecommended = !!singleRec?.model
   const provisional = discovery.recommended?.provisional ?? false
 
   const isUnreachable = discovery.ollamaReachable === false || discovery.status === 'error' || discovery.status === 'degraded'
@@ -159,53 +154,40 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
       )}
 
       {/* 1. Current selection — the thing the user came here to do, front and center */}
-      <section>
+      <section aria-label="Current selection">
         <SectionHeader
-          title="Model selection"
-          subtitle="The model Novi uses for each workload. Changes save immediately — recommendations below are advisory and never change your choice on their own."
+          title="Novi Model"
+          subtitle="This model powers Novi's conversations, coding, research, and agent tasks. Changes save immediately — recommendations below are advisory and never change your choice on their own."
         />
         <div className="space-y-2">
-          {WORKLOADS.map((w) => {
-            const model = selection[w.key] ?? ''
-            const entry = modelByName(discovery, model)
-            const missing = model !== '' && !discovery.installedNames.includes(model)
-            const caps = capsFromWorkloadMap(discovery.workload_capabilities as any, w.key, entry)
-            const rec = discovery.recommended?.workloads?.[w.key] ?? null
-            const recommended = rec?.model ?? ''
-            const explanation = rec?.explanation ?? null
-            return (
-              <SelectionRow
-                key={w.key}
-                workload={w}
-                model={model}
-                entry={entry}
-                installedModels={installedModels}
-                missing={missing}
-                caps={caps}
-                recommended={recommended}
-                recommendation={rec}
-                explanation={explanation}
-                expanded={expandedWhy === w.key}
-                onToggleWhy={() => setExpandedWhy(expandedWhy === w.key ? null : w.key)}
-                saving={saving}
-                applying={applying}
-                onSelect={onSelect}
-                onUseRecommended={() => useRecommendedFor(w.key)}
-              />
-            )
-          })}
+          <SelectionRow
+            label={PRIMARY_LABEL}
+            desc={PRIMARY_DESC}
+            model={primary}
+            entry={modelByName(discovery, primary)}
+            installedModels={chatModels}
+            missing={primary !== '' && !discovery.installedNames.includes(primary)}
+            caps={(discovery.capabilities as any ?? null)}
+            recommended={singleRec?.model ?? ''}
+            recommendation={singleRec}
+            explanation={singleRec?.explanation ?? null}
+            expanded={expandedWhy === 'primary'}
+            onToggleWhy={() => setExpandedWhy(expandedWhy === 'primary' ? null : 'primary')}
+            saving={saving}
+            applying={applying}
+            onSelect={onSelect}
+            onUseRecommended={useRecommendedFor}
+          />
         </div>
       </section>
 
       {/* 2. Advisory recommendations */}
-      {anyRecommended && (
+      {anyRecommended && singleRec && (
         <RecommendedModels
-          recs={recs}
-          workloadMeta={WORKLOADS}
+          rec={singleRec}
           installedNames={discovery.installedNames}
           applying={applying}
           onUseRecommended={useRecommended}
-          onUseRecommendedFor={useRecommendedFor}
         />
       )}
 
@@ -216,6 +198,26 @@ export function ModelsSettings({ discovery, schema, installing, onInstall, onDel
         onInstall={onInstall}
         onDismiss={onDismiss}
       />
+
+      {/* 2b. Memory — embedding model (read-only; never a chat choice) */}
+      <section aria-label="Memory embedding model">
+        <SectionHeader
+          title="Memory"
+          subtitle="Embedding model powering Novi Memory."
+        />
+        <div className="p-3.5 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm text-base-100 font-medium">Embedding Model</p>
+            <p className="font-mono text-sm text-base-200 truncate mt-0.5">{embeddingName}</p>
+            {!embeddingInstalled && (
+              <p className="text-[11px] text-amber-400 mt-1">
+                Not installed — Install from setup / check Ollama
+              </p>
+            )}
+          </div>
+          <StatusBadge status={embeddingInstalled ? 'installed' : 'missing'} />
+        </div>
+      </section>
 
       {/* 3. Model library */}
       <section>
@@ -333,15 +335,13 @@ function HardwareFact({ icon, label, value, unknown }: { icon?: React.ReactNode;
 
 // ── 2. Advisory recommendations ──────────────────────────────────────────
 
-function RecommendedModels({ recs, workloadMeta, installedNames, applying, onUseRecommended, onUseRecommendedFor }: {
-  recs: { workload: string; model: string; reasons: string[]; caveats: string[]; qualification: string; hardwareConfidence: string; visionCapable: boolean; capabilities?: string[] }[]
-  workloadMeta: { key: string; label: string; desc: string }[]
+function RecommendedModels({ rec, installedNames, applying, onUseRecommended }: {
+  rec: PrimaryRecommendation
   installedNames: string[]
   applying: boolean
   onUseRecommended: () => void
-  onUseRecommendedFor: (workload: string) => void
 }) {
-  const labelOf = (wk: string) => workloadMeta.find((w) => w.key === wk)?.label ?? wk
+  const installed = installedNames.includes(rec.model)
   return (
     <section aria-label="Recommended models">
       <div className="p-4 rounded-xl border border-sky-500/30 bg-sky-500/5 space-y-3">
@@ -365,60 +365,44 @@ function RecommendedModels({ recs, workloadMeta, installedNames, applying, onUse
           </button>
         </div>
         <div className="space-y-2">
-          {recs.map((r) => {
-            const installed = installedNames.includes(r.model)
-            const label = labelOf(r.workload)
-            return (
-              <div key={r.workload} className="p-3 rounded-lg bg-base-900/60 border border-base-700">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm text-base-100 font-mono truncate">{label}</p>
-                      <span className="text-[10px] text-base-400 bg-base-800 border border-base-700 px-1.5 py-0.5 rounded">
-                        {installed ? 'installed' : 'not installed'}
-                      </span>
-                    </div>
-                    <p className="text-sm text-base-200 font-mono truncate mt-1">{r.model}</p>
-                    {r.reasons.length > 0 && (
-                      <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
-                        <Sparkles size={11} /> {r.reasons.join(' · ')}
-                      </p>
-                    )}
-                    {(r.caveats.length > 0 || r.qualification) && (
-                      <div className="flex flex-wrap items-center gap-1 mt-1">
-                        {r.qualification && (
-                          <span className="text-[10px] text-base-400 capitalize">{r.qualification}</span>
-                        )}
-                        {r.caveats.map((c) => (
-                          <span key={c} className="flex items-center gap-1 text-[10px] text-amber-400">
-                            <AlertTriangle size={9} /> {c}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <CapabilityChips caps={{
-                      vision: r.capabilities?.includes('vision') || r.visionCapable,
-                      tools: r.capabilities?.includes('tools'),
-                      reasoning: r.capabilities?.includes('reasoning'),
-                      thinking: r.capabilities?.includes('reasoning'),
-                      audio: r.capabilities?.includes('audio'),
-                      coding: r.capabilities?.includes('coding'),
-                    }} />
-                  </div>
-                  <button
-                    onClick={() => onUseRecommendedFor(r.workload)}
-                    disabled={applying}
-                    data-workload={r.workload}
-                    title={`Use the recommended model for ${label}`}
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-accent/10 border border-accent/30 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                  >
-                    {applying ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-                    {applying ? 'Applying…' : 'Use Recommended'}
-                  </button>
+          <div className="p-3 rounded-lg bg-base-900/60 border border-base-700">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm text-base-100 font-mono truncate">Novi Model</p>
+                  <span className="text-[10px] text-base-400 bg-base-800 border border-base-700 px-1.5 py-0.5 rounded">
+                    {installed ? 'installed' : 'not installed'}
+                  </span>
                 </div>
+                <p className="text-sm text-base-200 font-mono truncate mt-1">{rec.model}</p>
+                {rec.reasons.length > 0 && (
+                  <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
+                    <Sparkles size={11} /> {rec.reasons.join(' · ')}
+                  </p>
+                )}
+                {(rec.caveats.length > 0 || rec.qualification) && (
+                  <div className="flex flex-wrap items-center gap-1 mt-1">
+                    {rec.qualification && (
+                      <span className="text-[10px] text-base-400 capitalize">{rec.qualification}</span>
+                    )}
+                    {rec.caveats.map((c) => (
+                      <span key={c} className="flex items-center gap-1 text-[10px] text-amber-400">
+                        <AlertTriangle size={9} /> {c}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <CapabilityChips caps={{
+                  vision: rec.capabilities?.includes('vision') || rec.visionCapable,
+                  tools: rec.capabilities?.includes('tools'),
+                  reasoning: rec.capabilities?.includes('reasoning'),
+                  thinking: rec.capabilities?.includes('reasoning'),
+                  audio: rec.capabilities?.includes('audio'),
+                  coding: rec.capabilities?.includes('coding'),
+                }} />
               </div>
-            )
-          })}
+            </div>
+          </div>
         </div>
         <p className="text-[10px] text-base-500 leading-relaxed">
           These are suggestions — you control the actual selected model. A recommendation changing never changes your
@@ -509,21 +493,22 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
 
 // ── 1. Current selection ─────────────────────────────────────────────────
 
-function SelectionRow({ workload, model, entry, installedModels, missing, caps, recommended, recommendation, explanation, expanded, onToggleWhy, saving, applying, onSelect, onUseRecommended }: {
-  workload: { key: string; label: string; desc: string }
+function SelectionRow({ label, desc, model, entry, installedModels, missing, caps, recommended, recommendation, explanation, expanded, onToggleWhy, saving, applying, onSelect, onUseRecommended }: {
+  label: string
+  desc: string
   model: string
   entry?: DiscoveredModelEntry
   installedModels: DiscoveredModelEntry[]
   missing: boolean
   caps?: { vision?: boolean; tools?: boolean; reasoning?: boolean; thinking?: boolean; audio?: boolean; coding?: boolean } | null
   recommended: string
-  recommendation: WorkloadRecommendation | null
+  recommendation: PrimaryRecommendation | null
   explanation: RecommendationExplanation | null
   expanded: boolean
   onToggleWhy: () => void
   saving: boolean
   applying: boolean
-  onSelect: (workload: string, model: string) => void
+  onSelect: (model: string) => void
   onUseRecommended: () => void
 }) {
   const usingRecommended = !!model && !!recommended && model === recommended
@@ -533,7 +518,7 @@ function SelectionRow({ workload, model, entry, installedModels, missing, caps, 
       <div className="p-3.5 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-sm text-base-100 font-medium">{workload.label}</p>
+            <p className="text-sm text-base-100 font-medium">{label}</p>
             {usingRecommended && (
               <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">
                 <CheckCircle2 size={10} /> Using recommended
@@ -546,7 +531,7 @@ function SelectionRow({ workload, model, entry, installedModels, missing, caps, 
             )}
             {caps && <CapabilityChips caps={caps} />}
           </div>
-          <p className="text-[11px] text-base-500 mt-0.5">{workload.desc}</p>
+          <p className="text-[11px] text-base-500 mt-0.5">{desc}</p>
           {recommended && (
             <p className="flex items-center gap-1 text-[11px] text-sky-400 mt-1">
               <Sparkles size={11} className="shrink-0" /> Recommended: <span className="font-mono">{recommended}</span>
@@ -562,8 +547,7 @@ function SelectionRow({ workload, model, entry, installedModels, missing, caps, 
           {recommended && explanation && (
             <button
               onClick={onToggleWhy}
-              data-why-workload={workload.key}
-              title={`Why is ${recommended} recommended for ${workload.label}?`}
+              title={`Why is ${recommended} recommended?`}
               className="text-[10px] text-base-500 hover:text-base-300 underline underline-offset-2 mt-1 transition-colors"
             >
               {expanded ? 'Why this model? ▴' : 'Why this model? ▾'}
@@ -572,13 +556,13 @@ function SelectionRow({ workload, model, entry, installedModels, missing, caps, 
         </div>
         <div className="flex flex-col items-end gap-2 shrink-0">
           <label>
-            <span className="sr-only">{workload.label} model</span>
+            <span className="sr-only">{label} model</span>
             <select
               disabled={saving}
               value={model}
-              onChange={(e) => onSelect(workload.key, e.target.value)}
-              title={`Choose the model for ${workload.label}`}
-              data-workload={workload.key}
+              onChange={(e) => onSelect(e.target.value)}
+              title={`Choose the model for ${label}`}
+              aria-label={`${label} model`}
               className="bg-base-900 border border-base-700 rounded-lg px-2.5 py-1.5 text-xs text-base-200 outline-none focus:border-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="">None selected</option>
@@ -594,8 +578,7 @@ function SelectionRow({ workload, model, entry, installedModels, missing, caps, 
             <button
               onClick={onUseRecommended}
               disabled={applying || saving}
-              data-workload={workload.key}
-              title={`Use the recommended model for ${workload.label}`}
+              title="Use the recommended model"
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-accent/10 border border-accent/30 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {applying ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
@@ -609,7 +592,6 @@ function SelectionRow({ workload, model, entry, installedModels, missing, caps, 
       </div>
       {expanded && explanation && recommendation && (
         <RecommendationExplanation
-          workloadLabel={workload.label}
           recommendation={recommendation}
           selected={model}
         />
@@ -647,9 +629,8 @@ const REC_CONF_LABELS: Record<string, string> = {
   unknown: 'Unknown',
 }
 
-function RecommendationExplanation({ workloadLabel, recommendation, selected }: {
-  workloadLabel: string
-  recommendation: WorkloadRecommendation
+function RecommendationExplanation({ recommendation, selected }: {
+  recommendation: PrimaryRecommendation
   selected: string
 }) {
   const explanation = recommendation.explanation
@@ -673,7 +654,7 @@ function RecommendationExplanation({ workloadLabel, recommendation, selected }: 
   return (
     <div
       data-why-panel
-      aria-label={`Why this model for ${workloadLabel}`}
+      aria-label="Why this model"
       className="ml-3 mt-1 p-3 rounded-lg bg-base-900/60 border border-base-700 space-y-2"
     >
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -698,11 +679,10 @@ function RecommendationExplanation({ workloadLabel, recommendation, selected }: 
         </div>
       )}
       <div className="text-[11px] space-y-1">
-        <p className="text-[10px] uppercase tracking-wide text-base-500">Capability</p>
+        <p className="text-[10px] uppercase tracking-wide text-base-500">Evidence</p>
         <p className="flex items-center gap-1.5 text-base-300">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${capDot}`} />
-          <span className="capitalize">{recommendation.capability}</span>
-          <span className={sourceTone}>— {sourceLabel}</span>
+          <span className={sourceTone}>{sourceLabel}</span>
           {weak && <span className="text-base-500 italic">(weak)</span>}
         </p>
       </div>
@@ -877,7 +857,7 @@ function ModelRow({ model, install, onInstall, onDelete }: {
         <div data-remove-confirm className="flex flex-col items-end gap-2 shrink-0 max-w-xs">
           <p className="text-xs font-medium text-base-100">Remove {model.name}?</p>
           <p className="text-[10px] text-base-500 leading-relaxed text-right">
-            This will remove the model from your device. It will not change your workload selections.
+            This will remove the model from your device. It will not change your model selection.
           </p>
           <div className="flex gap-2">
             <button
