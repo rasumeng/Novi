@@ -4,6 +4,7 @@ Boundaries: permission boundaries authoritative; timeout ≠ deny ≠ cancel;
 messages honest about what happened and whether the action was performed.
 """
 import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -167,7 +168,10 @@ def test_session_stop_marks_cancelled_not_timeout():
 
     t = threading.Thread(target=waiter)
     t.start()
-    assert sess._perm_event.wait(timeout=5) is False  # request registered, still waiting
+    deadline = time.monotonic() + 5
+    while sess._perm_request_id == "" and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sess._perm_request_id != ""  # request registered, still waiting
     sess.stop()
     t.join(timeout=5)
     assert outcome.get("result") is False

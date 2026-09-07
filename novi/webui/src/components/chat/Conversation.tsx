@@ -154,7 +154,7 @@ export function Conversation({
                     )}
                     {permission && (
                       <div className="mt-3">
-                        <PermissionPrompt request={permission} onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)} />
+                        <PermissionPrompt request={permission} onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)} onCancel={onStop} />
                       </div>
                     )}
                   </div>
