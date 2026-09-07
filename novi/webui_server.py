@@ -28,6 +28,7 @@ WebSocket protocol (/ws/chat), JSON messages:
     {"type": "project_created", "project": {...}, "indexed": N}
     {"type": "project_selected", "project": {...}}
     {"type": "permission_request", "tool": "...", "args": {...}, "id": "perm-..."}
+    {"type": "permission_timeout", "id": "perm-..."}      request expired, action not performed
     {"type": "done"}                                         run finished
     {"type": "error",    "text": "..."}
     {"type": "assistant_event", "entry": {...}}              brain event surfaced to timeline
@@ -453,6 +454,7 @@ class Session:
         self._perm_allowed = False
         self._perm_request_id = ""
         self._perm_timed_out = False
+        self._perm_cancelled = False
         self._perm_lock = threading.Lock()
         self._plan_event = threading.Event()
         self._plan_approved = False
@@ -524,14 +526,18 @@ class Session:
             self._perm_request_id = req_id
             self._perm_allowed = False
             self._perm_timed_out = False
+            self._perm_cancelled = False
             self._perm_event.clear()
         self._emit({"type": "permission_request", "id": req_id, "tool": tool, "args": args, "timeoutMs": timeout_ms, "expiresAt": expires_at})
         if not self._perm_event.wait(timeout=timeout_ms / 1000):
             with self._perm_lock:
                 self._perm_timed_out = True
                 self._perm_request_id = ""
+            self._emit({"type": "permission_timeout", "id": req_id})
             return False
         with self._perm_lock:
+            if self._perm_cancelled:
+                return False
             if self._perm_timed_out:
                 return False
             return self._perm_allowed
@@ -656,12 +662,14 @@ class Session:
 
     def stop(self):
         self.stop_flag.set()
-        # Fail closed: any in-flight permission request resolves to deny and a
-        # late response can no longer match a future request.
+        # Fail closed: any in-flight permission request resolves as cancelled
+        # (distinct from deny/timeout) and a late response can no longer match
+        # a future request.
         with self._perm_lock:
             self._perm_request_id = ""
             self._perm_allowed = False
             self._perm_timed_out = False
+            self._perm_cancelled = True
             self._perm_event.set()
         self._plan_approved = False
         self._plan_event.set()

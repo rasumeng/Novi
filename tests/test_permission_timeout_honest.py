@@ -71,10 +71,10 @@ def test_permission_request_includes_expires_at_and_timeout():
     from novi.webui_server import Session
 
     loop = MagicMock()
-    captured = {}
+    captured = []
 
     def fake_emit(payload):
-        captured.update(payload)
+        captured.append(payload)
 
     loop.call_soon_threadsafe = lambda fn, *a: fn(*a) if callable(fn) else None
 
@@ -84,7 +84,7 @@ def test_permission_request_includes_expires_at_and_timeout():
     with patch("novi.webui_server.build_runtime", return_value=backend):
         sess = Session(loop=loop)
         # Capture _emit
-        sess._emit = lambda payload: captured.update(payload)  # type: ignore
+        sess._emit = lambda payload: captured.append(payload)  # type: ignore
         # Make wait return quickly with False (timeout) without blocking 120s
         with patch.object(sess._perm_event, "wait", return_value=False) as mock_wait:
             result = sess._ask_permission("read", {"path": "a.txt"})
@@ -94,16 +94,18 @@ def test_permission_request_includes_expires_at_and_timeout():
             assert sess._perm_timed_out is True
             assert sess._perm_request_id == ""
 
-    assert captured.get("timeoutMs") == 120000
-    assert "expiresAt" in captured
+    request = next(p for p in captured if p.get("type") == "permission_request")
+
+    assert request.get("timeoutMs") == 120000
+    assert "expiresAt" in request
     # ISO parseable
-    dt = datetime.fromisoformat(captured["expiresAt"])
+    dt = datetime.fromisoformat(request["expiresAt"])
     assert dt.tzinfo is not None
     # expiresAt should be ~120s in future (allow 5s skew)
     delta = (dt - datetime.now(timezone.utc)).total_seconds()
     assert 115 <= delta <= 125
-    assert captured["tool"] == "read"
-    assert captured["type"] == "permission_request"
+    assert request["tool"] == "read"
+    assert request["type"] == "permission_request"
 
 
 def test_permission_request_expiry_is_iso_and_tool_matches():

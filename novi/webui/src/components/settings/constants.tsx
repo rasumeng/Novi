@@ -48,17 +48,17 @@ export const PERMISSION_DEFS: Record<string, { label: string; key: string }[]> =
   github: [
     { label: 'Read Issues & PRs', key: 'read' },
     { label: 'Create & Edit', key: 'write' },
-    { label: 'Merge & Approve', key: 'approve' },
     { label: 'Delete Branches', key: 'delete' },
   ],
   database: [
     { label: 'Read Queries', key: 'read' },
     { label: 'Write Queries', key: 'write' },
   ],
+  // NOTE: only read/write/delete/execute keys are consumed — see
+  // MCPPermissionGate.decision (classify_operation yields just those four,
+  // plus exact tool names). Do not add keys here without a consumer.
   browser: [
-    { label: 'Navigate', key: 'navigate' },
     { label: 'Get Content', key: 'read' },
-    { label: 'Interact (click, type)', key: 'interact' },
   ],
   _default: [
     { label: 'Allow Execution', key: 'execute' },

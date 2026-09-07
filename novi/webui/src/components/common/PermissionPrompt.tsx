@@ -22,6 +22,8 @@ export interface PermissionRequest {
 interface Props {
   request: PermissionRequest
   onAnswer: (allowed: boolean) => void
+  /** Optional stop handler. Renders a distinct Cancel control (not a deny). */
+  onCancel?: () => void
   /** 'inline' renders in the conversation stream; 'modal' overlays the app. */
   variant?: 'inline' | 'modal'
 }
@@ -64,7 +66,7 @@ function summarizeAction(request: PermissionRequest): string {
   return (TOOL_LABELS[tool] ?? tool.replace(/_/g, ' ')) + (p ? `: ${p}` : '')
 }
 
-export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Props) {
+export function PermissionPrompt({ request, onAnswer, onCancel, variant = 'inline' }: Props) {
   const denyRef = useRef<HTMLButtonElement>(null)
   const allowRef = useRef<HTMLButtonElement>(null)
   const [remainingSec, setRemainingSec] = useState<number | null>(null)
@@ -110,6 +112,11 @@ export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Prop
 
   const formatRemaining = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 
+  // Honest expiry: once the countdown reaches zero the backend has already
+  // resolved the request as timed out — the action was not performed. This is
+  // distinct from a deny (user decision) and a cancel (user stopped the run).
+  const expired = remainingSec !== null && remainingSec <= 0
+
   const body = (
     <div>
       <p className="text-[13px] text-base-200 leading-relaxed">
@@ -128,10 +135,17 @@ export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Prop
         </div>
       )}
 
-      {remainingSec !== null && (
+      {remainingSec !== null && !expired && (
         <p className="flex items-center gap-1.5 text-[11px] text-base-400 mt-2" aria-live="polite">
           <Clock size={12} className="shrink-0" />
           Deny in {formatRemaining(remainingSec)}
+        </p>
+      )}
+
+      {expired && (
+        <p className="flex items-center gap-1.5 text-[11px] text-amber-300 mt-2" aria-live="polite">
+          <Clock size={12} className="shrink-0" />
+          Request expired — action not performed.
         </p>
       )}
 
@@ -139,20 +153,30 @@ export function PermissionPrompt({ request, onAnswer, variant = 'inline' }: Prop
         <button
           ref={denyRef}
           onClick={() => onAnswer(false)}
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 py-2 text-[13px] font-medium text-red-400 transition-colors"
+          disabled={expired}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 py-2 text-[13px] font-medium text-red-400 transition-colors disabled:opacity-50"
         >
           <X size={14} />
-          {remainingSec !== null ? `Deny in ${formatRemaining(remainingSec)}` : 'Deny'}
+          {remainingSec !== null && !expired ? `Deny in ${formatRemaining(remainingSec)}` : 'Deny'}
         </button>
         <button
           ref={allowRef}
           onClick={() => onAnswer(true)}
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 py-2 text-[13px] font-medium text-emerald-300 transition-colors"
+          disabled={expired}
+          className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 py-2 text-[13px] font-medium text-emerald-300 transition-colors disabled:opacity-50"
         >
           <Check size={14} />
           Allow
         </button>
       </div>
+      {onCancel && (
+        <button
+          onClick={onCancel}
+          className="w-full mt-2 py-1.5 text-[12px] text-base-500 hover:text-base-200 transition-colors"
+        >
+          Cancel run
+        </button>
+      )}
     </div>
   )
 

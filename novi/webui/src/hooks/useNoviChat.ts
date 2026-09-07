@@ -53,12 +53,17 @@ export function useNoviChat() {
   const [thinking, setThinking] = useState(false)
   const [liveThought, setLiveThought] = useState('')
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
+  // Ref mirror of the pending permission prompt. `handleEvent` runs through a
+  // ref (`handleEventRef`) so its closure can go stale; the ref keeps the
+  // permission_timeout id-match check honest.
+  const permissionRef = useRef<PermissionRequest | null>(null)
+  useEffect(() => { permissionRef.current = permission }, [permission])
   const [plan, setPlan] = useState<PlanData | null>(null)
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRunInfo[]>([])
   const currentModelRef = useRef('')
   const stopTimeoutRef = useRef<number | null>(null)
   // Deep Research is an explicit per-conversation mode: enabling it routes
-  // that conversation's messages through the research workload/intent. It is
+  // that conversation's messages through the research strategy/intent. It is
   // user-controlled UI state, never a hidden routing heuristic.
   const [deepResearchByConv, setDeepResearchByConv] = useState<Record<string, boolean>>({})
 
@@ -556,6 +561,26 @@ export function useNoviChat() {
           } catch {}
           break
         }
+        case 'permission_timeout': {
+          // Honest expiry: the backend resolved the request as timed out and
+          // did NOT perform the action. Distinct from deny (user decision)
+          // and cancel (user stopped the run). Only clear the prompt when it
+          // is the request that actually expired — never a newer prompt.
+          const current = permissionRef.current
+          if (current && current.id !== ev.id) break
+          setPermission(null)
+          const ownerId = owner?.conversationId
+          if (ownerId) {
+            const msg = 'Permission request expired — action not performed.'
+            updateConversation(ownerId, (c) => ({
+              ...c,
+              updatedAt: 'Just now',
+              messages: [...c.messages, { id: nextId(), role: 'assistant', content: msg, createdAt: now() }],
+            }))
+            dirtyIdRef.current = ownerId
+          }
+          break
+        }
         case 'done': {
           const finishedId = owner?.conversationId
           const wasViewing = !!finishedId && finishedId === resolvedActiveId
@@ -599,7 +624,7 @@ export function useNoviChat() {
         }
       }
     },
-    [appendToken, pushStep, pushReasoning, finishStreaming, owner, resolvedActiveId, conversations, pushNotification, backgroundRuns, pushTimelineEntry]
+    [appendToken, pushStep, pushReasoning, finishStreaming, owner, resolvedActiveId, conversations, pushNotification, backgroundRuns, pushTimelineEntry, updateConversation]
   )
 
   const handleEventRef = useRef(handleEvent)
@@ -775,7 +800,7 @@ export function useNoviChat() {
 
   // Deep Research mode for the active conversation. Purely local UI state
   // threaded into the next message — the backend resolves the research
-  // workload/intent explicitly from the flag.
+  // strategy/intent explicitly from the flag.
   const deepResearch = !!deepResearchByConv[resolvedActiveId]
   const toggleDeepResearch = useCallback(() => {
     setDeepResearchByConv((prev) => ({ ...prev, [resolvedActiveId]: !prev[resolvedActiveId] }))

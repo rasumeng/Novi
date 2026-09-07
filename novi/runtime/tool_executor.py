@@ -212,10 +212,38 @@ class ToolExecutor:
 
         # Stage 3: Permission gate
         if not self._check_permission(name, args, perm_mode, permission_callback):
-            timed_out = self._is_permission_timeout(permission_callback)
-            if timed_out:
+            cancelled = self._is_permission_cancelled(permission_callback)
+            timed_out = self._is_permission_timeout(permission_callback) if not cancelled else False
+            if cancelled:
                 out = (
-                    f"Error: Permission for {name} timed out — approve within 2 min or set Permissions → {name} to Allow"
+                    f"Error: Permission for {name} was cancelled — you stopped the run, "
+                    f"so the action was not performed."
+                )
+                # Runtime emits honest trace: permission_denied with reason cancelled,
+                # distinct from explicit deny and timeout.
+                if trace is not None:
+                    try:
+                        from .trace import DebugTraceEvent, TraceAction, TraceEvent
+                        trace.user_events.append(TraceEvent(
+                            action=TraceAction.EXECUTING,
+                            category="permission_denied",
+                            summary=f"permission_denied: {name} reason=cancelled",
+                        ))
+                        trace.debug_events.append(DebugTraceEvent(
+                            category="permission_denied",
+                            data={"tool": name, "reason": "cancelled"},
+                        ))
+                    except Exception:
+                        pass
+                if self.event_bus is not None:
+                    try:
+                        self.event_bus.emit("trace", category="permission_denied", reason="cancelled", tool=name)
+                    except Exception:
+                        pass
+            elif timed_out:
+                out = (
+                    f"Error: Permission for {name} timed out — action not performed. "
+                    f"approve within 2 min or set Permissions → {name} to Allow"
                 )
                 # Runtime emits honest trace: permission_denied with reason timeout, distinct from explicit deny.
                 if trace is not None:
@@ -399,6 +427,30 @@ class ToolExecutor:
         if cb:
             return cb(name, args)
         return False
+
+    def _is_permission_cancelled(self, permission_callback: Callable | None = None) -> bool:
+        """Return True if the permission wait was resolved by user cancellation.
+
+        Inspects the callback host's ``_perm_cancelled`` flag set by
+        ``Session.stop()``. Falls back to False for explicit deny, timeout, or
+        non-Session callbacks so cancel stays distinct.
+        """
+        cb = permission_callback or self._permission_callback
+        if cb is None:
+            return False
+        try:
+            host = getattr(cb, "__self__", None)
+            if host is None:
+                return False
+            if not hasattr(host, "_perm_cancelled"):
+                return False
+            lock = getattr(host, "_perm_lock", None)
+            if lock is not None:
+                with lock:
+                    return bool(getattr(host, "_perm_cancelled", False))
+            return bool(getattr(host, "_perm_cancelled", False))
+        except Exception:
+            return False
 
     def _is_permission_timeout(self, permission_callback: Callable | None = None) -> bool:
         """Return True if the last permission callback timed out (honest expiry).

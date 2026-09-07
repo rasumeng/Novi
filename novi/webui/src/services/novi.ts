@@ -29,6 +29,7 @@ export type ServerEvent =
   | { type: 'project_created'; project: Project; indexed: number }
   | { type: 'project_selected'; project: Project }
   | { type: 'permission_request'; tool: string; args: Record<string, unknown>; id: string; timeoutMs?: number; expiresAt?: string }
+  | { type: 'permission_timeout'; id: string }
   | { type: 'reasoning'; text: string }
   | { type: 'model'; text: string }
   | { type: 'phase'; phase: string; attempt?: number; reason?: string;
