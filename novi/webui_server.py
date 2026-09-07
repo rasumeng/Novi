@@ -55,7 +55,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .tools import TOOL_REGISTRY
 from .brain.types import Turn
-from .runtime.runtime import NoviRuntime
+from .runtime.runtime import NoviRuntime, SKILL_NAME_RE
 from .runtime.interface import RuntimeInterface
 from .runtime.event_bus import EventBus
 from .runtime.retrieval_budget import ContextAllocation
@@ -362,9 +362,10 @@ def _safe_child(base: Path, name: str, suffix: str = "") -> Path:
     return p
 
 
-# Beta Skills gate: valid skill names are 2-66 chars of lowercase alphanumerics,
-# '-' or '_'. Anything else is rejected with a 400 (never written to disk).
-_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-_]{1,64}$")
+# Beta Skills gate: SKILL_NAME_RE lives in novi.runtime.runtime (single source).
+# Valid names are 2-66 chars of lowercase alphanumerics, '-' or '_'.
+# Anything else is rejected with a 400 (never written to disk).
+_SKILL_NAME_RE = SKILL_NAME_RE
 
 def build_runtime(cfg: dict | None = None):
     """Construct a per-session runtime cheaply from the shared backend."""
@@ -1848,6 +1849,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         continue
                     if isinstance(fm, dict):
                         description = (fm.get("description", "") or "").strip()
+                        # A frontmatter name override must also be valid, else
+                        # the skill could show here as dead while the loader
+                        # activates it under another name (or vice versa).
+                        fm_name = (fm.get("name", "") or "").strip()
+                        if fm_name and not _SKILL_NAME_RE.match(fm_name):
+                            continue
             # Invalid skills (missing frontmatter description, bad name) are
             # never listed or activated — no silent auto-activate.
             if not description:
@@ -1885,25 +1892,47 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.post("/api/skills/upload")
     async def upload_skill(file: UploadFile = File(...)):
+        from fastapi.responses import JSONResponse
         content = await file.read()
-        text = content.decode("utf-8")
-        name = Path(file.filename or "skill.md").stem
         try:
-            skill_dir = _safe_child(SKILLS_DIR, name)
-        except ValueError:
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"error": "invalid name"}, status_code=400)
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(text, "utf-8")
-        # parse description from frontmatter
+            text = content.decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            return JSONResponse({"error": "file is not valid UTF-8 text"}, status_code=400)
+        name = Path(file.filename or "skill.md").stem.strip()
+        if not _SKILL_NAME_RE.match(name):
+            return JSONResponse(
+                {"error": "invalid name: use 2-66 chars of lowercase letters, digits, '-' or '_'"},
+                status_code=400,
+            )
+        # Same frontmatter description/content checks as create_skill —
+        # validate everything BEFORE any disk write.
         description = ""
         if text.startswith("---"):
             import yaml
             end = text.find("\n---", 3)
             if end != -1:
-                fm = yaml.safe_load(text[3:end])
+                try:
+                    fm = yaml.safe_load(text[3:end])
+                except Exception:
+                    return JSONResponse({"error": "invalid frontmatter YAML"}, status_code=400)
                 if isinstance(fm, dict):
-                    description = fm.get("description", "") or ""
+                    description = (fm.get("description", "") or "").strip()
+                    fm_name = (fm.get("name", "") or "").strip()
+                    if fm_name and not _SKILL_NAME_RE.match(fm_name):
+                        return JSONResponse(
+                            {"error": "invalid name in frontmatter: use 2-66 chars of lowercase letters, digits, '-' or '_'"},
+                            status_code=400,
+                        )
+        if not description:
+            return JSONResponse({"error": "description required in frontmatter"}, status_code=400)
+        if not text.strip():
+            return JSONResponse({"error": "content required"}, status_code=400)
+        try:
+            skill_dir = _safe_child(SKILLS_DIR, name)
+        except ValueError:
+            return JSONResponse({"error": "invalid name"}, status_code=400)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(text, "utf-8")
         return {"name": name, "description": description}
 
     @app.delete("/api/skills/{skill_name}")

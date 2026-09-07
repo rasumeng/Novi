@@ -85,6 +85,10 @@ SKILLS_DIR = app_home() / "skills"
 # ``tool_registry.TOOL_CATEGORIES``. The former duplicate copies here and in
 # tool_executor are gone; ToolExecutor.tool_category reads the single source.
 
+# Beta Skills gate (single source): valid skill names are 2-66 chars of
+# lowercase alphanumerics, '-' or '_'. webui_server imports this — no copies.
+SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-_]{1,64}$")
+
 _SKILL_RE = re.compile(r"@skill\s+([a-z0-9][a-z0-9-]*)", re.IGNORECASE)
 
 _MAX_SKILL_FILES_CHARS = 6000
@@ -107,7 +111,16 @@ def _load_all_skills(skills_dir: Path | None = None) -> dict[str, dict]:
         skill_file = folder / "SKILL.md"
         if not skill_file.exists():
             continue
-        content = skill_file.read_text("utf-8")
+        try:
+            content = skill_file.read_text("utf-8")
+        except Exception as e:
+            log.warning("skill %s unreadable, skipping: %s", folder.name, e)
+            continue
+        # Validate the effective name: folder name AND any frontmatter name
+        # override must both match SKILL_NAME_RE, else skip (never activate).
+        if not SKILL_NAME_RE.match(folder.name):
+            log.warning("skill %s has invalid name, skipping", folder.name)
+            continue
         name = folder.name
         description = ""
         if content.startswith("---"):
@@ -120,6 +133,12 @@ def _load_all_skills(skills_dir: Path | None = None) -> dict[str, dict]:
                         description = (fm.get("description", "") or "").strip()
                         fm_name = (fm.get("name", "") or "").strip()
                         if fm_name:
+                            if not SKILL_NAME_RE.match(fm_name):
+                                log.warning(
+                                    "skill %s frontmatter name invalid, skipping",
+                                    folder.name,
+                                )
+                                continue
                             name = fm_name
                 except Exception:
                     continue

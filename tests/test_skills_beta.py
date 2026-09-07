@@ -119,3 +119,90 @@ def test_skill_loader_skips_invalid(tmp_path, monkeypatch):
     skills = rt._load_all_skills()
     assert "good-skill" in skills
     assert "bad-skill" not in skills
+
+
+def _upload(client, filename: str, payload: bytes):
+    return client.post(
+        "/api/skills/upload", files={"file": (filename, payload, "text/markdown")}
+    )
+
+
+def test_upload_skill_valid(client):
+    r = _upload(
+        client,
+        "my-upload.md",
+        b'---\nname: my-upload\ndescription: "does things"\n---\n\n# hi\n',
+    )
+    assert r.status_code == 200, r.text
+    names = [s["name"] for s in client.get("/api/skills").json()]
+    assert "my-upload" in names
+
+
+def test_upload_skill_invalid_name_rejected_no_dir(client):
+    import novi.webui_server as ws
+
+    r = _upload(
+        client,
+        "Bad Name!.md",
+        b'---\nname: Bad Name!\ndescription: "x"\n---\n\n# hi\n',
+    )
+    assert r.status_code == 400, r.text
+    assert "error" in r.json()
+    assert not (ws.SKILLS_DIR / "Bad Name!").exists()
+
+
+def test_upload_skill_malformed_bytes_rejected(client):
+    import novi.webui_server as ws
+
+    r = _upload(client, "broken.md", b"\xff\xfe\x00not-utf8")
+    assert r.status_code == 400, r.text
+    assert "error" in r.json()
+    assert not (ws.SKILLS_DIR / "broken").exists()
+
+
+def test_upload_skill_bad_yaml_rejected(client):
+    import novi.webui_server as ws
+
+    r = _upload(
+        client, "badyml.md", b"---\nname: [unclosed\ndescription: x\n---\n\n# hi\n"
+    )
+    assert r.status_code == 400, r.text
+    assert "error" in r.json()
+    assert not (ws.SKILLS_DIR / "badyml").exists()
+
+
+def test_upload_skill_missing_description_rejected(client):
+    r = _upload(client, "nodesc.md", b"no frontmatter here\n")
+    assert r.status_code == 400, r.text
+    assert "error" in r.json()
+
+
+def test_upload_skill_invalid_frontmatter_name_rejected(client):
+    import novi.webui_server as ws
+
+    r = _upload(
+        client,
+        "ok-name.md",
+        b'---\nname: "../evil"\ndescription: "x"\n---\n\n# hi\n',
+    )
+    assert r.status_code == 400, r.text
+    assert "error" in r.json()
+    assert not (ws.SKILLS_DIR / "ok-name").exists()
+
+
+def test_loader_and_get_skip_invalid_frontmatter_name(tmp_path, monkeypatch, client):
+    """An invalid frontmatter name can neither activate nor show as dead."""
+    import novi.webui_server as ws
+    import novi.runtime.runtime as rt
+
+    evil = ws.SKILLS_DIR / "sneaky-skill"
+    evil.mkdir()
+    (evil / "SKILL.md").write_text(
+        '---\nname: "../evil"\ndescription: "x"\n---\n\n# hi\n', "utf-8"
+    )
+    names = [s["name"] for s in client.get("/api/skills").json()]
+    assert "sneaky-skill" not in names
+    monkeypatch.setattr(rt, "SKILLS_DIR", ws.SKILLS_DIR)
+    skills = rt._load_all_skills()
+    assert "sneaky-skill" not in skills
+    assert "../evil" not in skills
