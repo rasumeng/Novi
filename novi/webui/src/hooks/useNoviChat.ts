@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo, TimelineEntry } from '@/types'
-import { NoviClient, ConnectionState, ServerEvent, fetchConversations, saveConversation, deleteConversationApi, fetchProjects, createProject, updateProject, deleteProjectApi, fetchProjectConversations, fetchTimeline, fetchTimelineEnvelope } from '@/services/novi'
+import { NoviClient, ConnectionState, ServerEvent, saveConversation, deleteConversationApi, createProject, updateProject, deleteProjectApi, fetchProjectConversations, fetchTimeline } from '@/services/novi'
+import { fetchConversationsDeduped, fetchProjectsDeduped, fetchTimelineEnvelopeDeduped, getConversationsCache, getProjectsCache, getTimelineEnvelopeCache } from '@/hooks/bootCache'
 import { useToast } from '@/hooks/useToast'
 import { useNotificationCenter } from '@/hooks/useNotificationCenter'
 import { notifyPolicy } from '@/notifications/policy'
@@ -40,8 +41,8 @@ export function useNoviChat() {
   const { push: pushNotification } = useNotificationCenter()
   const clientRef = useRef<NoviClient | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [conversationsHydrated, setConversationsHydrated] = useState(false)
+  const [conversations, setConversations] = useState<Conversation[]>(() => getConversationsCache() ?? [])
+  const [conversationsHydrated, setConversationsHydrated] = useState(() => getConversationsCache() !== null)
   const [activeId, setActiveId] = useState(() => '')
 
   // The single generation owner. null when nothing is in flight. This is the
@@ -71,18 +72,19 @@ export function useNoviChat() {
 
   const [agentState, setAgentState] = useState<AgentStateInfo | null>(null)
   const [progress, setProgress] = useState<ProgressInfo | null>(null)
-  const [projects, setProjects] = useState<Project[]>([])
+  const [projects, setProjects] = useState<Project[]>(() => getProjectsCache() ?? [])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
     try { return localStorage.getItem('novi_active_project_id') || null } catch { return null }
   })
   // Milestone 4: assistant timeline feed. Live entries prepend from
   // `assistant_event`; history is hydrated via REST on mount.
   // Distinguishes empty ("No knowledge yet") vs error ("Brain store unavailable").
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([])
-  const [timelineError, setTimelineError] = useState<string | null>(null)
-  const [timelineStatus, setTimelineStatus] = useState<'ok' | 'unavailable' | 'disabled'>('ok')
-  const [timelineLoading, setTimelineLoading] = useState(true)
-  const [projectsLoading, setProjectsLoading] = useState(true)
+  const cachedTimeline = getTimelineEnvelopeCache()
+  const [timeline, setTimeline] = useState<TimelineEntry[]>(() => cachedTimeline?.data ?? [])
+  const [timelineError, setTimelineError] = useState<string | null>(() => cachedTimeline?.error ?? null)
+  const [timelineStatus, setTimelineStatus] = useState<'ok' | 'unavailable' | 'disabled'>(() => cachedTimeline?.status ?? 'ok')
+  const [timelineLoading, setTimelineLoading] = useState(() => cachedTimeline === null)
+  const [projectsLoading, setProjectsLoading] = useState(() => getProjectsCache() === null)
   const [projectsError, setProjectsError] = useState<string | null>(null)
   const [jobsLoading, setJobsLoading] = useState(false)
   const [jobsError, setJobsError] = useState<string | null>(null)
@@ -91,7 +93,7 @@ export function useNoviChat() {
   }, [])
   const refreshTimeline = useCallback(() => {
     setTimelineLoading(true)
-    fetchTimelineEnvelope().then((env) => {
+    fetchTimelineEnvelopeDeduped({ force: true }).then((env) => {
       setTimelineStatus(env.status)
       setTimelineError(env.error ?? null)
       if (env.data.length) setTimeline(prev => mergeTimeline([...env.data, ...prev]))
@@ -106,7 +108,7 @@ export function useNoviChat() {
   const refreshProjects = useCallback(() => {
     setProjectsLoading(true)
     setProjectsError(null)
-    fetchProjects()
+    fetchProjectsDeduped({ force: true })
       .then((list) => setProjects(list))
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : "Couldn't load your projects."
@@ -127,27 +129,53 @@ export function useNoviChat() {
     }
   }
 
-  // Load conversations on mount — no hydration gate; UI renders immediately.
+  // Load conversations on mount — deduped via bootCache to avoid double fetch with useBoot
   useEffect(() => {
     let active = true
-    fetchConversations()
-      .then((list) => {
-        if (active) setConversations(list)
-      })
-      .catch(() => {
-        if (active) {
-          setConversations([])
-          showError("Couldn't load your conversations. Is Novi's backend running?")
-        }
-      })
-      .finally(() => {
-        if (active) setConversationsHydrated(true)
-      })
-    refreshProjects()
+    const convCached = getConversationsCache()
+    if (convCached !== null) {
+      setConversations(convCached)
+      setConversationsHydrated(true)
+    } else {
+      fetchConversationsDeduped()
+        .then((list) => {
+          if (active) setConversations(list)
+        })
+        .catch(() => {
+          if (active) {
+            setConversations([])
+            showError("Couldn't load your conversations. Is Novi's backend running?")
+          }
+        })
+        .finally(() => {
+          if (active) setConversationsHydrated(true)
+        })
+    }
+    const projCached = getProjectsCache()
+    if (projCached !== null) {
+      setProjects(projCached)
+      setProjectsLoading(false)
+    } else {
+      setProjectsLoading(true)
+      setProjectsError(null)
+      fetchProjectsDeduped()
+        .then((list) => {
+          if (active) setProjects(list)
+        })
+        .catch((e: unknown) => {
+          if (!active) return
+          const msg = e instanceof Error ? e.message : "Couldn't load your projects."
+          setProjectsError(msg || "Couldn't load your projects.")
+          showError("Couldn't load your projects.")
+        })
+        .finally(() => {
+          if (active) setProjectsLoading(false)
+        })
+    }
     return () => {
       active = false
     }
-  }, [refreshProjects, showError])
+  }, [showError])
 
   useEffect(() => clearStopFallback, [])
 
@@ -163,8 +191,16 @@ export function useNoviChat() {
   // Legacy backfill effect is now a no-op (kept as guard for old persisted data via server migration).
   useEffect(() => {}, [projects, conversations])
 
-  // Milestone 4: hydrate the persisted assistant timeline on mount.
+  // Milestone 4: hydrate the persisted assistant timeline on mount — reuse bootCache if already hydrated
   useEffect(() => {
+    const env = getTimelineEnvelopeCache()
+    if (env !== null) {
+      setTimelineStatus(env.status)
+      setTimelineError(env.error ?? null)
+      if (env.data.length) setTimeline((prev) => (prev.length ? prev : mergeTimeline([...env.data, ...prev])))
+      setTimelineLoading(false)
+      return
+    }
     refreshTimeline()
   }, [refreshTimeline])
 

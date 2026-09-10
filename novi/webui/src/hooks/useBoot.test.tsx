@@ -18,8 +18,10 @@ vi.mock('@/services/novi', () => ({
 
 import { useBoot, BOOT_COPY } from './useBoot'
 import { fetchProjects } from '@/services/novi'
+import { resetBootCache } from '@/hooks/bootCache'
 
 beforeEach(() => {
+  resetBootCache()
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) }) as unknown as Response))
 })
 

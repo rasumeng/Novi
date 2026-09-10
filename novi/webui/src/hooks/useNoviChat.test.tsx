@@ -61,6 +61,7 @@ vi.mock('@/services/novi', () => ({
 
 // Imported after the mock so the hook picks up MockNoviClient.
 const { useNoviChat } = await import('./useNoviChat')
+const { resetBootCache } = await import('./bootCache')
 
 function findConv(list: Conversation[], id: string) {
   return list.find((c) => c.id === id)
@@ -80,6 +81,7 @@ function renderChatHook() {
 
 beforeEach(() => {
   MockNoviClient.instances = []
+  resetBootCache()
 })
 
 describe('generation ownership', () => {

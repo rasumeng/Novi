@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { NoviClient, fetchConversations, fetchProjects, fetchTimelineEnvelope } from '@/services/novi'
+import { NoviClient } from '@/services/novi'
+import { fetchConversationsDeduped, fetchProjectsDeduped, fetchTimelineEnvelopeDeduped } from '@/hooks/bootCache'
 
 export type BootStep = 'conversations' | 'projects' | 'timeline' | 'presets'
 export type BootPhase = 'connecting' | 'hydrating' | 'ready' | 'error'
@@ -87,17 +88,17 @@ export function useBoot(): BootState {
       const steps: Array<{ key: BootStep; fn: () => Promise<unknown>; detail: (v: unknown) => string | undefined }> = [
         {
           key: 'conversations',
-          fn: fetchConversations,
+          fn: () => fetchConversationsDeduped({ force: true }),
           detail: (v: unknown) => (Array.isArray(v) ? `${(v as unknown[]).length} conversations` : undefined),
         },
         {
           key: 'projects',
-          fn: fetchProjects,
+          fn: () => fetchProjectsDeduped({ force: true }),
           detail: (v: unknown) => (Array.isArray(v) ? `${(v as unknown[]).length} projects` : undefined),
         },
         {
           key: 'timeline',
-          fn: () => fetchTimelineEnvelope().then((e) => e.data),
+          fn: () => fetchTimelineEnvelopeDeduped({ force: true }).then((e) => e.data),
           detail: (v: unknown) => (Array.isArray(v) ? `${(v as unknown[]).length} memories` : undefined),
         },
         {
