@@ -516,20 +516,28 @@ class ExecutionCoordinator:
                         "candidates": continuation["candidates"]}
             target = continuation["target"]
             task = continuation["task"]
-            plan = self._continuation_exec_plan(task, target)
+            # Guard: stale target (e.g. no checkpoint) should not block a fresh
+            # conversation. The user said "Hi, my name is..." — that is a normal
+            # chat turn, not a request to resume a long-running job. Fall back
+            # to a fresh plan when the resume source is no longer valid.
             new_job = self._manager.reopen(target.job_id)
             if new_job is None:
-                return {"error": "That task can no longer be resumed."}
-            self.mode = "continuation"
-            self.original_job_id = target.job_id
-            return {
-                "plan": plan,
-                "job": new_job,
-                "resume_from": target.next_step,
-                "reason": "resumed",
-                "parent_job_id": target.job_id,
-                "plan_ref_id": getattr(getattr(plan, "plan", None), "id", ""),
-            }
+                log.warning("continuation target %s not resumable, falling back to fresh", target.job_id)
+                # Fall through to fresh-plan path below instead of surfacing an
+                # opaque "can no longer be resumed" error for a normal chat.
+                pass
+            else:
+                self.mode = "continuation"
+                self.original_job_id = target.job_id
+                plan = self._continuation_exec_plan(task, target)
+                return {
+                    "plan": plan,
+                    "job": new_job,
+                    "resume_from": target.next_step,
+                    "reason": "resumed",
+                    "parent_job_id": target.job_id,
+                    "plan_ref_id": getattr(getattr(plan, "plan", None), "id", ""),
+                }
 
         plan = self._orchestrator.plan(
             user_input=user_input,
@@ -602,9 +610,13 @@ class ExecutionCoordinator:
         target = self._continuation.recommended(
             conversation_id=conversation_id or None)
         if target is None:
+            cands = self._continuation.candidates(
+                conversation_id=conversation_id or None)
+            if not cands:
+                return None
             return {
                 "ambiguous": True,
-                "candidates": [t.to_dict() for t in self._continuation.candidates()],
+                "candidates": [t.to_dict() for t in cands],
             }
         task = self._task_store.get(target.task_id)
         if task is None or task.plan is None:

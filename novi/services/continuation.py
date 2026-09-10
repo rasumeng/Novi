@@ -141,6 +141,11 @@ class ContinuationService:
         for job in jobs:
             if job.status not in _RESUME_JOB_STATUSES:
                 continue
+            # A job without a checkpoint cannot be resumed — reopen would fail
+            # and would incorrectly surface "can no longer be resumed" for a
+            # normal chat turn (e.g. "Hi, my name is...").
+            if job.checkpoint is None:
+                continue
             prev = resumable.get(job.task_id)
             if prev is None or (job.completed_at or job.created_at) >= (
                     prev.completed_at or prev.created_at):
