@@ -3,6 +3,8 @@ import { Sidebar } from '@/components/sidebar/Sidebar'
 import { Conversation } from '@/components/chat/Conversation'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { useNoviChat } from '@/hooks/useNoviChat'
+import { useBoot } from '@/hooks/useBoot'
+import { BootScreen } from '@/components/boot/BootScreen'
 import { TitleBar } from '@/components/common/TitleBar'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
 
@@ -30,6 +32,7 @@ type WorkspaceLocation = {
 }
 
 export default function App() {
+  const boot = useBoot()
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<NavItemId>('conversations')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -146,6 +149,8 @@ export default function App() {
     chat.setActiveId(id)
     // stay in projects section — user sees thread inside project
   }, [chat])
+
+  if (boot.phase !== 'ready') return <BootScreen state={boot} />
 
   const renderSection = () => {
     switch (activeSection) {
