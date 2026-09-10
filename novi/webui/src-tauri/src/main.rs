@@ -83,14 +83,12 @@ fn main() {
             app_handle.manage(AppState { launcher });
             let state = app_handle.state::<AppState>();
 
-            // No loading screen — window navigates directly to the backend/frontend
-            // URL after wait_until_ready; fresh loading design will replace this.
+            let boot = splash::boot_url().ok_or_else(|| "failed to prepare boot screen".to_string())?;
             let initial_url = if dev {
-                tauri::Url::parse("http://localhost:5173").expect("invalid dev url")
+                // In dev, Vite serves the frontend; still show boot briefly until wait_until_ready
+                boot
             } else {
-                // Placeholder until backend reports ready; thread will navigate to real URL.
-                // Use a blank page to avoid showing stale loading UX.
-                tauri::Url::parse("about:blank").expect("blank url")
+                boot
             };
 
             let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(initial_url))
