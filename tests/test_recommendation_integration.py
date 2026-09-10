@@ -30,7 +30,7 @@ from novi.configuration.model_records import (
     ModelStatus,
 )
 from novi.configuration.qualification import Qualification
-from novi.configuration.resolver import WORKLOADS, recommend
+from novi.configuration.resolver import recommend
 
 
 def hw(vram=None, ram=None, conf=DetectionConfidence.HIGH,
@@ -213,12 +213,11 @@ def test_resolver_and_engine_agree_on_runtime_evidence():
     assert rec["recommended"] is True
     assert any("runtime" in r for r in rec["reasons"])
     r = recommend(h, [m], catalog={})
-    assert r.workloads["general"].model == "fresh:model"
-    assert "runtime reported capability" in r.workloads["general"].reasons
+    assert r.primary.model == "fresh:model"
+    assert "runtime reported capability" in r.primary.reasons
 
 
-def test_all_workloads_have_empty_model_when_no_evidence():
+def test_primary_empty_when_no_evidence():
     m = _record(name="silent:model")
     r = recommend(hw(vram=24.0, ram=64.0), [m], catalog={})
-    for w in WORKLOADS:
-        assert r.workloads[w].model == ""
+    assert r.primary.model == ""

@@ -418,6 +418,11 @@ def build_runtime(cfg: dict | None = None):
         runtime_graph=b.get("runtime_graph"),
         workflow_engine=workflow_engine,
     )
+    # Keep the per-session composition self-contained.  Session must not call
+    # get_backend a second time after build_runtime: doing so defeats injected
+    # test runtimes and can synchronously trigger knowledge-index warmup.
+    runtime._continuation_service = b.get("continuation")
+    runtime._job_lifecycle = job_lifecycle
     # Drive Task lifecycle from runtime plan events; runtime never touches the
     # store itself.
     from .orchestrator.projection import TaskLifecycleProjection
@@ -464,16 +469,13 @@ class Session:
         self.current_task_id = ""
         self.agent_config: dict = {}
 
-        b = get_backend()
         self.task_store = getattr(self.orchestrator, "task_store", None)
-        self.continuation = b.get("continuation")
+        self.continuation = getattr(self.runtime, "_continuation_service", None)
         # Phase 6B: the shared JobLifecycle observer is subscribed to this
         # session's event bus inside ``build_runtime``. Pass it to the
         # coordinator so coordinator-created Jobs are registered (checkpoints +
         # completion) and ``plan.started`` never creates a second Job.
-        self.job_lifecycle = getattr(
-            b.get("context"), "job_lifecycle", None
-        ) if b.get("context") is not None else None
+        self.job_lifecycle = getattr(self.runtime, "_job_lifecycle", None)
 
         # Milestone 5 Phase 5E-1: Session.start_run delegates to the shared
         # ExecutionCoordinator (single ownership of Task/Plan/Job/Runtime).
@@ -798,6 +800,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     "updatedAt": c.get("updatedAt", ""),
                     "pinned": c.get("pinned", False),
                     "projectId": c.get("projectId"),
+                    "workspace": c.get("workspace"),
                     "messages": _load_messages(c["id"]),
                 }
             )
@@ -861,6 +864,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         title = body.get("title", "Untitled")
         pinned = body.get("pinned", False)
         project_id = body.get("projectId")
+        workspace = body.get("workspace")
         messages = body.get("messages", [])
 
         if not conv_id:
@@ -890,6 +894,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         # also store explicit None for clarity? pop is enough; derived checks get()
                     else:
                         entry["projectId"] = val.strip() if isinstance(val, str) else val
+                if "workspace" in body:
+                    if body.get("workspace") is None:
+                        entry.pop("workspace", None)
+                    else:
+                        entry["workspace"] = body.get("workspace")
             else:
                 entry = {
                     "id": conv_id,
@@ -906,6 +915,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     # legacy: body without projectId key but project_id variable may be None -> omit
                     if project_id is not None and not (isinstance(project_id, str) and not project_id.strip()):
                         entry["projectId"] = project_id.strip() if isinstance(project_id, str) else project_id
+                if "workspace" in body and "workspace" not in entry and body.get("workspace") is not None:
+                    entry["workspace"] = body.get("workspace")
                 idx["conversations"].insert(0, entry)
 
             # Atomic order: .md first, then index — crash never leaves orphan index
@@ -1014,6 +1025,47 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     # spawning a second download thread.
     _installing_models: set[str] = set()
     _installing_lock = threading.Lock()
+
+    @app.get("/api/health")
+    def get_system_health():
+        """Small, honest readiness report for first-run and Settings.
+
+        The embedding probe intentionally sends one tiny request through the
+        configured provider.  This catches the common case where Ollama is
+        reachable but the embedding model is missing or unusable.
+        """
+        ollama_url = configuration.get("ollama.url", "http://localhost:11434")
+        primary = get_primary_model(configuration=configuration)
+        embedding_model = configuration.get("embedding.model", "")
+        discovery = ModelDiscovery(ollama_url)
+        installed = discovery.installed()
+        installed_names = {m.name for m in installed if m.name}
+        ollama_ok = bool(getattr(discovery, "last_reachable", True))
+        embedding = {"model": embedding_model, "ready": False, "dimension": 0, "error": None}
+        if ollama_ok and embedding_model:
+            try:
+                from .services.embedding_providers import OllamaEmbeddingProvider
+                vector = OllamaEmbeddingProvider(configuration.snapshot()).encode("Novi health check")
+                embedding["dimension"] = len(vector)
+                embedding["ready"] = bool(vector)
+                if not vector:
+                    embedding["error"] = "Embedding service returned an empty vector."
+            except Exception as e:
+                embedding["error"] = str(e)[:300]
+        elif not ollama_ok:
+            embedding["error"] = f"Ollama is not reachable at {ollama_url}."
+        else:
+            embedding["error"] = "No embedding model is configured."
+
+        primary_ready = bool(primary and primary in installed_names)
+        ready = bool(ollama_ok and primary_ready and embedding["ready"])
+        return {
+            "ready": ready,
+            "ollama": {"ready": ollama_ok, "url": ollama_url,
+                       "error": getattr(discovery, "last_error", None)},
+            "primaryModel": {"name": primary, "ready": primary_ready},
+            "embedding": embedding,
+        }
 
     # Broadcast configuration changes to connected WebSocket clients. Values
     # are redacted so a secret-setting update never broadcasts the actual
@@ -2089,11 +2141,29 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         att_id = uuid.uuid4().hex
         filename = f"{att_id}{ext}"
         path = ATTACHMENTS_DIR / filename
-        content = await file.read()
-        if len(content) > MAX_UPLOAD_SIZE:
+        # Early Content-Length guard before buffering (413 without reading body)
+        clen = file.size
+        if clen is not None and clen > MAX_UPLOAD_SIZE:
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": "file too large (max 100 MB)"}, status_code=413)
-        path.write_bytes(content)
+        # Chunked write — never hold >1MB in memory; also enforces limit while streaming
+        size = 0
+        with path.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_SIZE:
+                    out.close()
+                    try:
+                        path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse({"error": "file too large (max 100 MB)"}, status_code=413)
+                out.write(chunk)
+        content_len = size  # for response meta
 
         mime = file.content_type or "application/octet-stream"
         is_image = mime.startswith("image/")
@@ -2103,7 +2173,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             "type": "image" if is_image else "file",
             "name": file.filename or filename,
             "mime": mime,
-            "size": len(content),
+            "size": content_len,
             "url": f"/api/attachments/{att_id}/file",
         }
 
@@ -2233,8 +2303,25 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             task_queue._save(task)
         return {"ok": True}
 
+    # Loopback trust: only allow WS from known Novi frontends (Vite / Tauri / loopback).
+    # CORS middleware does not protect WebSocket upgrades — enforce Origin here.
+    _WS_ALLOWED_ORIGINS = {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8765",
+        "http://127.0.0.1:8765",
+        "tauri://localhost",
+        "https://tauri.localhost",
+    }
+
     @app.websocket("/ws/chat")
     async def ws_chat(ws: WebSocket):
+        origin = (ws.headers.get("origin") or "").strip()
+        # Browser clients always send Origin; non-browser (e.g. TestClient) may omit it — allow empty.
+        # Explicitly block cross-site origins like https://evil.com.
+        if origin and origin not in _WS_ALLOWED_ORIGINS:
+            await ws.close(code=4403)
+            return
         await ws.accept()
         loop = asyncio.get_running_loop()
         conn_id = _register_sender(loop, ws)
@@ -2565,5 +2652,13 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
 
 def run_server(cfg: dict | None = None, host: str = "127.0.0.1", port: int = 8765):
+    # Every WebUI entrypoint—not just the desktop sidecar—must provision the
+    # canonical local embedding model before backend warmup indexes knowledge.
+    # Failure remains non-fatal and is reported by ensure_embedding_model.
+    from .configuration.install import ensure_embedding_model
+    from .configuration.bootstrap import get_configuration
+    configuration = get_configuration()
+    ollama_url = configuration.get("ollama.url", "http://localhost:11434")
+    ensure_embedding_model(ollama_url, configuration=configuration)
     import uvicorn
     uvicorn.run(create_app(cfg), host=host, port=port)

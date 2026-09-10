@@ -1,7 +1,7 @@
 """SimpleLLM + provider-level model resolution tests.
 
 Covers the Settings-to-execution contract:
-- SimpleLLM re-resolves the workload model on every call, so a selection
+- SimpleLLM re-resolves the primary model on every call, so a selection
   change is picked up immediately (no stale cached client).
 - The Ollama provider forwards the ``reasoning`` setting to ChatOllama.
 """
@@ -28,11 +28,11 @@ class _FakeModelService:
         self.clients = []
         self.resolve_calls = 0
 
-    def resolve(self, workload):
+    def resolve_primary(self):
         self.resolve_calls += 1
         return "ollama", self.model
 
-    def client(self, workload):
+    def client(self):
         c = _FakeClient()
         self.clients.append(c)
         return c
@@ -40,7 +40,7 @@ class _FakeModelService:
 
 def test_simple_llm_reresolves_model_every_call():
     ms = _FakeModelService(model="a")
-    llm = SimpleLLM(ms, workload="general")
+    llm = SimpleLLM(ms)
 
     llm.invoke("first")
     llm.invoke("second")
@@ -55,9 +55,9 @@ def test_simple_llm_reresolves_model_every_call():
     assert llm._model == "b"
 
 
-def test_simple_llm_client_reuse_after_workload_switch_back():
+def test_simple_llm_client_reuse_after_model_switch_back():
     ms = _FakeModelService(model="x")
-    llm = SimpleLLM(ms, workload="general")
+    llm = SimpleLLM(ms)
     llm.invoke("a")
     ms.model = "y"
     llm.invoke("b")

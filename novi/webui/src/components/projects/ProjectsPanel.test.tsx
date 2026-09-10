@@ -23,18 +23,18 @@ describe('ProjectsPanel consistent states', () => {
     const onRetry = vi.fn()
     render(<ProjectsPanel {...baseProps} error="Projects fetch failed" onRetry={onRetry} />)
     expect(screen.getByText(/Projects fetch failed/)).toBeTruthy()
-    fireEvent.click(screen.getByText('Retry'))
+    fireEvent.click(screen.getByText('Try again'))
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 
   it('renders empty state when no projects', () => {
     render(<ProjectsPanel {...baseProps} />)
-    expect(screen.getByText('No projects yet')).toBeTruthy()
+    expect(screen.getByText(/Start one and I'll keep everything related together/)).toBeTruthy()
   })
 
   it('error → retry transitions to loading', () => {
     const { rerender, container } = render(<ProjectsPanel {...baseProps} error="oops" onRetry={vi.fn()} />)
-    expect(screen.getByText('Retry')).toBeTruthy()
+    expect(screen.getByText('Try again')).toBeTruthy()
     rerender(<ProjectsPanel {...baseProps} loading />)
     expect(container.querySelector('.animate-shimmer')).toBeTruthy()
   })

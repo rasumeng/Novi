@@ -51,7 +51,7 @@ NAME_EVIDENCE_TOKENS = [
 ]
 
 # Retired model-configuration vocabulary that must never reappear. A model is
-# selected via ``llm.workloads.*``; there is no mode/role/custom-assign model
+# selected via ``llm.primary_model``; there is no mode/role/custom-assign model
 # concept, no Automatic/Custom eligibility, and no authoritative hardcoded
 # fact table.
 RETIRED_VOCABULARY = [
@@ -177,7 +177,7 @@ def test_no_model_name_substring_conditionals():
 def test_no_retired_model_vocabulary():
     """Retired model-mode/Automatic/Custom vocabulary must not reappear.
 
-    Selection is persisted only as ``llm.workloads.*``. ``models.mode``, role
+    Selection is persisted only as ``llm.primary_model``. ``models.mode``, role
     assignments, automatic/custom eligibility, and the authoritative fact
     table name are all retired — in Python and in the frontend.
     """
@@ -205,7 +205,7 @@ def test_no_automatic_vocabulary_in_frontend():
     """The word "Automatic"/"automatic" must never appear in the webui source.
 
     Model selection is user-explicit: recommended or user-chosen, persisted as
-    ``llm.workloads.*``. Any "automatic" selection concept is retired. The
+    ``llm.primary_model``. Any "automatic" selection concept is retired. The
     guard uses a word boundary so cosmetic "automatically" copy is allowed.
     """
     violations = []
@@ -598,7 +598,7 @@ def test_graph_modules_never_select_models():
         "apply_selection",
         "create_provider",
         "configuration.resolver",
-        "llm.workloads",
+        "llm.primary_model",
     ]
     violations = []
     for pyfile in graphs_dir.rglob("*.py"):

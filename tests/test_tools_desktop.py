@@ -1,11 +1,11 @@
 """Phase 3 contract tests for the desktop tools.
 
-* ``analyze_image``/``screenshot`` use ONLY the selected general workload model
-  (``llm.workloads.general.model``) — never ``models.vision``, never a hardcoded
+* ``analyze_image``/``screenshot`` use ONLY the selected primary model
+  (``llm.primary_model``) — never ``models.vision``, never a hardcoded
   name.
 * Vision capability is derived from the selected model's catalog/discovery
   facts.
-* General lacks vision → explicit capability error; General unset/not installed
+* Primary lacks vision → explicit capability error; primary unset/not installed
   → model-unavailable error.
 * ``screenshot``, ``analyze_image``, ``clipboard_read`` keep their
   capability/permission wiring (``desktop.enabled`` gate).
@@ -35,10 +35,10 @@ class FakeResponse:
             raise HTTPError(f"HTTP {self.status_code}")
 
 
-def _config(general_model=""):
-    """A minimal config snapshot with the general workload model set/empty."""
+def _config(primary_model=""):
+    """A minimal config snapshot with the primary model set/empty."""
     return {
-        "llm": {"workloads": {"general": {"model": general_model}, "research": {"model": ""}, "code": {"model": ""}}},
+        "llm": {"primary_model": primary_model},
         "ollama": {"url": "http://localhost:11434"},
         "desktop": {"enabled": True},
     }
@@ -78,14 +78,14 @@ def _fake_caps(supports_vision):
 # ── Selected-model contract ─────────────────────────────────────────────────
 
 
-def test_analyze_image_uses_only_general_workload_model(tmp_path):
-    """The HTTP call must carry the selected general model, verbatim."""
+def test_analyze_image_uses_only_primary_model(tmp_path):
+    """The HTTP call must carry the selected primary model, verbatim."""
     from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
-    with _patch_config(_config(general_model="qwen2.5vl:7b")), \
+    with _patch_config(_config(primary_model="qwen2.5vl:7b")), \
          patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(True)) as mc, \
          patch.object(desktop, "requests") as fake_requests:
@@ -107,7 +107,7 @@ def test_analyze_image_ignores_legacy_models_vision(tmp_path):
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
-    cfg = _config(general_model="qwen2.5vl:7b")
+    cfg = _config(primary_model="qwen2.5vl:7b")
     cfg["models"] = {"vision": "llava:13b"}
 
     with _patch_config(cfg), \
@@ -125,38 +125,36 @@ def test_analyze_image_ignores_legacy_models_vision(tmp_path):
 # ── Error contracts ─────────────────────────────────────────────────────────
 
 
-def test_analyze_image_general_model_unset_raises_model_unavailable(tmp_path):
-    """Unset general workload model → explicit model-unavailable error, no HTTP."""
+def test_analyze_image_primary_model_unset_raises_model_unavailable(tmp_path):
+    """Unset primary model → explicit model-unavailable error, no HTTP."""
     from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
-    with _patch_config(_config(general_model="")), \
+    with _patch_config(_config(primary_model="")), \
          patch.object(desktop, "requests") as fake_requests:
         result = desktop.analyze_image(str(img))
 
     assert "Model unavailable" in result
-    assert "general" in result
+    assert "primary model" in result
     fake_requests.post.assert_not_called()
 
 
-def test_analyze_image_general_model_lacks_vision_returns_capability_error(tmp_path):
+def test_analyze_image_primary_model_lacks_vision_returns_capability_error(tmp_path):
     """Selected model without vision capability → explicit capability error."""
     from novi.tools import desktop
 
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
-    with _patch_config(_config(general_model="qwen3:8b")), \
+    with _patch_config(_config(primary_model="qwen3:8b")), \
          patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(False)), \
          patch.object(desktop, "requests") as fake_requests:
         result = desktop.analyze_image(str(img))
 
-    assert "does not support image input" in result
-    assert "qwen3:8b" in result
-    assert "general" in result
+    assert "doesn't support image input" in result
     fake_requests.post.assert_not_called()
 
 
@@ -167,7 +165,7 @@ def test_analyze_image_model_not_installed_surfaces_model_unavailable(tmp_path):
     img = tmp_path / "shot.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
 
-    with _patch_config(_config(general_model="qwen2.5vl:7b")), \
+    with _patch_config(_config(primary_model="qwen2.5vl:7b")), \
          patch("novi.runtime.model_selector.model_capabilities",
                return_value=_fake_caps(True)), \
          patch.object(desktop, "requests") as fake_requests:
@@ -192,8 +190,8 @@ def test_analyze_image_missing_file_returns_error():
 def test_screenshot_requires_desktop_enabled():
     from novi.tools import desktop
 
-    with _patch_config(_config(general_model="qwen2.5vl:7b")):
-        cfg = _config(general_model="qwen2.5vl:7b")
+    with _patch_config(_config(primary_model="qwen2.5vl:7b")):
+        cfg = _config(primary_model="qwen2.5vl:7b")
         cfg["desktop"] = {"enabled": False}
         with _patch_config(cfg):
             result = desktop.screenshot()

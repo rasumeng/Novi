@@ -330,12 +330,26 @@ def test_ctx_trace_receives_model_routing():
     """ctx.trace should record model routing decisions."""
     from novi.runtime.runtime import NoviRuntime
 
-    runtime = NoviRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
+    class _Svc:
+        def resolve_primary(self):
+            return ("test", "test-model")
+
+        def bind_model(self, name, tools, temperature=0.0):
+            raise AssertionError("no bind expected")
+
+        def client_for_model(self, name, temperature=0.0):
+            from unittest.mock import MagicMock
+            m = MagicMock()
+            m.stream.return_value = iter([])
+            m.invoke.return_value = type("R", (), {"content": "hi"})()
+            return m
+
+    runtime = NoviRuntime(model_service=_Svc())
     ctx = ExecutionContext(user_input="hello")
     list(runtime.run_stream(context=ctx))
-    # model_selected should be set (from configured model)
+    # model_selected should be set (from primary model)
     assert ctx.trace.model_selected
-    assert ctx.trace.model_reason in ("workload_match", "config_override", "force_capability", "execution_plan")
+    assert ctx.trace.model_reason in ("primary_model", "config_override", "force_capability", "execution_plan")
 
 
 def test_ctx_allowed_tools_populated():
@@ -398,7 +412,20 @@ def test_full_research_pipeline_trace_ownership():
     """
     from novi.runtime.runtime import NoviRuntime
 
-    runtime = NoviRuntime(model_service=SimpleNamespace(resolve=lambda role: ("test", "test-model")))
+    class _Svc2:
+        def resolve_primary(self):
+            return ("test", "test-model")
+
+        def bind_model(self, name, tools, temperature=0.0):
+            raise AssertionError("no bind expected")
+
+        def client_for_model(self, name, temperature=0.0):
+            from unittest.mock import MagicMock
+            m = MagicMock()
+            m.stream.return_value = iter([])
+            return m
+
+    runtime = NoviRuntime(model_service=_Svc2())
     analysis = TaskAnalysis(
         intent=IntentType.RESEARCH,
         strategy=ExecutionStrategy.RESEARCH,
@@ -720,18 +747,20 @@ class TestExecutorEntryPoint:
 
 
 class TestModelResolution:
-    """Phase 2: workload-based model resolution through ModelSelector.
+    """Single primary model through ModelSelector.
 
-    The configured workload model is used verbatim — no capability ranking,
+    The primary model is used verbatim for every strategy — no capability ranking,
     no VRAM/loaded preference, no complexity upgrade, no default fallback.
     """
 
-    def _service(self, workloads=None):
+    def _service(self, model="qwen3:8b"):
         import types
-        workloads = workloads or {}
         return types.SimpleNamespace(
-            _workloads=workloads,
-            resolve=lambda w: ("test-provider", workloads.get(w, "")),
+            _model=model,
+            resolve_primary=lambda: ("test-provider", model),
+            bind_model=lambda name, tools, temperature=0.0: None,
+            client_for_model=lambda name, temperature=0.0: None,
+            validate=lambda *a, **k: [],
         )
 
     def _selector(self, model_service):
@@ -739,61 +768,81 @@ class TestModelResolution:
         return ModelSelector(model_service)
 
     def test_resolve_returns_configured_model_verbatim(self):
-        svc = self._service({"general": "qwen3:8b", "research": "gemma4:12b"})
-        sel = self._selector(svc)
-        assert sel.resolve("general") == "qwen3:8b"
-        assert sel.resolve("research") == "gemma4:12b"
+        from novi.models import ModelRegistry, ModelService
+        from novi.providers import ModelInfo
+        reg = ModelRegistry()
+        reg.update("test-provider", [ModelInfo(name="qwen3:8b", provider="test-provider")])
+        from novi.runtime.model_selector import ModelSelector
+        sel = ModelSelector(ModelService({"llm": {"primary_model": "qwen3:8b"}}, reg))
+        assert sel.resolve() == "qwen3:8b"
 
-    def test_resolve_unknown_workload_rejected(self):
-        sel = self._selector(self._service({"general": "qwen3:8b"}))
-        with pytest.raises(ValueError):
-            sel.resolve("chat")
-
-    def test_resolve_unset_workload_raises_not_substitutes(self):
-        """Unset workload must error, never fall back to another workload's model."""
+    def test_resolve_unset_primary_raises_not_substitutes(self):
+        """Unset primary must error, never fall back to another model."""
+        import types
         from novi.models import ModelUnavailableError
-        sel = self._selector(self._service({"general": "qwen3:8b"}))
+        svc = types.SimpleNamespace(
+            resolve_primary=lambda: ("test-provider", ""),
+        )
+        sel = self._selector(svc)
         with pytest.raises(ModelUnavailableError):
-            sel.resolve("research")
+            sel.resolve()
 
     def test_resolve_missing_configured_model_raises(self):
         """Configured-but-not-installed model must error, never substitute."""
-        import types
-        from novi.models import ModelUnavailableError
+        from novi.models import ModelRegistry, ModelService, ModelUnavailableError
+        from novi.providers import ModelInfo
+        from novi.runtime.model_selector import ModelSelector
 
-        def resolve(w):
-            if w == "general":
-                raise ModelUnavailableError("general", "not-installed-model", ["qwen3:8b"])
-            return ("test-provider", "")
+        reg = ModelRegistry()
+        reg.update("test-provider", [ModelInfo(name="qwen3:8b", provider="test-provider")])
+        sel = ModelSelector(ModelService({"llm": {"primary_model": "not-installed-model"}}, reg))
+        with pytest.raises(ModelUnavailableError) as exc_info:
+            sel.resolve()
+        assert "workload" not in str(exc_info.value).lower()
 
-        sel = self._selector(types.SimpleNamespace(resolve=resolve))
-        with pytest.raises(ModelUnavailableError):
-            sel.resolve("general")
-
-    def test_runtime_resolves_workload_model(self):
-        """Runtime: intent/capability → workload → configured model."""
+    def test_strategy_helpers_return_chat_code_research(self):
+        """_strategy_for maps to chat|code|research; ctx.workload carries the strategy."""
         from novi.runtime.runtime import NoviRuntime
         from novi.runtime.execution_context import ExecutionContext
 
-        svc = self._service({"general": "gen-model", "research": "res-model"})
+        svc = self._service("gen-model")
+        runtime = NoviRuntime(model_service=svc)
+        ctx = ExecutionContext(user_input="hello")
+        assert runtime._strategy_for(ctx, "conversation") == "chat"
+        assert runtime._strategy_for(ctx, "coding") == "code"
+        assert runtime._strategy_for(ctx, "research") == "research"
+        list(runtime.run_stream(context=ctx))
+        assert ctx.workload == "chat"
+        assert ctx.model_name == "gen-model"
+        assert ctx.trace.workload == "chat"
+        assert ctx.model_reason == "primary_model"
+
+    def test_runtime_resolves_strategy_model(self):
+        """Runtime: intent/capability → strategy → primary model."""
+        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.execution_context import ExecutionContext
+
+        svc = self._service("gen-model")
         runtime = NoviRuntime(model_service=svc)
         ctx = ExecutionContext(user_input="hello")
         list(runtime.run_stream(context=ctx))
-        assert ctx.workload == "general"
+        assert ctx.workload == "chat"
         assert ctx.model_name == "gen-model"
-        assert ctx.trace.workload == "general"
+        assert ctx.trace.workload == "chat"
 
     def test_runtime_missing_model_yields_explicit_error(self):
-        """Missing workload model: explicit error, no LLM loop, no token output."""
+        """Missing primary model: explicit error, no LLM loop, no token output."""
         import types
         from novi.models import ModelUnavailableError
         from novi.runtime.runtime import NoviRuntime
         from novi.runtime.execution_context import ExecutionContext
 
-        def resolve(w):
-            raise ModelUnavailableError("general", "not-installed-model", ["qwen3:8b"])
+        def resolve_primary():
+            raise ModelUnavailableError("not-installed-model", ["qwen3:8b"])
 
-        runtime = NoviRuntime(model_service=types.SimpleNamespace(resolve=resolve))
+        runtime = NoviRuntime(model_service=types.SimpleNamespace(
+            resolve_primary=resolve_primary,
+        ))
         ctx = ExecutionContext(user_input="hello")
         events = list(runtime.run_stream(context=ctx))
         kinds = [k for k, *_ in events]
@@ -808,7 +857,7 @@ class TestModelResolution:
         from novi.runtime.execution_context import ExecutionContext
 
         # Use a seeded model known without vision (qwen3:8b has chat/reasoning/tools, no vision)
-        svc = self._service({"general": "qwen3:8b"})
+        svc = self._service("qwen3:8b")
         runtime = NoviRuntime(model_service=svc)
         ctx = ExecutionContext(user_input="describe this")
         ctx.attachments = [{"type": "image", "path": "x.png", "mime": "image/png"}]

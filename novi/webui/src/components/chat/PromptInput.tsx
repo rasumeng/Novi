@@ -55,6 +55,8 @@ interface Props {
   /** Explicit per-conversation Deep Research mode. */
   deepResearch?: boolean
   onToggleDeepResearch?: () => void
+  /** Grant Novi read-only access to a local folder for this chat session. */
+  onAttachFolder?: (path: string) => boolean
 }
 
 export interface PromptInputHandle {
@@ -73,6 +75,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   suggestion,
   deepResearch,
   onToggleDeepResearch,
+  onAttachFolder,
 }, ref) {
   const [value, setValue] = useState('')
   const [dragActive, setDragActive] = useState(false)
@@ -86,12 +89,13 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const valueRef = useRef('')
   const prefixRef = useRef('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [attachedFolder, setAttachedFolder] = useState<string | null>(null)
+  const [folderError, setFolderError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [workloadCaps, setWorkloadCaps] = useState<Record<string, { vision: boolean; tools: boolean; reasoning: boolean; thinking: boolean; audio: boolean; coding: boolean }> | null>(null)
+  const [primaryCaps, setPrimaryCaps] = useState<{ vision: boolean; tools: boolean; reasoning: boolean; thinking: boolean; audio: boolean; coding: boolean } | null>(null)
   const [micError, setMicError] = useState<string | null>(null)
   // Privacy: Transcription currently uses Google Speech API (sends audio to google.com). Offline alternative planned. Disable mic to avoid.
   const TRANSCRIPTION_PRIVACY_NOTE = "Transcription currently uses Google Speech API (sends audio to google.com). Offline alternative planned. Disable mic to avoid."
@@ -282,7 +286,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
     fetch(`${API_BASE}/api/attachments/${id}`, { method: 'DELETE' }).catch(() => {})
   }, [])
 
-  // Early compatibility awareness: fetch workload capabilities (vision/tools/reasoning/audio) — strictly model-derived
+  // Early compatibility awareness: fetch primary-model capabilities — strictly model-derived
   useEffect(() => {
     let cancelled = false
     const fetchCaps = async () => {
@@ -290,7 +294,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         const r = await fetch(`${API_BASE}/api/models/discovery`)
         if (r.ok) {
           const d = await r.json()
-          if (!cancelled) setWorkloadCaps(d.workload_capabilities ?? null)
+          if (!cancelled) setPrimaryCaps(d.capabilities ?? null)
         }
       } catch { /* ignore */ }
     }
@@ -301,15 +305,12 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
 
   const hasImage = attachments.some((a) => a.type === 'image' || (a.mime || '').startsWith('image/'))
   const hasAudio = attachments.some((a) => (a.mime || '').startsWith('audio/'))
-  const generalCaps = workloadCaps?.general
-  const researchCaps = workloadCaps?.research
   const incompatibilities: { key: string; msg: string }[] = []
-  if (hasImage && generalCaps && !generalCaps.vision) incompatibilities.push({ key: 'vision', msg: 'Image attached — current General model does not support Vision. Choose a Vision-capable model before sending.' })
-  if (hasAudio && generalCaps && !generalCaps.audio) incompatibilities.push({ key: 'audio', msg: 'Audio attached — current General model does not support Audio. Choose an Audio-capable model before sending.' })
-  if (deepResearch && researchCaps && !researchCaps.reasoning && !researchCaps.thinking) incompatibilities.push({ key: 'thinking', msg: 'Deep Research requires a Thinking-capable Research model. Choose a compatible model before sending.' })
+  if (hasImage && primaryCaps && !primaryCaps.vision) incompatibilities.push({ key: 'vision', msg: "Image attached — the model you're currently using doesn't support Vision. Choose a vision-capable model before sending." })
+  if (hasAudio && primaryCaps && !primaryCaps.audio) incompatibilities.push({ key: 'audio', msg: "Audio attached — the model you're currently using doesn't support Audio. Choose an audio-capable model before sending." })
   // Tools hint: file attachments beyond images benefit from Tools
   const hasFiles = attachments.some((a) => a.type !== 'image' && !(a.mime || '').startsWith('image/'))
-  if (hasFiles && generalCaps && !generalCaps.tools) incompatibilities.push({ key: 'tools', msg: 'Files attached — current General model does not support Tools. Tool calling may not work.' })
+  if (hasFiles && primaryCaps && !primaryCaps.tools) incompatibilities.push({ key: 'tools', msg: 'Files attached — current model does not support Tools. Tool calling may not work.' })
 
   const toggleMic = useCallback(() => {
     if (micStateRef.current === 'idle') {
@@ -379,15 +380,28 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
 
   const blockingIncompat = incompatibilities.some((c) => c.key === 'vision' || c.key === 'audio' || c.key === 'thinking')
 
-  const handleAttachFolder = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
-    const dirName = files[0].webkitRelativePath?.split('/')[0]
-    if (dirName) {
-      onSend(`/workspace ${dirName}`)
+  const handleAttachFolder = useCallback(async () => {
+    setFolderError(null)
+    try {
+      // Browsers represent a selected directory as every file inside it. Use
+      // the native picker instead so we grant the folder path, never upload
+      // or attach its contents to the chat.
+      const response = await fetch(`${API_BASE}/api/directory-picker`, { method: 'POST' })
+      const data = await response.json()
+      if (!response.ok || !data.path) {
+        if (!data.path && response.ok) return // user cancelled the picker
+        setFolderError(data.error || 'Could not select that folder')
+        return
+      }
+      if (!onAttachFolder?.(data.path)) {
+        setFolderError('Novi is not connected. Try again once it reconnects.')
+        return
+      }
+      setAttachedFolder(data.path)
+    } catch (error) {
+      setFolderError(error instanceof Error ? error.message : 'Could not select that folder')
     }
-    e.target.value = ''
-  }, [onSend])
+  }, [onAttachFolder])
 
   const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -471,6 +485,19 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           ))}
         </div>
       )}
+      {attachedFolder && (
+        <div className="flex items-center gap-1.5 px-4 pb-2 text-xs text-base-300">
+          <Folder size={13} className="text-accent shrink-0" />
+          <span className="truncate" title={attachedFolder}>Folder available to Novi: {attachedFolder}</span>
+        </div>
+      )}
+      {folderError && (
+        <div className="mx-2 mb-2 p-2 rounded-xl border border-red-500/30 bg-red-500/10 flex items-start gap-2">
+          <AlertTriangle size={12} className="shrink-0 mt-0.5 text-red-400" />
+          <span className="text-[11px] leading-relaxed text-red-300">{folderError}</span>
+          <button onClick={() => setFolderError(null)} aria-label="Dismiss folder attachment error" className="ml-auto p-1 -mr-1 rounded-lg text-red-300 hover:text-red-100 hover:bg-red-500/20 transition-colors"><X size={12} /></button>
+        </div>
+      )}
       {incompatibilities.length > 0 && (
         <div className="mx-2 mb-2 p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-1.5">
           {incompatibilities.map((c) => (
@@ -519,7 +546,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
                   <Paperclip size={13} /> Attach files or photos
                 </button>
                 <button
-                  onClick={() => { setMenuOpen(false); folderInputRef.current?.click() }}
+                  onClick={() => { setMenuOpen(false); void handleAttachFolder() }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-xs text-base-200 hover:bg-base-800 transition-colors"
                 >
                   <Folder size={13} /> Attach folder
@@ -534,13 +561,6 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
             accept="image/*,.pdf,.txt,.py,.js,.ts,.md,.json,.csv,.docx,.xlsx"
             className="hidden"
             onChange={handleFileSelect}
-          />
-          <input
-            ref={folderInputRef}
-            type="file"
-            {...({ webkitdirectory: '' } as any)}
-            className="hidden"
-            onChange={handleAttachFolder}
           />
           <button
             onClick={toggleMic}

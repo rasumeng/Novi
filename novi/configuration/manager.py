@@ -12,8 +12,8 @@ Usage::
         registry=registry,
     )
     cfg.initialize()
-    value = cfg.get("llm.workloads.general.model")
-    cfg.set("llm.workloads.general.model", "<model-id>", by="webui")
+    value = cfg.get("llm.primary_model")
+    cfg.set("llm.primary_model", "<model-id>", by="webui")
 """
 
 from __future__ import annotations
@@ -42,12 +42,10 @@ class ValidationError(Exception):
         super().__init__(f"invalid value for '{setting_id}': {'; '.join(errors)}")
 
 
-# Retired model-configuration paths (Phase 5/5.5 -> Phase 6 workload model).
-# Model selection is persisted only as ``llm.workloads.*``; these paths are
+# Retired model-configuration paths (pre-beta multi-workload architecture).
+# Model selection is persisted only as ``llm.primary_model``; these paths are
 # dropped by startup migration and must never be re-introduced through the
 # write surface (any endpoint that funnels through ``Configuration.set``).
-# Stored as tuples so the retired dotted vocabulary does not appear literally
-# in source (architecture guard).
 RETIRED_MODEL_PATHS = [
     ("models", "mode"),
     ("models", "custom"),
@@ -65,6 +63,7 @@ RETIRED_MODEL_PATHS = [
     ("llm", "roles"),
     ("llm", "default_model"),
     ("llm", "meta"),
+    ("llm", "workloads"),
 ]
 
 
@@ -137,7 +136,7 @@ class Configuration:
         """Validate, persist, update state, notify owner + bus. Returns value."""
         # Retired model-configuration paths are unknown to the framework: a
         # leaf under a registered namespace would otherwise resolve and be
-        # persisted. Reject them up front so ``llm.workloads.*`` remains the
+        # persisted. Reject them up front so ``llm.primary_model`` remains the
         # only model-selection surface. Whole-dict writes (e.g. the legacy
         # ``models`` root) are scanned for embedded retired keys.
         if _is_retired_model_path(setting_id) or (

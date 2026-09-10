@@ -15,7 +15,7 @@ These are load-bearing invariants. Guards for most of them live in
 | Contract | Enforcement |
 |---|---|
 | `recommend()` is advisory only — never executes | pure function (`novi.configuration.resolver`) |
-| Selected model is the **verbatim** `llm.workloads.<workload>.model` | `ModelSelector.resolve` |
+| Selected model is the **verbatim** `llm.primary_model` (all strategies) | `ModelSelector.resolve_primary` |
 | `apply_selection()` is the sole selection writer | `novi.configuration.resolver.apply_selection` |
 | `""` means genuinely unset → raises `ModelUnavailableError` at execution | `ModelSelector.resolve` / `ModelService` |
 | No automatic selection, no fallback/substitution, no execution-time model replacement | runtime + graph AST guards |
@@ -28,12 +28,12 @@ These are load-bearing invariants. Guards for most of them live in
 ## 2. Model resolution & construction chain (single seam)
 
 ```
-ModelSelector.resolve(workload)            novi/runtime/model_selector.py
-        │   returns llm.workloads.<workload>.model VERBATIM
+ModelSelector.resolve_primary()              novi/runtime/model_selector.py
+        │   returns llm.primary_model VERBATIM (strategy-independent)
         │   raises ModelUnavailableError when unset/empty
         ▼
 ModelService                               novi/models/service.py
-        │   .resolve(workload) -> (provider, model)
+        │   .resolve_primary() -> (provider, model)
         │   .bind_model(name, tools)      -> ModelRuntime.bind_tools
         │   .client_for_model(name)       -> ModelRuntime.create_chat_model
         ▼

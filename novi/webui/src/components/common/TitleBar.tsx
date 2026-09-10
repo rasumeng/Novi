@@ -35,7 +35,7 @@ export function TitleBar({
   const conn = CONNECTION_LABEL[connection]
 
   return (
-    <div className="flex h-8 w-full shrink-0 items-center bg-base-950 border-b border-base-800/40 px-2 gap-1">
+    <div className="relative z-[60] flex h-8 w-full shrink-0 items-center bg-base-950 border-b border-base-800/40 px-2 gap-1">
       <button
         onClick={onToggleSidebar}
         aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}

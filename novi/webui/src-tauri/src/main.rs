@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::window::Color;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 use backend::launcher::{BackendConfig, BackendLauncher};
@@ -37,18 +38,10 @@ fn repo_root() -> PathBuf {
 fn main() {
     let dev = cfg!(debug_assertions);
 
-    let root = repo_root();
     let port = std::env::var("NOVI_BACKEND_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8765);
-
-    let backend = BackendLauncher::new(BackendConfig {
-        repo_root: root,
-        host: "127.0.0.1".into(),
-        port,
-        start_timeout: Duration::from_secs(60),
-    });
 
     let global_shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
         .with_shortcut(SHOW_HIDE_SHORTCUT)
@@ -75,10 +68,19 @@ fn main() {
         .plugin(global_shortcut_plugin)
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
-        .manage(AppState {
-            launcher: Arc::new(backend),
-        })
         .setup(move |app_handle| {
+            let resource_dir = app_handle.path().resource_dir().ok();
+            let backend_name = if cfg!(windows) { "novi-backend.exe" } else { "novi-backend" };
+            let bundled_backend = resource_dir.map(|path| path.join("resources").join(backend_name));
+            let launcher = Arc::new(BackendLauncher::new(BackendConfig {
+                working_dir: repo_root(),
+                host: "127.0.0.1".into(),
+                port,
+                start_timeout: Duration::from_secs(60),
+                bundled_backend,
+                development_mode: dev,
+            }));
+            app_handle.manage(AppState { launcher });
             let state = app_handle.state::<AppState>();
 
             // Show the window immediately with a startup screen instead of leaving
@@ -90,6 +92,8 @@ fn main() {
                 .title("Novi — AI Agent")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(960.0, 640.0)
+                // Prevent WebView2's white default from showing between documents.
+                .background_color(Color(19, 20, 24, 255))
                 .decorations(false)
                 // Required to let the frontend use plain HTML5 drag-and-drop
                 // (real File objects) instead of Tauri's own drag-drop event,

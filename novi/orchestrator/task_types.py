@@ -111,7 +111,7 @@ class EvidenceAnalysis:
     @property
     def needs_memory(self) -> bool:
         signal_types = {s.type for s in self.signals}
-        return bool(signal_types & {"memory", "temporal"})
+        return "memory" in signal_types
 
     @property
     def needs_project(self) -> bool:
@@ -170,6 +170,9 @@ class TaskAnalysis:
     grounding: GroundingDecision = field(default_factory=GroundingDecision)
     retrieval_plan: 'RetrievalPlan' = field(default_factory=_default_retrieval_plan)
     # ── Semantic router outputs (dispatcher metadata) ───────────────────────
+    # NOTE: ``router_workload`` carries the execution strategy
+    # (chat | code | research) for orchestrator compatibility. It does not
+    # participate in model selection.
     relation: 'Relation' = field(default_factory=lambda: Relation.NEW)
     router_state: Optional[dict] = None
     router_workload: str = ""

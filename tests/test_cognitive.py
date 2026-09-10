@@ -116,57 +116,60 @@ class TestMemoryContextAssembly:
 
 
 class TestModelSelectorStrictContract:
-    """Phase 2: workload → configured model verbatim; never substitute/rank/fall back."""
+    """Single primary model: resolve returns llm.primary_model verbatim; never substitute/rank/fall back."""
 
     @pytest.fixture
     def selector(self):
-        import types
+        from novi.models import ModelRegistry, ModelService
+        from novi.providers import ModelInfo
         from novi.runtime.model_selector import ModelSelector
 
-        workloads = {
-            "general": "qwen3:8b",
-            "research": "phi4-mini",
-            "code": "qwen2.5-coder:14b",
-        }
-        svc = types.SimpleNamespace(
-            resolve=lambda w: ("test-provider", workloads.get(w, "")),
-        )
+        reg = ModelRegistry()
+        reg.update("test-provider", [
+            ModelInfo(name="qwen3:8b", provider="test-provider"),
+            ModelInfo(name="phi4-mini", provider="test-provider"),
+            ModelInfo(name="qwen2.5-coder:14b", provider="test-provider"),
+        ])
+        svc = ModelService({"llm": {"primary_model": "qwen3:8b"}}, reg)
         return ModelSelector(svc)
 
     def test_resolve_returns_configured_model_verbatim(self, selector):
-        assert selector.resolve("general") == "qwen3:8b"
-        assert selector.resolve("research") == "phi4-mini"
-        assert selector.resolve("code") == "qwen2.5-coder:14b"
+        assert selector.resolve() == "qwen3:8b"
 
     def test_no_rank_no_upgrade_no_fallback(self, selector):
-        """A lower-tier model in general must be returned exactly — never upgraded."""
-        assert selector.resolve("general") == "qwen3:8b"
+        """A lower-tier primary model must be returned exactly — never upgraded."""
+        assert selector.resolve() == "qwen3:8b"
 
     def test_unset_workload_raises(self):
-        import types
-        from novi.models import ModelUnavailableError
+        from novi.models import ModelRegistry, ModelService, ModelUnavailableError
         from novi.runtime.model_selector import ModelSelector
 
-        svc = types.SimpleNamespace(resolve=lambda w: ("test-provider", ""))
+        svc = ModelService({"llm": {"primary_model": ""}}, ModelRegistry())
         sel = ModelSelector(svc)
         with pytest.raises(ModelUnavailableError):
-            sel.resolve("research")
-
-    def test_unknown_workload_name_rejected(self, selector):
-        with pytest.raises(ValueError):
-            selector.resolve("chat")
+            sel.resolve()
 
     def test_missing_configured_model_raises(self):
-        import types
-        from novi.models import ModelUnavailableError
+        from novi.models import ModelRegistry, ModelService, ModelUnavailableError
+        from novi.providers import ModelInfo
         from novi.runtime.model_selector import ModelSelector
 
-        def resolve(w):
-            raise ModelUnavailableError("general", "gemma4:12b", ["qwen3:8b"])
+        reg = ModelRegistry()
+        reg.update("test-provider", [ModelInfo(name="qwen3:8b", provider="test-provider")])
+        svc = ModelService({"llm": {"primary_model": "not-installed-model"}}, reg)
+        sel = ModelSelector(svc)
+        with pytest.raises(ModelUnavailableError) as exc_info:
+            sel.resolve()
+        # user-friendly detail, no workload token in message
+        assert "workload" not in str(exc_info.value).lower()
 
-        sel = ModelSelector(types.SimpleNamespace(resolve=resolve))
-        with pytest.raises(ModelUnavailableError):
-            sel.resolve("general")
+    def test_validate_vision_rejects_with_friendly_detail(self, selector):
+        from novi.models import ModelUnavailableError
+        # qwen3:8b seed has no vision
+        with pytest.raises(ModelUnavailableError) as exc_info:
+            selector.validate(supports_vision=True)
+        assert "vision" in str(exc_info.value).lower() or "image" in str(exc_info.value).lower()
+        assert "workload" not in str(exc_info.value).lower()
 
 
 # ── Priority 3: LessonStore reflection ─────────────────────────────────────

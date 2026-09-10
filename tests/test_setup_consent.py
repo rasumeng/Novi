@@ -204,11 +204,10 @@ def test_successful_install_refreshes_recommendations(monkeypatch):
     monkeypatch.setattr(ModelInstaller, "pull", pulling)
     client, holder = _make_app(
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
-    # selection is authoritative: set a general model, confirm it's untouched.
+    # selection is authoritative: set the primary model, confirm it's untouched.
     client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "llama3.1:8b", "research": "",
-                      "code": ""}}).json()
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
+        "model": "llama3.1:8b"}).json()
+    assert _config().get("llm.primary_model") == "llama3.1:8b"
 
     # Explicit consent installs the recommended vision model.
     client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
@@ -222,10 +221,10 @@ def test_successful_install_refreshes_recommendations(monkeypatch):
     # The model-set lifecycle refresh ran: the newly installed vision-capable
     # model now appears as installed and its derived vision flag is present.
     assert "qwen2.5vl:7b" in payload["installedNames"]
-    gen = payload["recommended"]["workloads"]["general"]
-    assert "visionCapable" in gen
+    rec = payload["recommended"]["primary"]
+    assert "visionCapable" in rec
     # …but the user's selection was never rewritten.
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
+    assert _config().get("llm.primary_model") == "llama3.1:8b"
     assert _config().get("models.mode", "absent") == "absent"
 
 
@@ -247,10 +246,10 @@ def test_failed_install_preserves_configuration(monkeypatch):
 
     after = _config().snapshot()
     assert after == before
-    assert _config().get("llm.workloads.general.model") == ""
+    assert _config().get("llm.primary_model") == ""
     # The failed model never became a recommendation source.
     payload = client.get("/api/models/discovery").json()
-    assert payload["recommended"]["workloads"]["general"]["model"] != "qwen2.5vl:7b"
+    assert payload["recommended"]["primary"]["model"] != "qwen2.5vl:7b"
 
 
 def test_cancelled_install_preserves_configuration(monkeypatch):
@@ -262,7 +261,7 @@ def test_cancelled_install_preserves_configuration(monkeypatch):
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
 
     before = {
-        "workloads": _config().get("llm.workloads"),
+        "primary": _config().get("llm.primary_model"),
         "assign": _config().get("models.custom.assign", {}),
     }
     # User declines the recommended install ("not now").
@@ -272,10 +271,10 @@ def test_cancelled_install_preserves_configuration(monkeypatch):
 
     assert calls == []  # cancelling never installs
     # The only persisted change is the dismissal itself; model configuration
-    # (workloads / custom assignments) is untouched.
-    assert _config().get("llm.workloads") == before["workloads"]
+    # (primary / custom assignments) is untouched.
+    assert _config().get("llm.primary_model") == before["primary"]
     assert _config().get("models.custom.assign", {}) == before["assign"]
-    assert _config().get("llm.workloads.general.model") != "qwen2.5vl:7b"
+    assert _config().get("llm.primary_model") != "qwen2.5vl:7b"
 
     # The choice is persisted so the setup card stops asking.
     payload = client.get("/api/models/discovery").json()
@@ -304,17 +303,14 @@ def test_install_never_touches_user_selection(monkeypatch):
     client, holder = _make_app(
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
 
-    # User explicitly selected models, including one not yet installed.
+    # User explicitly selected the primary model.
     client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "llama3.1:8b", "research": "not-installed:model",
-                      "code": "qwen3:8b"}}).json()
+        "model": "llama3.1:8b"}).json()
 
     # An install of a recommended model completes while the selection is set.
     client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
     time.sleep(0.5)
 
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
-    assert _config().get("llm.workloads.research.model") == "not-installed:model"
-    assert _config().get("llm.workloads.code.model") == "qwen3:8b"
+    assert _config().get("llm.primary_model") == "llama3.1:8b"
     # No "recommended setup" persistence wrote into the selection.
     assert _config().get("models.recommendations.dismissed", []) == []

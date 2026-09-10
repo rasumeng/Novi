@@ -75,7 +75,9 @@ class EvidenceDetector:
             reasons=[],
         )
 
-    def detect_from_workload(self, workload: str, has_images: bool = False) -> EvidenceAnalysis:
+    def detect_from_workload(self, workload: str, has_images: bool = False,
+                             needs_memory: bool = False,
+                             needs_current_context: bool = False) -> EvidenceAnalysis:
         """Derive evidence analysis from router workload (deterministic mapping)."""
         if has_images:
             return EvidenceAnalysis(
@@ -84,7 +86,9 @@ class EvidenceDetector:
                 signals=[EvidenceSignal(type="vision", strength="high", detail="image")],
                 reasons=["vision workload with image"],
             )
-        wl = (workload or "general").lower()
+        wl = (workload or "chat").lower()
+        if wl == "general":
+            wl = "chat"
         if wl == "research":
             return EvidenceAnalysis(
                 requirements=EvidenceRequirements(parametric=True, external=True),
@@ -93,11 +97,27 @@ class EvidenceDetector:
                 reasons=["research workload → external required"],
             )
         if wl == "code":
+            signals = [EvidenceSignal(type="project", strength="high", detail="code workload")]
+            requirements = EvidenceRequirements(parametric=True, project=True)
+            reasons = ["code workload → project context"]
+            if needs_current_context:
+                signals.append(EvidenceSignal(type="temporal", strength="high",
+                                               detail="current documentation requested"))
+                requirements.external = True
+                reasons.append("current documentation → external evidence required")
             return EvidenceAnalysis(
-                requirements=EvidenceRequirements(parametric=True, project=True),
+                requirements=requirements,
                 confidence=0.8,
-                signals=[EvidenceSignal(type="project", strength="high", detail="code workload")],
-                reasons=["code workload → project context"],
+                signals=signals,
+                reasons=reasons,
+            )
+        if needs_memory:
+            return EvidenceAnalysis(
+                requirements=EvidenceRequirements(parametric=True, memory=True),
+                confidence=0.8,
+                signals=[EvidenceSignal(type="memory", strength="high",
+                                         detail="explicit prior-context request")],
+                reasons=["explicit request for prior conversation context"],
             )
         return EvidenceAnalysis(
             requirements=EvidenceRequirements(parametric=True),

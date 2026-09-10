@@ -48,8 +48,9 @@ _INTENT_TO_STRATEGY = {
     IntentType.AUTONOMOUS: ExecutionStrategy.AUTONOMOUS,
 }
 
-# Router workload → IntentType mapping (canonical beta)
+# Router strategy → IntentType mapping (canonical beta)
 _WORKLOAD_TO_INTENT = {
+    "chat": IntentType.CONVERSATION,
     "general": IntentType.CONVERSATION,
     "code": IntentType.CODING,
     "research": IntentType.RESEARCH,
@@ -194,8 +195,9 @@ class Orchestrator:
     ) -> TaskAnalysis:
         """Analyze verbatim user_input via semantic router (dispatcher).
 
-        Invariant: user_input is passed verbatim to workload after routing;
-        router output is metadata (workload/relation/state) only.
+        Invariant: user_input is passed verbatim after routing;
+        router output is metadata (strategy/relation/state) only. Strategy
+        selects execution behavior; the primary model is used for all strategies.
 
         ``force_intent`` bypasses router — explicit user-mode override (Deep Research).
         """
@@ -229,8 +231,20 @@ class Orchestrator:
             if conversation_id:
                 self.conversation_state_store.set(conversation_id, router_state)
 
-        # Evidence derived from router workload (no keyword detection)
-        evidence = self.evidence_detector.detect_from_workload(workload, has_images=has_images)
+        # The router remains the source for workload-derived evidence.  An
+        # explicit request for prior conversation is additionally a direct
+        # retrieval instruction, even in a fresh desktop session where there
+        # is no router state to continue from.
+        _memory_request = user_input.strip().lower().startswith((
+            "do you remember", "remember ", "what did we discuss",
+            "what did we agree", "what was i working",
+        ))
+        _current_context = any(cue in user_input.lower() for cue in (
+            "latest", "current", "today", "recent", "next ", "20",
+        ))
+        evidence = self.evidence_detector.detect_from_workload(
+            workload, has_images=has_images, needs_memory=_memory_request,
+            needs_current_context=_current_context)
         complexity = self.complexity.estimate(user_input, intent)
         grounding = self._resolve_grounding(intent, evidence, user_input)
 

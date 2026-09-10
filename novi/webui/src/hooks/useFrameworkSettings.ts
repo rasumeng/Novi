@@ -6,7 +6,7 @@ import {
   setSetting,
   installModel,
   deleteModel,
-  saveWorkloadSelection as saveWorkloadSelectionApi,
+  savePrimaryModel as savePrimaryModelApi,
   applyRecommendedModels as applyRecommendedModelsApi,
   dismissRecommendedModel,
   type SchemaResponse,
@@ -53,39 +53,6 @@ export function useFrameworkSettings() {
     }
   }, [showError])
 
-  useEffect(() => { void load() }, [load])
-
-  // Live WebSocket feed for config updates + install progress.
-  useEffect(() => {
-    const proto = import.meta.env.DEV ? 'ws' : 'wss'
-    const base = import.meta.env.DEV ? 'localhost:8765' : window.location.host
-    const ws = new WebSocket(`${proto}://${base}/ws/chat`)
-    wsRef.current = ws
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data)
-        if (msg.type === 'config_updated' && msg.event?.path) {
-          setValues((prev) => ({ ...prev, [msg.event.path]: msg.event.value }))
-        } else if (msg.type === 'models_resolved') {
-          // Advisory recommendations refreshed on the backend — re-read config
-          // + discovery. Selection is never rewritten by this event.
-          void load()
-        } else if (msg.type === 'install_progress' && msg.name) {
-          setInstalls((prev) => ({
-            ...prev,
-            [msg.name]: { phase: msg.status === 'progress' ? msg.phase ?? 'installing' : msg.status, pct: msg.pct ?? null },
-          }))
-          if (msg.status === 'done' || msg.status === 'error') {
-            void load()
-          }
-        }
-      } catch {
-        /* ignore malformed frames */
-      }
-    }
-    return () => ws.close()
-  }, [load])
-
   const set = useCallback(async (id: string, value: unknown) => {
     setValues((prev) => ({ ...prev, [id]: value }))
     const ok = await setSetting(id, value)
@@ -106,25 +73,56 @@ export function useFrameworkSettings() {
     setDiscoveryError(disc.ollamaError ?? (disc.status === 'error' || disc.status === 'degraded' ? `Ollama not reachable at ${disc.ollamaUrl ?? 'http://localhost:11434'}` : null))
   }, [])
 
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // Live WebSocket feed for config updates + install progress.
+  useEffect(() => {
+    const proto = import.meta.env.DEV ? 'ws' : 'wss'
+    const base = import.meta.env.DEV ? 'localhost:8765' : window.location.host
+    const ws = new WebSocket(`${proto}://${base}/ws/chat`)
+    wsRef.current = ws
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'config_updated' && msg.event?.path) {
+          setValues((prev) => ({ ...prev, [msg.event.path]: msg.event.value }))
+        } else if (msg.type === 'models_resolved') {
+          void load()
+        } else if (msg.type === 'install_progress' && msg.name) {
+          setInstalls((prev) => ({
+            ...prev,
+            [msg.name]: { phase: msg.status === 'progress' ? msg.phase ?? 'installing' : msg.status, pct: msg.pct ?? null },
+          }))
+          if (msg.status === 'done' || msg.status === 'error') {
+            void load()
+          }
+        }
+      } catch {
+        /* ignore malformed frames */
+      }
+    }
+    return () => ws.close()
+  }, [load])
+
   // Background refresh after a selection save. fetchDiscovery returns an
-  // all-empty fallback on network error — that would erase a selection the
-  // user just saved, so keep the preserved workloads when the payload looks
-  // like the fallback (all empty) while the saved selection is non-empty.
-  const refreshDiscoveryPreserving = useCallback(async (preserve?: Record<string, string>) => {
+  // all-empty fallback on network error — preserve just-saved primary.
+  const refreshDiscoveryPreserving = useCallback(async (preserve?: string) => {
     const disc = await fetchDiscovery()
     setDiscoveryError(disc.ollamaError ?? (disc.status === 'error' || disc.status === 'degraded' ? `Ollama not reachable at ${disc.ollamaUrl ?? 'http://localhost:11434'}` : null))
+    const preservedModel = preserve ?? ''
     setDiscovery((d) => {
       if (!d) return disc
-      const payloadEmpty = Object.values(disc.workloads ?? {}).every(v => !v)
-      const hasSaved = !!preserve && Object.values(preserve).some(v => v)
-      if (hasSaved && payloadEmpty) {
-        return { ...disc, workloads: { ...(disc.workloads ?? {}), ...preserve } }
+      const payloadEmpty = !(disc.primary ?? disc.model ?? '')
+      if (preservedModel && payloadEmpty) {
+        return { ...disc, primary: preservedModel, model: preservedModel }
       }
       return disc
     })
   }, [])
 
-  // Remove a model from disk. Deletion never changes workload selections —
+  // Remove a model from disk. Deletion never changes the primary selection —
   // the model simply disappears from the installed set; if it was selected it
   // becomes a configured-but-missing model. After a successful delete the
   // library is refreshed so installed/missing status is accurate.
@@ -160,42 +158,39 @@ export function useFrameworkSettings() {
     return true
   }, [showError])
 
-  // Optimistically reflect a persisted selection in local discovery state so
-  // the Models page updates instantly without a heavy reload round-trip.
-  const applySelectionLocal = useCallback((selection: Record<string, string> | undefined) => {
-    if (!selection) return
+  // Optimistically reflect a persisted selection in local discovery state.
+  const applySelectionLocal = useCallback((model: string | undefined) => {
+    if (!model) return
     setDiscovery((d) => {
       if (!d) return d
-      return { ...d, workloads: { ...d.workloads, ...selection } }
+      return { ...d, primary: model, model }
     })
   }, [])
 
-  // Persist the user's workload -> model selection verbatim. The backend never
-  // auto-populates selection; recommendations are advisory only.
-  // Non-blocking: the save response is applied optimistically to local
-  // discovery state and a background discovery refresh keeps availability
-  // fresh — the UI is never held on the save round-trip or a heavy reload.
-  const saveWorkloadSelection = useCallback(async (workloads: Record<string, string>) => {
-    const res = await saveWorkloadSelectionApi(workloads)
+  // Persist the user's primary model verbatim. Recommendations advisory only.
+  const savePrimaryModel = useCallback(async (model: string) => {
+    const res = await savePrimaryModelApi(model)
     if (res.ok) {
-      applySelectionLocal(workloads)
-      void refreshDiscoveryPreserving(workloads)
+      applySelectionLocal(model)
+      void refreshDiscoveryPreserving(model)
     } else {
-      showError(res.error ?? "Couldn't save model selection.")
+      showError((res as { error?: string }).error ?? "Couldn't save model selection.")
     }
     return res
   }, [refreshDiscoveryPreserving, showError, applySelectionLocal])
 
-  // Explicit "Use Recommended": apply advisory recommendations as the
-  // selection. An optional workloads list limits the apply; other workloads
-  // keep their current selection. Never installs anything.
-  const applyRecommended = useCallback(async (workloads?: string[]) => {
-    const res = await applyRecommendedModelsApi(workloads)
+  // Explicit "Use Recommended": apply advisory primary recommendation.
+  const applyRecommended = useCallback(async () => {
+    const res = await applyRecommendedModelsApi()
     if (res.ok) {
-      applySelectionLocal(res.workloads)
-      void refreshDiscoveryPreserving(res.workloads)
+      const model = (res as { model?: string }).model
+        ?? (res as { selection?: { model?: string } }).selection?.model ?? ''
+      if (model) {
+        applySelectionLocal(model)
+        void refreshDiscoveryPreserving(model)
+      }
     } else {
-      showError(res.error ?? "Couldn't apply recommended models.")
+      showError((res as { error?: string }).error ?? "Couldn't apply recommended model.")
     }
     return res
   }, [refreshDiscoveryPreserving, showError, applySelectionLocal])
@@ -230,7 +225,7 @@ export function useFrameworkSettings() {
     removeModel,
     refreshDiscovery,
     dismissRecommended,
-    saveWorkloadSelection,
+    savePrimaryModel,
     applyRecommended,
     reload: load,
   }

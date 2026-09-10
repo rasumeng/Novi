@@ -23,10 +23,13 @@ import pytest
 def stub_model_service(monkeypatch):
     """A ModelService stand-in so no network/provider discovery ever runs."""
     class _StubService:
-        def resolve(self, workload):
+        def resolve_primary(self):
             return "ollama", "stub-model"
 
-        def client(self, workload, temperature=0.0):
+        def validate(self, *a, **k):
+            return []
+
+        def client(self, temperature=0.0):
             raise AssertionError("stub: no chat model expected in these tests")
 
     from novi.services.context import NoviContext
@@ -116,7 +119,7 @@ def test_context_tracks_live_config_even_when_seeded(tmp_path, monkeypatch):
     from novi.services.context import NoviContext
 
     framework = get_configuration()
-    framework.set("llm.workloads.general.model", "model-a", by="test")
+    framework.set("llm.primary_model", "model-a", by="test")
 
     # Seeded exactly like webui_server.get_backend seeds it: snapshot first.
     ctx = NoviContext(cfg=framework.snapshot())
@@ -131,14 +134,14 @@ def test_context_tracks_live_config_even_when_seeded(tmp_path, monkeypatch):
 
     _ = ctx.config  # first access must subscribe even when _cfg is pre-seeded
 
-    framework.set("llm.workloads.general.model", "model-b", by="test")
+    framework.set("llm.primary_model", "model-b", by="test")
 
-    assert ctx.config["llm"]["workloads"]["general"]["model"] == "model-b"
-    assert updates and updates[-1]["llm"]["workloads"]["general"]["model"] == "model-b"
+    assert ctx.config["llm"]["primary_model"] == "model-b"
+    assert updates and updates[-1]["llm"]["primary_model"] == "model-b"
 
     # Subscription is idempotent: repeated property access never stacks handlers.
     accesses_before = len(updates)
     _ = ctx.config
     _ = ctx.config
-    framework.set("llm.workloads.general.model", "model-c", by="test")
+    framework.set("llm.primary_model", "model-c", by="test")
     assert len(updates) == accesses_before + 1

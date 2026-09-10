@@ -51,6 +51,8 @@ novi/webui/dist/
 # Tauri build output
 novi/webui/src-tauri/target/
 novi/webui/src-tauri/gen/
+novi/webui/src-tauri/resources/novi-backend
+novi/webui/src-tauri/resources/novi-backend.exe
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
 

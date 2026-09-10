@@ -1,53 +1,50 @@
-// Persistent assistant dashboard. Every section is derived from real runtime
-// state passed in (or, for notifications, read from the notification center) —
-// no fake/fabricated status. Serves as the landing view for an empty chat.
-
-import { useMemo, useEffect, useState } from 'react'
-import { Sparkles, MessageSquareText, MoveRight, Brain, Compass, Lightbulb, Search } from 'lucide-react'
-import { ConnectionState } from '@/services/novi'
+// LandingPage.tsx
+import { useMemo, useEffect, useState, type ReactNode } from 'react'
+import { MessageSquareText, MoveRight } from 'lucide-react'
 import { Conversation as ConversationType, BackgroundRunInfo, TimelineEntry, KnowledgeOverview as KnowledgeOverviewData } from '@/types'
 import { fetchKnowledgeOverview } from '@/services/novi'
-import { CONNECTION_LABEL } from './connectionStatus'
-import { EmptyState } from '@/components/common/EmptyState'
+import { fetchSystemHealth, type SystemHealth } from '@/components/settings/api'
+import { NoviMascot } from '@/components/brand/NoviMascot'
+import { getNoviGreeting } from '@/utils/noviGreeting'
 
 interface Props {
   onSuggestion?: (text: string) => void
-  connection: ConnectionState
   conversations?: ConversationType[]
   backgroundRuns?: BackgroundRunInfo[]
   generating?: boolean
-  /** Title of whichever conversation owns the current generation, or null. */
   generatingElsewhereTitle?: string | null
   onOpenConversation?: (id: string) => void
-  /** Assistant timeline feed for the recent-activity summary. */
   timeline?: TimelineEntry[]
+  /** The composer, rendered by the parent so there's only ever one instance. */
+  composer?: ReactNode
+  onOpenSettings?: () => void
 }
 
 interface SuggestionItem {
-  icon: React.ElementType
   label: string
   prompt: string
 }
 
 const SUGGESTIONS: SuggestionItem[] = [
-  { icon: Compass, label: 'Plan with Novi', prompt: 'Help me plan ' },
-  { icon: Lightbulb, label: 'Ask Novi to remember this', prompt: 'Remember that ' },
-  { icon: Search, label: 'Let Novi research it', prompt: 'Research ' },
+  { label: 'help me plan something', prompt: 'Help me plan ' },
+  { label: 'remember something for me', prompt: 'Remember that ' },
+  { label: 'look into something', prompt: 'Research ' },
 ]
 
 export function LandingPage({
   onSuggestion,
-  connection,
   conversations = [],
   backgroundRuns = [],
   generating = false,
   generatingElsewhereTitle,
   onOpenConversation,
+  composer,
+  onOpenSettings,
 }: Props) {
-  const status = CONNECTION_LABEL[connection]
   const [knowledge, setKnowledge] = useState<KnowledgeOverviewData | null>(null)
+  const [health, setHealth] = useState<SystemHealth | null>(null)
+  const greeting = useMemo(() => getNoviGreeting(), [])
 
-  // Real data only: the knowledge preview reflects actual learned items.
   useEffect(() => {
     let alive = true
     fetchKnowledgeOverview()
@@ -58,7 +55,10 @@ export function LandingPage({
     }
   }, [])
 
-  // Only real data: conversations that have content, newest first — capped at 3 for calm.
+  useEffect(() => {
+    fetchSystemHealth().then(setHealth)
+  }, [])
+
   const recents = useMemo(() =>
     conversations
       .filter((c) => !c.pinned && c.messages.length > 0)
@@ -80,120 +80,108 @@ export function LandingPage({
 
   const busy = generating || !!generatingElsewhereTitle || activeRuns.length > 0
   const busyText = generating
-    ? 'Novi is working here'
+    ? 'working here'
     : generatingElsewhereTitle
-      ? `Novi is working in "${generatingElsewhereTitle}"`
+      ? `working in "${generatingElsewhereTitle}"`
       : activeRuns.length > 0
         ? `${activeRuns.length} background job${activeRuns.length !== 1 ? 's' : ''} running`
         : null
 
+  const hasContext = recents.length > 0 || knowledgePreview.length > 0
+
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-8">
-      <div className="max-w-3xl mx-auto">
-        {/* Thesis framing — route • remember • act, input stays dominant via Conversation.tsx */}
-        <div className="mb-6">
-          <p className="text-[10px] font-semibold tracking-[0.14em] uppercase text-base-500">Route • Remember • Act</p>
-          <h1 className="text-[22px] font-semibold tracking-tight text-base-100 mt-1 leading-tight">Novi is ready to work with you</h1>
-          <div className="flex items-center gap-2 mt-2 text-[11px] text-base-500">
-            <span className="flex items-center gap-1.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-              {status.text}
-            </span>
-            <span className="text-base-700">·</span>
-            <span className="text-base-500">Local agent • memory on • tools connected</span>
-            {busy && busyText && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-accent ml-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                {busyText}
-              </span>
-            )}
+    <div className="flex flex-col items-center">
+      {/* Mascot + greeting — compact conversational row, no card/border */}
+      <div className="flex items-center gap-3 ">
+        <div className="shrink-0">
+          <NoviMascot expression="happy" size={80} />
+        </div>
+        <p className="text-[30px] font-semibold text-base-100 leading-snug">
+          {greeting}
+        </p>
+      </div>
+
+      {health && !health.ready && (
+        <div className="mt-4 flex w-full max-w-xl items-start justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <div>
+            <p className="text-sm font-medium text-base-100">Finish setting up Novi</p>
+            <p className="mt-1 text-xs leading-relaxed text-base-400">Choose a local model and make sure memory embeddings are ready before starting your first chat.</p>
           </div>
-          {busy && busyText && (
-            <span className="sm:hidden inline-flex items-center gap-1.5 text-[11px] text-accent mt-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-              {busyText}
-            </span>
-          )}
-          <div className="mt-4 h-px bg-accent/10" aria-hidden="true" />
+          {onOpenSettings && <button onClick={onOpenSettings} className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90">Set up</button>}
         </div>
+      )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-8">
-          {SUGGESTIONS.map((s) => {
-            const SI = s.icon
-            return (
-              <button
-                key={s.label}
-                onClick={() => onSuggestion?.(s.prompt)}
-                className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-base-800/30 border border-base-700/50 hover:border-accent/25 hover:bg-base-800/60 text-base-300 hover:text-base-100 text-xs font-medium transition-colors text-left focus-visible:ring-2 focus-visible:ring-accent/20"
-              >
-                <span className="w-8 h-8 rounded-xl bg-accent/10 text-accent border border-accent/15 flex items-center justify-center shrink-0">
-                  <SI size={15} />
-                </span>
-                {s.label}
-              </button>
-            )
-          })}
+      {/* busy indicator — live activity state, not static product copy */}
+      {busy && busyText && (
+        <div className="flex items-center gap-1.5 mb-6 text-[11px] text-accent">
+          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+          {busyText}
         </div>
+      )}
 
-        {/* Only three quiet sections — input remains dominant, these support */}
-        <div className="space-y-7">
-          {busy && busyText && (
-            <section aria-label="Novi is working">
-              <h2 className="text-[11px] font-semibold tracking-widest uppercase text-base-500 mb-2">Working</h2>
-              <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-base-900 border border-base-800 text-[13px] text-base-200">
-                <span className="w-2 h-2 rounded-full bg-accent animate-pulse shrink-0" />
-                {busyText}
-              </div>
-            </section>
-          )}
+      {/* Conversational suggestions */}
+      <div className="flex flex-wrap justify-center gap-2 mb-6">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s.label}
+            onClick={() => onSuggestion?.(s.prompt)}
+            className="px-3.5 py-2 rounded-full bg-base-800/40 border border-base-700/40 hover:border-accent/30 hover:bg-base-800/70 text-base-300 hover:text-base-100 text-[12px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-accent/20"
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
 
-          <section>
-            <h2 className="text-[11px] font-semibold tracking-widest uppercase text-base-500 mb-2">Continue where you left off</h2>
-            {recents.length === 0 ? (
-              <p className="text-xs text-base-500 py-2">No previous work yet — start a conversation and it will appear here.</p>
-            ) : (
-              <div className="space-y-1.5">
+      {/* Composer — primary interaction, directly below greeting/suggestions */}
+      {composer && <div className="w-full mb-8">{composer}</div>}
+
+      {/* Context, kept quiet, below the composer */}
+      {hasContext && (
+        <div className="w-full space-y-3">
+          {recents.length > 0 && (
+            <div>
+              <p className="text-[10px] font-medium tracking-wide uppercase text-base-600 mb-1.5 text-center">
+                Picking back up
+              </p>
+              <div className="space-y-1">
                 {recents.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => onOpenConversation?.(c.id)}
-                    className="group w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-base-900 border border-base-800 hover:border-base-700 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/20"
+                    className="group w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-base-900/60 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/20"
                   >
-                    <MessageSquareText size={14} className="text-base-500 shrink-0" />
-                    <span className="text-[13px] text-base-200 truncate flex-1 group-hover:text-base-100">
+                    <MessageSquareText size={12} className="text-base-600 shrink-0" />
+                    <span className="text-[12.5px] text-base-400 truncate flex-1 group-hover:text-base-200">
                       {c.title || 'Untitled conversation'}
                     </span>
-                    <MoveRight size={13} className="text-base-600 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <MoveRight size={11} className="text-base-700 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
                   </button>
                 ))}
               </div>
-            )}
-          </section>
+            </div>
+          )}
 
-          <section aria-label="What Novi noticed">
-            <h2 className="text-[11px] font-semibold tracking-widest uppercase text-base-500 mb-2">What Novi noticed</h2>
-            {knowledgePreview.length === 0 ? (
-              <p className="text-xs text-base-500 py-2">Novi will notice preferences and facts as you chat — they will appear here.</p>
-            ) : (
-              <div className="space-y-2.5">
-                {knowledgePreview.map((cat) => (
-                  <div key={cat.label} className="rounded-xl bg-base-900 border border-base-800 px-3 py-2.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-base-400 mb-1">{cat.label}</p>
-                    <ul className="space-y-1">
-                      {cat.items.map((item, i) => (
-                        <li key={i} className="flex items-start gap-1.5 text-[12px] text-base-300">
-                          <span className="text-accent/60 mt-0.5 shrink-0">—</span>
-                          <span className="truncate">{item.content}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
+          {knowledgePreview.length > 0 && (
+            <div>
+              <p className="text-[10px] font-medium tracking-wide uppercase text-base-600 mb-1.5 text-center">
+                Things I remember
+              </p>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {knowledgePreview.flatMap((cat) =>
+                  cat.items.map((item, i) => (
+                    <span
+                      key={`${cat.label}-${i}`}
+                      className="px-2.5 py-1 rounded-full bg-base-900/60 border border-base-800 text-[11px] text-base-400 truncate max-w-[220px]"
+                    >
+                      {item.content}
+                    </span>
+                  ))
+                )}
               </div>
-            )}
-          </section>
+            </div>
+          )}
         </div>
-      </div>
+      )}
     </div>
   )
 }

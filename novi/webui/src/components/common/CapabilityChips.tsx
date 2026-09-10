@@ -1,6 +1,6 @@
 import { Eye, Wrench, Brain, Mic } from 'lucide-react'
 
-export type WorkloadCaps = {
+export type ModelCaps = {
   vision?: boolean
   tools?: boolean
   reasoning?: boolean
@@ -9,7 +9,7 @@ export type WorkloadCaps = {
   coding?: boolean
 }
 
-const CHIP_DEFS: { key: keyof WorkloadCaps; label: string; icon: React.ElementType }[] = [
+const CHIP_DEFS: { key: keyof ModelCaps; label: string; icon: React.ElementType }[] = [
   { key: 'vision', label: 'Vision', icon: Eye },
   { key: 'tools', label: 'Tools', icon: Wrench },
   { key: 'reasoning', label: 'Thinking', icon: Brain },
@@ -21,7 +21,7 @@ const CHIP_DEFS: { key: keyof WorkloadCaps; label: string; icon: React.ElementTy
  * Hide unsupported (no muted missing chips). Reasoning canonical, Thinking UI label.
  * Single source of truth: derive from ModelCapabilities (vision/tools/reasoning/audio).
  */
-export function CapabilityChips({ caps, size = 'xs' }: { caps?: WorkloadCaps | null; size?: 'xs' | 'sm' }) {
+export function CapabilityChips({ caps, size = 'xs' }: { caps?: ModelCaps | null; size?: 'xs' | 'sm' }) {
   if (!caps) return null
   const active = CHIP_DEFS.filter((d) => {
     if (d.key === 'reasoning') return !!(caps.reasoning || caps.thinking)
@@ -45,8 +45,8 @@ export function CapabilityChips({ caps, size = 'xs' }: { caps?: WorkloadCaps | n
   )
 }
 
-/** Derive WorkloadCaps from DiscoveredModelEntry capabilities dict (handles reasoning alias). */
-export function capsFromEntry(entry?: { capabilities?: Record<string, boolean> } | null): WorkloadCaps | null {
+/** Derive ModelCaps from DiscoveredModelEntry capabilities dict (handles reasoning alias). */
+export function capsFromEntry(entry?: { capabilities?: Record<string, boolean> } | null): ModelCaps | null {
   if (!entry?.capabilities) return null
   const c = entry.capabilities
   return {
@@ -59,12 +59,4 @@ export function capsFromEntry(entry?: { capabilities?: Record<string, boolean> }
   }
 }
 
-/** Derive caps from discovery workload_capabilities map with fallback. */
-export function capsFromWorkloadMap(
-  workloadCaps: Record<string, WorkloadCaps> | undefined,
-  workloadKey: string,
-  fallbackEntry?: { capabilities?: Record<string, boolean> } | null,
-): WorkloadCaps | null {
-  if (workloadCaps?.[workloadKey]) return workloadCaps[workloadKey]
-  return capsFromEntry(fallbackEntry)
-}
+

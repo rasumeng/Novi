@@ -34,7 +34,9 @@ _INTENT_MAP = {
 
 
 def _map_workload_to_intent(workload: str) -> IntentType:
-    wl = (workload or "general").lower().strip()
+    wl = (workload or "chat").lower().strip()
+    if wl == "general":
+        wl = "conversation"
     return _INTENT_MAP.get(wl, IntentType.CONVERSATION)
 
 

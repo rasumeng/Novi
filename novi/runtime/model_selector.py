@@ -1,28 +1,21 @@
-"""ModelSelector — strict workload → model resolution.
+"""ModelSelector — primary-model resolution.
 
-A workload's configured model is the ONLY model ever used for that workload.
-``resolve()`` returns ``llm.workloads.<workload>.model`` verbatim; capability
-facts describe the selected model and requirement checks may reject, but
-nothing here ever substitutes, ranks, upgrades, or falls back.
-
-Replaces the legacy ModelRouter (capability-based search with VRAM / loaded-
-model preference, complexity-tier upgrades, capability-preference chains, and
-``default_model`` fallback). Those behaviors are gone.
+The user's selected primary model (``llm.primary_model``) is the ONLY model
+ever used. ``resolve()`` returns it verbatim; capability facts describe the
+selected model and requirement checks may reject, but nothing here ever
+substitutes, ranks, upgrades, or falls back.
 
 Contract:
-* ``resolve(workload)`` returns exactly the user's selected model or raises
+* ``resolve()`` returns exactly the user's primary model or raises
   ``ModelUnavailableError``. It never picks another candidate.
-* ``capabilities(workload)`` / ``model_capabilities(name)`` are descriptive
-  only — they never create a selection.
+* ``capabilities()`` / ``model_capabilities(name)`` are descriptive only.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
-from ..configuration.resolver import WORKLOADS
 from ..models import ModelUnavailableError
 from ..configuration.model_records import CapabilityState
 
@@ -31,12 +24,7 @@ log = logging.getLogger("novi.model_selector")
 
 @dataclass(frozen=True)
 class ModelCapabilities:
-    """Capability facts of the SELECTED model.
-
-    Descriptive only — never used to pick or substitute a different model.
-    Canonical backend capabilities: vision, tools, reasoning, audio, coding.
-    Reasoning is canonical; Thinking is UI label for reasoning.
-    """
+    """Capability facts of the SELECTED model. Descriptive only."""
 
     capabilities: frozenset = field(default_factory=frozenset)
     supports_tools: bool = False
@@ -70,19 +58,13 @@ def _normalize_capability(cap: str) -> str:
 
 
 def model_capability_state(model_name: str, capability: str) -> CapabilityState:
-    """Tri-state capability answer for ``model_name`` / ``capability``.
-
-    Authoritative-only, deterministic, never triggers network. Uses curated
-    seed facts plus measured cached ``/api/show`` tokens. Unknown models with
-    no seed and no cached runtime entry return ``UNKNOWN`` (never ``UNSUPPORTED``).
-    """
+    """Tri-state capability answer for ``model_name`` / ``capability``."""
     cap = _normalize_capability(capability)
     from ..configuration.model_seeds import SEED_MODEL_FACTS
     from ..configuration.discovery import cached_runtime_capabilities, _CACHE
 
     fact = SEED_MODEL_FACTS.get(model_name)
     cached_caps = set(cached_runtime_capabilities(model_name))
-    # Detect whether any non-expired cache entry exists for this model
     has_cached_entry = False
     for (url, cached_name) in list(_CACHE._entries):
         if cached_name == model_name and _CACHE.get(url, cached_name) is not None:
@@ -101,7 +83,6 @@ def model_capability_state(model_name: str, capability: str) -> CapabilityState:
         if cap in caps:
             return CapabilityState.SUPPORTED
         return CapabilityState.UNSUPPORTED
-    # Unknown seed
     if cap in cached_caps:
         return CapabilityState.SUPPORTED
     if has_cached_entry:
@@ -110,19 +91,7 @@ def model_capability_state(model_name: str, capability: str) -> CapabilityState:
 
 
 def model_capabilities(model_name: str) -> ModelCapabilities:
-    """Derive capability facts for a model name.
-
-    Authoritative-only: curated seed facts plus *measured* runtime-reported
-    capabilities from the metadata cache. Weak name inference is deliberately
-    excluded — the runtime never trusts a name substring for capability
-    validation. Detection only — capabilities never influence selection.
-
-    Canonical set is vision/tools/reasoning/audio(+coding). Reasoning is
-    canonical; thinking is UI alias. Audio is strictly model-derived, never
-    inferred from tools.
-
-    Unknown models stay unknown: no fabricated capability claims.
-    """
+    """Derive capability facts for a model name. Detection only."""
     from ..configuration.model_seeds import SEED_MODEL_FACTS
     from ..configuration.discovery import cached_runtime_capabilities
 
@@ -133,7 +102,6 @@ def model_capabilities(model_name: str) -> ModelCapabilities:
     if not caps and fact is None:
         return ModelCapabilities()
 
-    # Seed supports_* are canonical model-derived evidence (audio strictly model-derived)
     supports_audio = bool(fact and getattr(fact, "supports_audio", False)) or "audio" in caps
     return ModelCapabilities(
         capabilities=frozenset(caps),
@@ -146,43 +114,38 @@ def model_capabilities(model_name: str) -> ModelCapabilities:
 
 
 class ModelSelector:
-    """Strict workload → model resolver. Never substitutes, ranks, or falls back."""
+    """Primary-model resolver. Never substitutes, ranks, or falls back."""
 
     def __init__(self, model_service=None, ollama_url: str = "http://localhost:11434"):
         self.model_service = model_service
         self.ollama_url = ollama_url
 
-    def resolve(self, workload: str) -> str:
-        """Return the configured model for ``workload``.
-
-        Reads ``llm.workloads.<workload>.model`` through ModelService. Raises
-        ``ModelUnavailableError`` when the workload is unset or its configured
-        model is not installed. With no model service wired (headless/test
-        runtimes) it returns "" so the caller's existing error path applies.
-        """
-        self._check_workload(workload)
+    def resolve(self) -> str:
+        """Return the primary model (llm.primary_model) verbatim."""
         if self.model_service is None:
             return ""
-        _, model_name = self.model_service.resolve(workload)
+        # ``resolve_primary`` is the production contract.  Keep the older
+        # duck-typed ``resolve`` shape at this boundary for embedded callers
+        # and test doubles; it still supplies exactly one selected model and
+        # does not permit ranking or fallback.
+        if hasattr(self.model_service, "resolve_primary"):
+            _, model_name = self.model_service.resolve_primary()
+        else:
+            _, model_name = self.model_service.resolve("primary")
         if not model_name:
-            raise ModelUnavailableError(workload, None, [])
+            raise ModelUnavailableError(None, [])
         return model_name
 
     def capability_state(self, model_name: str, capability: str) -> CapabilityState:
-        """Tri-state state for a specific model/capability (deterministic, no network)."""
+        """Tri-state state for a specific model/capability."""
         return model_capability_state(model_name, _normalize_capability(capability))
 
     def verify(self, model_name: str, capability: str, timeout: float = 3.0) -> CapabilityState:
-        """Live verification: deterministic check, then bounded live ``/api/show`` fallback.
-
-        Safe to call from runtime validation. Caches successful live payloads.
-        Returns ``VERIFICATION_FAILED`` when live fetch fails for an unknown cap.
-        """
+        """Live verification with bounded /api/show fallback."""
         cap = _normalize_capability(capability)
         state = model_capability_state(model_name, cap)
         if state != CapabilityState.UNKNOWN:
             return state
-        # Unknown -> attempt live verification once
         try:
             from ..configuration.discovery import ModelDiscovery
             discovery = ModelDiscovery(self.ollama_url, timeout=timeout)
@@ -191,64 +154,37 @@ class ModelSelector:
         except Exception:
             return CapabilityState.VERIFICATION_FAILED
 
-    def capabilities(self, workload: str) -> ModelCapabilities:
-        """Capability facts of the selected model. Detection only; advisory."""
-        return model_capabilities(self.resolve(workload))
+    def capabilities(self) -> ModelCapabilities:
+        """Capability facts of the primary model. Detection only."""
+        return model_capabilities(self.resolve())
 
-    def validate(self, workload: str, *, supports_vision: bool = False, supports_audio: bool = False, supports_tools: bool = False, supports_reasoning: bool = False) -> None:
-        """Requirement check on the SELECTED model.
-
-        May reject with ``ModelUnavailableError``; never returns a substitute.
-        All checks are strictly model-derived (audio never inferred from tools).
-        """
-        model_name = self.resolve(workload)
+    def validate(self, *, supports_vision: bool = False,
+                 supports_audio: bool = False, supports_tools: bool = False,
+                 supports_reasoning: bool = False) -> None:
+        """Requirement check on the primary model. Rejects, never substitutes."""
+        model_name = self.resolve()
         caps = model_capabilities(model_name)
         if supports_vision and not caps.supports_vision:
             raise ModelUnavailableError(
-                workload, model_name, [],
-                detail=(f"Model '{model_name}' for workload '{workload}' "
-                        f"does not support image input. Select a vision-capable model for the {workload} workload."),
+                model_name, [],
+                detail=("The model you're currently using doesn't support image input. "
+                        "Choose a vision-capable model to analyze images."),
             )
         if supports_audio and not caps.supports_audio:
             raise ModelUnavailableError(
-                workload, model_name, [],
-                detail=(f"Model '{model_name}' for workload '{workload}' "
-                        f"does not support audio input. Select an audio-capable model for the {workload} workload."),
+                model_name, [],
+                detail=("The model you're currently using doesn't support audio input. "
+                        "Choose an audio-capable model to analyze audio."),
             )
         if supports_tools and not caps.supports_tools:
             raise ModelUnavailableError(
-                workload, model_name, [],
-                detail=(f"Model '{model_name}' for workload '{workload}' "
-                        f"does not support tool calling. Select a tool-capable model for the {workload} workload."),
+                model_name, [],
+                detail=("The model you're currently using doesn't support tool calling. "
+                        "Choose a tool-capable model to use agent tools."),
             )
         if supports_reasoning and not caps.supports_reasoning:
             raise ModelUnavailableError(
-                workload, model_name, [],
-                detail=(f"Model '{model_name}' for workload '{workload}' "
-                        f"does not support reasoning. Select a reasoning-capable model for the {workload} workload."),
+                model_name, [],
+                detail=("The model you're currently using doesn't support reasoning. "
+                        "Choose a reasoning-capable model for this task."),
             )
-
-    @staticmethod
-    def _check_workload(workload: str):
-        # Deep is an implementation alias for research — normalize before validation.
-        if workload == "deep":
-            workload = "research"
-        if workload not in WORKLOADS:
-            raise ValueError(
-                f"Unknown workload '{workload}'. Valid workloads: {', '.join(WORKLOADS)}"
-            )
-
-    def workload_capabilities(self, workload: str) -> ModelCapabilities:
-        """Capabilities of the currently assigned model for ``workload``.
-
-        Deep is an alias for research. Never substitutes models.
-        """
-        if workload == "deep":
-            workload = "research"
-        try:
-            model = self.resolve(workload)
-        except Exception:
-            return ModelCapabilities()
-        if not model:
-            return ModelCapabilities()
-        return model_capabilities(model)

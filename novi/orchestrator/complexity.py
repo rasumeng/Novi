@@ -16,7 +16,12 @@ from ..orchestrator.task_types import ComplexityScore, IntentType
 
 
 class ComplexityEstimator:
-    """Estimates task complexity without keyword matching."""
+    """Estimates task complexity without keyword matching.
+
+    max_steps is a safety rail, not completion boundary — it bounds total
+    ReAct iterations regardless of strategy; exhaustion never counts as
+    success.
+    """
 
     def estimate(self, user_input: str, intent: IntentType) -> ComplexityScore:
         length = len(user_input)

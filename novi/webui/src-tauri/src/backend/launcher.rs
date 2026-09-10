@@ -9,16 +9,19 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct BackendConfig {
-    pub repo_root: PathBuf,
+    pub working_dir: PathBuf,
     pub host: String,
     pub port: u16,
     pub start_timeout: Duration,
+    pub bundled_backend: Option<PathBuf>,
+    pub development_mode: bool,
 }
 
 #[derive(Clone)]
 enum BackendCommand {
     Python { python: PathBuf },
     Sidecar { executable: PathBuf },
+    MissingReleaseSidecar,
 }
 
 pub struct BackendLauncher {
@@ -34,7 +37,9 @@ fn resolve_python(repo_root: &Path) -> PathBuf {
     if let Ok(p) = std::env::var("NOVI_PYTHON") {
         return PathBuf::from(p);
     }
-    let venv_names: [&str; 2] = ["venv", ".venv"];
+    // Prefer the current, project-local environment.  ``venv`` is retained
+    // as a compatibility fallback for older developer checkouts.
+    let venv_names: [&str; 2] = [".venv", "venv"];
     if cfg!(windows) {
         for name in venv_names {
             let p = repo_root.join(name).join("Scripts").join("python.exe");
@@ -58,8 +63,12 @@ impl BackendLauncher {
     pub fn new(config: BackendConfig) -> Self {
         let command = if let Ok(exe) = std::env::var("NOVI_BACKEND_BIN") {
             BackendCommand::Sidecar { executable: PathBuf::from(exe) }
+        } else if let Some(executable) = config.bundled_backend.as_ref().filter(|path| path.exists()) {
+            BackendCommand::Sidecar { executable: executable.clone() }
+        } else if config.development_mode {
+            BackendCommand::Python { python: resolve_python(&config.working_dir) }
         } else {
-            BackendCommand::Python { python: resolve_python(&config.repo_root) }
+            BackendCommand::MissingReleaseSidecar
         };
         Self {
             config,
@@ -92,7 +101,7 @@ impl BackendLauncher {
                     "--port".into(),
                     self.config.port.to_string(),
                 ],
-                self.config.repo_root.clone(),
+                self.config.working_dir.clone(),
             ),
             BackendCommand::Sidecar { executable } => (
                 executable.clone(),
@@ -102,13 +111,20 @@ impl BackendLauncher {
                     "--port".into(),
                     self.config.port.to_string(),
                 ],
-                self.config.repo_root.clone(),
+                self.config.working_dir.clone(),
             ),
+            BackendCommand::MissingReleaseSidecar => unreachable!("missing sidecar is handled before launch"),
         }
     }
 
     pub fn start(&self) -> Result<(), String> {
         self.stopping.store(false, Ordering::SeqCst);
+        if matches!(self.command, BackendCommand::MissingReleaseSidecar) {
+            return Err(
+                "This Novi release is missing its bundled backend. Reinstall Novi or contact support."
+                    .to_string(),
+            );
+        }
         let (program, args, cwd) = self.command_parts();
 
         let mut cmd = Command::new(&program);

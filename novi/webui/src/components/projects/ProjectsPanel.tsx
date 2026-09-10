@@ -1,12 +1,13 @@
-import { useState, useEffect, useMemo } from 'react'
+// ProjectsPanel.tsx
+import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, FolderKanban, Trash2, Search, X, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, Search, X, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { ProjectForm } from './ProjectForm'
 import { ProjectDetail } from './ProjectDetail'
 import { useConfirm } from '@/hooks/useConfirm'
-import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
+import { NoviMascot } from '@/components/brand/NoviMascot'
 
 interface Props {
   projects: Project[]
@@ -54,28 +55,29 @@ export function ProjectsPanel({
   const { confirm, dialog } = useConfirm()
   const [showForm, setShowForm] = useState(false)
   const [search, setSearch] = useState('')
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(activeProjectId ?? null)
-
-  useEffect(() => {
-    if (activeProjectId && projects.some(p => p.id === activeProjectId)) {
-      setSelectedProjectId(activeProjectId)
-    } else if (!activeProjectId) {
-      if (selectedProjectId && !projects.some(p => p.id === selectedProjectId)) setSelectedProjectId(null)
-    }
-  }, [activeProjectId, projects])
+  // Controlled — single source of truth is activeProjectId from useNoviChat
+  const selectedProjectId = activeProjectId ?? null
 
   const q = search.trim().toLowerCase()
+  // Authoritative count: projectId OR legacy conversationIds
+  const countByProject = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of projects) {
+      const cnt = conversations.filter(c => (c as any).projectId === p.id || p.conversationIds.includes(c.id)).length
+      m.set(p.id, cnt)
+    }
+    return m
+  }, [projects, conversations])
   const filteredProjects = useMemo(() => {
     if (!q) return projects
     return projects.filter(p => {
       if (p.name.toLowerCase().includes(q)) return true
       if (p.description?.toLowerCase().includes(q)) return true
       if (p.sharedContext?.toLowerCase().includes(q)) return true
-      for (const cid of p.conversationIds) {
-        const c = conversations.find(x => x.id === cid)
-        if (c?.title.toLowerCase().includes(q)) return true
-        // also search first message content
-        const first = c?.messages[0]?.content.toLowerCase() ?? ''
+      for (const c of conversations) {
+        if ((c as any).projectId !== p.id && !p.conversationIds.includes(c.id)) continue
+        if (c.title.toLowerCase().includes(q)) return true
+        const first = c.messages[0]?.content.toLowerCase() ?? ''
         if (first.includes(q)) return true
       }
       return false
@@ -94,12 +96,10 @@ export function ProjectsPanel({
   const selectedProject = selectedProjectId ? projects.find(p => p.id === selectedProjectId) ?? null : null
 
   const handleBack = () => {
-    setSelectedProjectId(null)
     onSelectProject(null)
   }
 
   const handleSelectProject = (id: string) => {
-    setSelectedProjectId(id)
     onSelectProject(id)
   }
 
@@ -127,42 +127,42 @@ export function ProjectsPanel({
     <div className="flex-1 flex flex-col min-w-0 bg-base-950">
       {dialog}
 
-      <header className="h-11 shrink-0 flex items-center justify-between px-4 gap-2">
-        <h1 className="text-sm font-medium text-base-100">
-          Projects <span className="text-xs font-normal text-base-500 ml-1.5">{projects.length > 0 ? `${projects.length}` : ''}</span>
-        </h1>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
-        >
-          <Plus size={14} />
-          New
-        </button>
-      </header>
-
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-2xl mx-auto">
+          <header className="flex items-center justify-between gap-2 mt-10 mb-5">
+            <h1 className="text-xl font-medium text-base-100">
+              Projects{projects.length > 0 && <span className="text-xs font-normal text-base-500 ml-1.5">{projects.length}</span>}
+            </h1>
+            <button
+              onClick={() => setShowForm(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+            >
+              <Plus size={14} />
+              New
+            </button>
+          </header>
+
           {loading && <LoadingSkeleton rows={5} compact />}
           {!loading && error && (
             <div className="rounded-xl border border-err/30 bg-err/5 px-4 py-4 text-center">
               <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-err">
-                <AlertTriangle size={14} /> Could not load projects
+                <AlertTriangle size={14} /> Couldn't load your projects
               </p>
               <p className="text-xs text-base-400 mt-1">{error}</p>
               {onRetry && (
                 <button onClick={onRetry} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-base-800 border border-base-700 text-xs text-base-300 hover:bg-base-700 transition-colors">
-                  <RefreshCw size={12} /> Retry
+                  <RefreshCw size={12} /> Try again
                 </button>
               )}
             </div>
           )}
-          {!loading && !error && projects.length > 0 && (
+          {!loading && !error && projects.length > 2 && (
             <div className="relative mb-6">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-500" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search projects or conversations…"
+                placeholder="Search your projects…"
                 className="w-full bg-base-900 border border-base-800/50 rounded-xl pl-9 pr-9 py-2.5 text-sm text-base-100 placeholder:text-base-500 focus:outline-none focus:border-accent/30 focus:bg-base-850 transition-colors"
               />
               {search && (
@@ -178,48 +178,49 @@ export function ProjectsPanel({
           )}
           {!loading && !error && (
             projects.length === 0 ? (
-              <EmptyState
-                icon={FolderKanban}
-                title="No projects yet"
-                description="Create a project to group related conversations."
-                action={
-                  <button
-                    onClick={() => setShowForm(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
-                  >
-                    <Plus size={14} />
-                    New project
-                  </button>
-                }
-              />
+              <div className="flex flex-col items-center text-center py-12">
+                <NoviMascot size={64} expression="happy" />
+                <p className="text-sm font-medium text-base-100 mt-4">Start one and I'll keep everything related together.</p>
+                <p className="text-xs text-base-500 mt-1 max-w-xs">
+                  Chats, context, files — all in one place.
+                </p>
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="mt-4 flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-accent hover:bg-accent/90 text-white text-xs font-medium transition-colors"
+                >
+                  <Plus size={14} />
+                  Start project
+                </button>
+              </div>
             ) : filteredProjects.length === 0 ? (
               <div className="py-10 text-center">
-                <p className="text-sm text-base-300">No matches for “{search}”</p>
+                <p className="text-sm text-base-300">Nothing matching "{search}"</p>
                 <button onClick={() => setSearch('')} className="mt-2 text-xs text-accent hover:text-accent-soft transition-colors">Clear search</button>
               </div>
             ) : (
               <div className="space-y-1">
               {filteredProjects.map(p => {
-                const matchConvos = q ? p.conversationIds.map(cid => conversations.find(c => c.id === cid)).filter(c => c && c.title.toLowerCase().includes(q)) as typeof conversations : []
+                const projectConvosForSearch = conversations.filter(c => (c as any).projectId === p.id || p.conversationIds.includes(c.id))
+                const matchConvos = q ? projectConvosForSearch.filter(c => c.title.toLowerCase().includes(q)) : []
                 return (
                   <div
                     key={p.id}
                     onClick={() => handleSelectProject(p.id)}
                     className="group flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-base-900/70 border border-transparent hover:border-base-800/30 transition-colors"
                   >
-                    <div className="w-9 h-9 shrink-0 rounded-lg bg-base-900 group-hover:bg-base-850 flex items-center justify-center text-accent border border-base-800/30">
-                      <FolderKanban size={15} />
-                    </div>
+                    <span className="w-7 h-7 shrink-0 rounded-full bg-base-800 flex items-center justify-center text-[11px] font-medium text-base-400">
+                      {p.name.charAt(0).toUpperCase()}
+                    </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-base-100 truncate">{p.name}</p>
                       <p className="text-xs text-base-500 truncate">
-                        {p.description || `${p.conversationIds.length} conversation${p.conversationIds.length !== 1 ? 's' : ''}`}
+                        {p.description || `${countByProject.get(p.id) ?? 0} conversation${(countByProject.get(p.id) ?? 0) !== 1 ? 's' : ''}`}
                       </p>
                       {matchConvos.length > 0 && (
                         <p className="text-[11px] text-accent/80 truncate mt-0.5">{matchConvos.length} matching conversation{matchConvos.length !== 1 ? 's' : ''}: {matchConvos.slice(0,2).map(c=>c.title).join(', ')}</p>
                       )}
                     </div>
-                    <span className="hidden sm:inline text-[11px] text-base-600 shrink-0">{p.conversationIds.length} chats</span>
+                    <span className="hidden sm:inline text-[11px] text-base-600 shrink-0">{countByProject.get(p.id) ?? 0} chats</span>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDeleteProject(p) }}
                       className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-base-500 hover:text-err hover:bg-base-800 transition-all focus-visible:ring-2 focus-visible:ring-accent/20"

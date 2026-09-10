@@ -160,12 +160,12 @@ def test_apply_hooks_fire(tmp_path):
 
 
 def test_migrate_runs_with_new_registrations():
-    # Legacy models mirror still migrates to llm.workloads even with the new
-    # 'models' namespace registered (migration is data-level, not schema).
+    # Legacy models mirror is dropped; single primary model defaults to "".
     from novi.configuration.migration import migrate
     out = migrate({"models": {"chat": "llama3", "max_tokens": 4096}})
     assert "models" not in out
-    assert out["llm"]["workloads"]["general"]["model"] == "llama3"
+    assert out["llm"]["primary_model"] == ""
+    assert "workloads" not in out["llm"]
 
 
 # ── Phase 6 Task 7: retired model-configuration paths are rejected ──────
@@ -209,9 +209,9 @@ def test_retired_llm_root_write_is_rejected(tmp_path):
     assert not cfg.registry.has("llm")
     with pytest.raises(UnknownSettingError):
         cfg.set("llm", {"roles": {"chat": "qwen3:8b"}, "max_tokens": 4096}, by="webui")
-    # llm.workloads.* remains fully supported
-    cfg.set("llm.workloads.general.model", "qwen3:8b", by="webui")
-    assert cfg.get("llm.workloads.general.model") == "qwen3:8b"
+    # llm.primary_model remains fully supported
+    cfg.set("llm.primary_model", "qwen3:8b", by="webui")
+    assert cfg.get("llm.primary_model") == "qwen3:8b"
 
 
 def test_retired_models_leaves_rejected_via_framework_surface(tmp_path):

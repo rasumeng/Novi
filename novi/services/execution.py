@@ -585,7 +585,15 @@ class ExecutionCoordinator:
                     has_images=False,
                 )
                 if decision.relation.value != "continue":
-                    return None
+                    # A user can explicitly ask to resume even when the
+                    # in-memory router state was lost (such as after a
+                    # desktop restart).  Do not infer continuation from
+                    # vague wording; only accept clear resume verbs here.
+                    explicit_resume = user_input.strip().lower().startswith(
+                        ("continue", "resume", "pick up", "keep going", "carry on")
+                    )
+                    if not explicit_resume:
+                        return None
             else:
                 # Fallback: no router — do not guess via keywords
                 return None

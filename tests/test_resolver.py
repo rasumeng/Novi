@@ -1,6 +1,6 @@
-"""Model recommendation + selection tests (Phase 1).
+"""Model recommendation + selection tests (single primary model).
 
-Verifies deterministic workload recommendations, trusted>supported preference,
+Verifies deterministic primary recommendation, trusted>supported preference,
 never selecting incompatible, experimental last-resort, missing-trusted
 fallback, hardware-confidence behaviour, derived vision capability, pure
 advisory ``recommend()`` (never writes), and the verbatim persistent
@@ -10,7 +10,7 @@ substitution, no derived evidence leaked into config).
 
 import pytest
 
-from novi.configuration.catalog import ModelFact
+from novi.configuration.model_seeds import ModelFact
 from novi.configuration.hardware import (
     DetectionConfidence,
     GpuConfidence,
@@ -19,8 +19,10 @@ from novi.configuration.hardware import (
 )
 from novi.configuration.qualification import Qualification
 from novi.configuration.resolver import (
-    WORKLOADS,
-    WORKLOAD_CAPABILITY,
+    PRIMARY_MODEL_KEY,
+    PrimaryRecommendation,
+    Recommendations,
+    get_primary_model,
     recommend,
     apply_selection,
 )
@@ -76,66 +78,64 @@ ALL_INSTALLED = list(CATALOG.keys())
 # ── Deterministic recommendation with known hardware ──────────────────────
 
 
-def test_deterministic_workload_recommendations():
+def test_deterministic_primary_recommendation():
     r1 = recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
     r2 = recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
     assert r1.to_dict() == r2.to_dict()  # deterministic
-    assert set(r1.workloads.keys()) == set(WORKLOADS)
+    assert isinstance(r1, Recommendations)
+    assert isinstance(r1.primary, PrimaryRecommendation)
+    assert r1.primary.model
 
 
-def test_each_workload_maps_to_its_capability():
-    assert WORKLOAD_CAPABILITY == {
-        "general": "chat", "research": "reasoning", "code": "coding",
-    }
+def test_primary_key_constant():
+    assert PRIMARY_MODEL_KEY == "llm.primary_model"
 
 
-def test_code_workload_recommends_coding_model():
+def test_broadest_trusted_model_wins_primary():
     r = recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
-    # code -> qwen3:8b: trusted, and it provides the coding capability.
-    assert r.workloads["code"].model == "qwen3:8b"
-    assert r.workloads["code"].capability == "coding"
-    # only the supported coder available -> it wins for code
+    # qwen3:8b covers chat+reasoning+coding+tools (broadest trusted).
+    assert r.primary.model == "qwen3:8b"
+    assert set(r.primary.capabilities) >= {"chat", "reasoning", "coding"}
+    # only the supported coder available -> it wins for primary
     r2 = recommend(HW_HIGH, ["qwen2.5-coder:1.5b"], CATALOG)
-    assert r2.workloads["code"].model == "qwen2.5-coder:1.5b"
+    assert r2.primary.model == "qwen2.5-coder:1.5b"
 
 
 # ── Trusted preference / capability mapping ───────────────────────────────
 
 
-def test_trusted_preferred_over_supported_for_general():
+def test_trusted_preferred_over_supported_for_primary():
     installed = ["qwen3:8b", "llama3.1:8b"]
     r = recommend(HW_HIGH, installed, CATALOG)
-    assert r.workloads["general"].model == "qwen3:8b"
-    assert r.workloads["research"].model == "qwen3:8b"  # reasoning, trusted
+    assert r.primary.model == "qwen3:8b"
+    assert r.primary.qualification == Qualification.TRUSTED
 
 
-def test_research_workload_prefers_reasoning_capability():
+def test_primary_covers_reasoning_capability():
     r = recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
-    assert r.workloads["research"].model == "qwen3:8b"
-    assert r.workloads["research"].capability == "reasoning"
+    assert r.primary.model == "qwen3:8b"
+    assert "reasoning" in r.primary.capabilities
 
 
-def test_vision_is_derived_capability_flag_not_a_workload():
-    r = recommend(HW_HIGH, ["qwen2.5vl:7b", "llama3.1:8b"], CATALOG)
-    # general picks the broadest trusted chat model; vision rides along.
-    assert set(r.workloads.keys()) == {"general", "research", "code"}
-    assert r.workloads["general"].model == "qwen2.5vl:7b"
-    assert r.workloads["general"].vision_capable is True
+def test_vision_is_derived_capability_flag_not_a_slot():
+    r = recommend(HW_HIGH, ["qwen2.5vl:7b"], CATALOG)
+    assert r.primary.model == "qwen2.5vl:7b"
+    assert r.primary.vision_capable is True
     # non-vision model reports the flag as False, never fabricates it
     r2 = recommend(HW_HIGH, ["llama3.1:8b"], CATALOG)
-    assert r2.workloads["general"].vision_capable is False
+    assert r2.primary.vision_capable is False
 
 
 def test_incompatible_never_selected():
     installed = ["bad:model", "qwen3:8b"]
     r = recommend(HW_HIGH, installed, CATALOG)
-    for w, rec in r.workloads.items():
-        assert rec.model != "bad:model", f"incompatible selected for {w}"
+    assert r.primary.model != "bad:model"
+    assert r.primary.model == "qwen3:8b"
 
 
-def test_incompatible_only_installed_yields_empty_recommendations():
+def test_incompatible_only_installed_yields_empty_primary():
     r = recommend(HW_HIGH, ["bad:model"], CATALOG)
-    assert all(r.workloads[w].model == "" for w in WORKLOADS)
+    assert r.primary.model == ""
 
 
 # ── Missing-trusted fallback ──────────────────────────────────────────────
@@ -144,27 +144,26 @@ def test_incompatible_only_installed_yields_empty_recommendations():
 def test_missing_trusted_falls_back_to_supported():
     installed = ["llama3.1:8b", "qwen2.5-coder:1.5b"]
     r = recommend(HW_HIGH, installed, CATALOG)
-    assert r.workloads["general"].qualification == Qualification.SUPPORTED
-    assert r.workloads["code"].model == "qwen2.5-coder:1.5b"
+    assert r.primary.qualification == Qualification.SUPPORTED
+    assert r.primary.model in set(installed)
 
 
 def test_experimental_last_resort_when_no_trusted_supported():
     r = recommend(HW_HIGH, ["exp:model"], CATALOG)
-    assert r.workloads["general"].qualification == Qualification.EXPERIMENTAL
-    assert r.workloads["general"].model == "exp:model"
-    assert any("experimental" in c.lower()
-               for c in r.workloads["general"].caveats)
+    assert r.primary.qualification == Qualification.EXPERIMENTAL
+    assert r.primary.model == "exp:model"
+    assert any("experimental" in c.lower() for c in r.primary.caveats)
 
 
 # ── Hardware confidence behaviour ─────────────────────────────────────────
 
 
 def test_vram_caveat_demotes_trusted_on_low_vram():
-    # On an 8 GB system, gemma4 (min_vram_gb=12) must not win reasoning over
-    # qwen3:8b (trusted, no VRAM mismatch) merely because it is trusted.
+    # On an 8 GB system, gemma4 (min_vram_gb=12) must not win over
+    # qwen3:8b (trusted, no VRAM mismatch).
     r = recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
-    assert r.workloads["research"].model == "qwen3:8b"
-    assert r.workloads["research"].qualification == Qualification.TRUSTED
+    assert r.primary.model == "qwen3:8b"
+    assert r.primary.qualification == Qualification.TRUSTED
 
 
 def test_higher_vram_lifts_gemma_vram_demotion():
@@ -172,23 +171,28 @@ def test_higher_vram_lifts_gemma_vram_demotion():
                DetectionConfidence.HIGH)
     installed = ["gemma4", "llama3.1:8b"]  # trusted vs supported
     r = recommend(hw_24, installed, CATALOG)
-    assert r.workloads["research"].model == "gemma4"
+    assert r.primary.model == "gemma4"
 
     # On 8 GB the same pair: gemma4 is demoted, so the supported model is used.
     r8 = recommend(HW_HIGH, installed, CATALOG)
-    assert r8.workloads["research"].model == "llama3.1:8b"
+    assert r8.primary.model == "llama3.1:8b"
 
 
 def test_unknown_hardware_is_provisional_and_conservative():
     r = recommend(HW_UNKNOWN, ALL_INSTALLED, CATALOG)
     assert r.provisional is True
-    assert r.workloads["general"].qualification == Qualification.TRUSTED
+    assert r.primary.qualification == Qualification.TRUSTED
     assert r.hardware_confidence == DetectionConfidence.UNKNOWN
 
 
 def test_low_hardware_is_provisional():
     assert recommend(HW_LOW, ALL_INSTALLED, CATALOG).provisional is True
     assert recommend(HW_HIGH, ALL_INSTALLED, CATALOG).provisional is False
+
+
+def test_get_primary_model_helpers():
+    assert get_primary_model(config={"llm": {"primary_model": "  qwen3:8b "}}) == "qwen3:8b"
+    assert get_primary_model(config={}) == ""
 
 
 # ── recommend() is pure advisory — never writes ───────────────────────────
@@ -202,7 +206,7 @@ def test_recommend_never_writes_config(tmp_path):
     recommend(HW_HIGH, ALL_INSTALLED, CATALOG)
     after = cfg.snapshot()
     assert before == after
-    assert cfg.get("llm.workloads.general.model") == ""
+    assert cfg.get("llm.primary_model") == ""
 
 
 def test_recommend_never_installs_or_downloads():
@@ -224,34 +228,42 @@ def _make_cfg(tmp_path, bus=None):
     return cfg
 
 
-def test_apply_selection_writes_workloads_verbatim(tmp_path):
+def test_apply_selection_writes_primary_verbatim(tmp_path):
     cfg = _make_cfg(tmp_path)
-    out = apply_selection(cfg, {"general": "llama3", "research": "gemma2",
-                                "code": "qwen2.5-coder:7b"},
-                          installed=["llama3", "qwen2.5-coder:7b"])
-    assert cfg.get("llm.workloads.general.model") == "llama3"
-    assert cfg.get("llm.workloads.research.model") == "gemma2"
-    assert cfg.get("llm.workloads.code.model") == "qwen2.5-coder:7b"
-    assert out["workloads"]["general"]["status"] == "installed"
-    assert out["workloads"]["research"]["status"] == "not-installed"
-    assert out["workloads"]["code"]["status"] == "installed"
+    out = apply_selection(cfg, model="llama3", installed=["llama3", "qwen2.5-coder:7b"])
+    assert cfg.get("llm.primary_model") == "llama3"
+    assert get_primary_model(configuration=cfg) == "llama3"
+    assert out["model"] == "llama3"
+    assert out["status"] == "installed"
+    assert out["primary"]["model"] == "llama3"
+
+
+def test_apply_selection_reports_not_installed(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    out = apply_selection(cfg, model="gemma2", installed=["llama3"])
+    assert cfg.get("llm.primary_model") == "gemma2"
+    assert out["status"] == "not-installed"
 
 
 def test_apply_selection_never_substitutes_missing_model(tmp_path):
     # A model that is not installed is kept and reported, never replaced.
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "gone:model"}, installed=["llama3"])
-    assert cfg.get("llm.workloads.general.model") == "gone:model"
+    apply_selection(cfg, model="gone:model", installed=["llama3"])
+    assert cfg.get("llm.primary_model") == "gone:model"
 
 
 def test_apply_selection_empty_is_unset(tmp_path):
     cfg = _make_cfg(tmp_path)
-    out = apply_selection(cfg, {"general": "", "research": "",
-                                "code": "  "}, installed=["llama3"])
-    assert cfg.get("llm.workloads.general.model") == ""
-    assert cfg.get("llm.workloads.code.model") == ""
-    assert out["workloads"]["general"]["status"] == "unset"
-    assert out["workloads"]["code"]["status"] == "unset"
+    out = apply_selection(cfg, model="  ", installed=["llama3"])
+    assert cfg.get("llm.primary_model") == ""
+    assert out["status"] == "unset"
+
+
+def test_apply_selection_model_kwarg(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    out = apply_selection(cfg, model="llama3", installed=["llama3"])
+    assert cfg.get("llm.primary_model") == "llama3"
+    assert out["model"] == "llama3"
 
 
 def test_apply_selection_emits_config_event(tmp_path):
@@ -260,25 +272,22 @@ def test_apply_selection_emits_config_event(tmp_path):
     paths = []
     bus.on_any(lambda ev: paths.append(ev.path))
     cfg = _make_cfg(tmp_path, bus=bus)
-    apply_selection(cfg, {"general": "llama3"}, by="user")
-    assert "llm.workloads.general.model" in paths
+    apply_selection(cfg, model="llama3")
+    assert "llm.primary_model" in paths
 
 
 def test_apply_selection_survives_reload(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
-                          "code": ""})
+    apply_selection(cfg, model="llama3")
     cfg2 = Configuration(build_registry(), cfg.store.path,
                          defaults=DEFAULT_CONFIG)
     cfg2.initialize()
-    assert cfg2.get("llm.workloads.general.model") == "llama3"
-    assert cfg2.get("llm.workloads.research.model") == "gemma2"
-    assert cfg2.get("llm.workloads.code.model") == ""
+    assert cfg2.get("llm.primary_model") == "llama3"
 
 
 def test_apply_selection_does_not_persist_derived_evidence(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "llama3", "research": "gemma2"})
+    apply_selection(cfg, model="llama3")
     raw = cfg.state.as_dict()
     joined = {k.lower() for k in raw}
     assert not any("eligib" in k for k in joined)

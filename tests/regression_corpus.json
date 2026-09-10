@@ -103,11 +103,12 @@
     "id": "REG-007",
     "query": "What is the best PVE loadout in Shindo Life?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -137,11 +138,12 @@
     "id": "REG-009",
     "query": "Should I buy an RTX 5090?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -154,11 +156,12 @@
     "id": "REG-010",
     "query": "Best local AI models in 2026?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -225,11 +228,12 @@
     "id": "REG-014",
     "query": "Best programming language for a startup in 2026?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -241,11 +245,12 @@
     "id": "REG-015",
     "query": "Is RTX 5090 worth buying?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -258,11 +263,12 @@
     "id": "REG-016",
     "query": "Best GPU tier list 2026",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -472,12 +478,14 @@
     "id": "REG-029",
     "query": "What is the best programming language?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
-      "evidence_external": false
+      "evidence_external": true
     },
     "tags": [
       "ambiguous"
@@ -487,11 +495,12 @@
     "id": "REG-030",
     "query": "Best restaurant near me",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true
     },
@@ -553,11 +562,12 @@
     "id": "REG-034",
     "query": "Compare PyTorch vs TensorFlow in 2026",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true,
       "sources": [
@@ -693,11 +703,12 @@
     "id": "REG-042",
     "query": "Best practices for Docker in production 2026",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "search",
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "evidence_external": true,
       "sources": [
@@ -930,14 +941,17 @@
     "id": "REG-055",
     "query": "Is it worth upgrading from RTX 4090 to RTX 5090?",
     "expected": {
-      "intent": "conversation",
-      "strategy": "respond",
+      "intent": "research",
+      "strategy": "research",
       "capabilities": [
-        "conversation"
+        "conversation",
+        "research",
+        "search"
       ],
       "sources": [
         "web"
-      ]
+      ],
+      "evidence_external": true
     },
     "tags": [
       "recommendation",

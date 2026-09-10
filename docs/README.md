@@ -13,6 +13,7 @@ Navigation map for the Novi repository. If you are new here, read in this order:
 Forward-looking plans live at the docs root:
 
 * **`ROADMAP-phaseG.md`** — the post-Brain-V1 cleanup/debt/migration roadmap.
+* **`release/desktop-packaging.md`** — current desktop-only packaging decision record.
 
 ---
 
@@ -42,6 +43,8 @@ docs/
         release-brain-v1.md         (Brain V1 final release assessment)
         STAGE0-AI-RUNTIME-AUDIT.md  (Phase 7 pre-LangGraph runtime audit)
         STAGE3A-AI-RUNTIME-AUDIT.md (Phase 7 Stage 3A LangChain/LangGraph audit)
+    release/                active release decisions and packaging records
+        desktop-packaging.md    (bundled desktop backend decision)
 ```
 
 ## Conventions

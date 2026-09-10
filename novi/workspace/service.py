@@ -22,6 +22,10 @@ class WorkspaceService:
     def _index_path(self, project_id: str) -> Path:
         return self._base / project_id / "index.sqlite"
 
+    # Beta guardrail: prevent indexing monstrous trees that would freeze UI
+    MAX_FILES_BETA = 10000
+    MAX_BYTES_BETA = 500 * 1024 * 1024
+
     def attach(self, project_id: str, root: str | Path, capability: str = "READ") -> Dict:
         """Attach explicit local folder to project — validates and syncs."""
         cap = WorkspaceCapability.from_str(capability)
@@ -30,6 +34,36 @@ class WorkspaceService:
         root = Path(root).expanduser().resolve()
         if not root.exists() or not root.is_dir():
             raise ValueError(f"Workspace path not found: {root}")
+        # Beta: quick pre-check before full sync to avoid freezing on huge trees
+        try:
+            from .index import DEFAULT_EXCLUDES as _EX
+
+            file_count = 0
+            total_bytes = 0
+            for p in root.rglob("*"):
+                if p.is_dir():
+                    if p.name in _EX:
+                        continue
+                    # skip excluded dirs quickly? full sync will handle properly
+                    continue
+                if not p.is_file():
+                    continue
+                # respect excludes by any parent name
+                if any(part in _EX for part in p.relative_to(root).parts):
+                    continue
+                file_count += 1
+                try:
+                    total_bytes += p.stat().st_size
+                except Exception:
+                    pass
+                if file_count > self.MAX_FILES_BETA:
+                    raise ValueError(f"Folder too large for beta — {file_count} files exceeds limit of {self.MAX_FILES_BETA}. Choose a smaller subfolder.")
+                if total_bytes > self.MAX_BYTES_BETA:
+                    raise ValueError(f"Folder too large for beta — ~{total_bytes // (1024*1024)} MB exceeds limit of {self.MAX_BYTES_BETA // (1024*1024)} MB. Choose a smaller subfolder.")
+        except ValueError:
+            raise
+        except Exception:
+            pass  # pre-check best-effort; full sync is authoritative
         # store config
         import json
         cfg_path = self._config_path(project_id)

@@ -359,7 +359,7 @@ def _runtime_ctx():
 
 
 class _MS:
-    def resolve(self, workload):
+    def resolve_primary(self):
         return ("ollama", "parity-model")
 
     def bind_model(self, name, tools, temperature=0.0):
@@ -396,7 +396,7 @@ def test_langgraph_engine_replays_tool_events_in_order(monkeypatch):
     ])
 
     class MS:
-        def resolve(self, workload):
+        def resolve_primary(self):
             return ("ollama", "m")
 
         def bind_model(self, name, tools, temperature=0.0):

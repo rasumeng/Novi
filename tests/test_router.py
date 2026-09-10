@@ -1,6 +1,6 @@
-"""Heuristic Workload Router — Beta deterministic.
+"""Heuristic Strategy Router — Beta deterministic.
 
-- Verifies 3 workloads only: general, research, code
+- Verifies 3 strategies only: chat, research, code (legacy "general" reads as chat)
 - Exercises relation new/continue/switch with compact topic
 - Verifies deterministic heuristic, no LLM, no llama.cpp
 - Verifies dispatcher invariant: original message verbatim unchanged
@@ -31,7 +31,7 @@ def test_dispatcher_preserves_original_message():
     plan = orch.plan(original, history=[("Build a React ProjectsPanel.", "panel")], conversation_id="conv-1")
     assert plan.goal.text == original
     assert plan.context["original_message"] == original
-    assert plan.context["router_workload"] in ("general", "research", "code")
+    assert plan.context["router_workload"] in ("chat", "research", "code")
     assert plan.context["relation"] in ("new", "continue", "switch")
 
 
@@ -59,17 +59,17 @@ def test_obvious_research_requests():
     assert router.route("who won the super bowl", state=None, history=[]).workload == "research"
 
 
-def test_obvious_general_requests():
+def test_obvious_chat_requests():
     router = _heuristic_router()
-    assert router.route("Explain binary search.", state=None, history=[]).workload == "general"
-    assert router.route("What is the capital of France?", state=None, history=[]).workload == "general"
-    assert router.route("How does TCP work?", state=None, history=[]).workload == "general"
+    assert router.route("Explain binary search.", state=None, history=[]).workload == "chat"
+    assert router.route("What is the capital of France?", state=None, history=[]).workload == "chat"
+    assert router.route("How does TCP work?", state=None, history=[]).workload == "chat"
 
 
-def test_ambiguous_defaults_to_general():
+def test_ambiguous_defaults_to_chat():
     router = _heuristic_router()
     d = router.route("Continue", state=None, history=[])
-    assert d.workload == "general"
+    assert d.workload == "chat"
     assert d.relation == Relation.NEW
 
 
@@ -87,9 +87,9 @@ def test_switch_new_topic():
     router = _heuristic_router()
     state = RouterState(topic="ProjectsPanel UI", workload="code", status="in_progress", active_context="ProjectsPanel UI")
     d = router.route("What's the capital of France?", state=state, history=[("Build a React ProjectsPanel.", "panel")])
-    assert d.workload == "general"
+    assert d.workload == "chat"
     assert d.relation == Relation.SWITCH
-    assert "France" in d.topic or d.topic == "ProjectsPanel UI" or d.workload == "general"
+    assert "France" in d.topic or d.topic == "ProjectsPanel UI" or d.workload == "chat"
 
 
 def test_switch_same_workload_different_topic():
@@ -104,9 +104,9 @@ def test_switch_same_workload_different_topic():
 def test_state_does_not_lock_workload():
     router = _heuristic_router()
     state = RouterState(topic="ProjectsPanel UI", workload="code", status="in_progress", active_context="ProjectsPanel UI")
-    # Even with code state, a general question must not be locked to code
+    # Even with code state, a chat question must not be locked to code
     d = router.route("What is the capital of France?", state=state, history=[])
-    assert d.workload == "general"
+    assert d.workload == "chat"
     assert d.relation == Relation.SWITCH
 
 
@@ -115,9 +115,9 @@ def test_attachments_do_not_determine_workload():
     # Coding request with image should still be code
     d1 = router.route("Can you provide edited code to mimic the style of this ProjectsPanel?", state=None, history=[], has_images=True)
     assert d1.workload == "code"
-    # General image question with image should be general (vision is capability, not workload)
+    # Chat image question with image should be chat (vision is capability, not strategy)
     d2 = router.route("What is in this image?", state=None, history=[], has_images=True)
-    assert d2.workload == "general"
+    assert d2.workload == "chat"
 
 
 def test_topic_is_short_and_reusable():
@@ -133,7 +133,7 @@ def test_no_llm_required():
     # Should work without any llm attribute and without llama_cpp
     assert router.llm is None
     d = router.route("Hello", state=None, history=[])
-    assert d.workload in ("general", "research", "code")
+    assert d.workload in ("chat", "research", "code")
     # Ensure no import of llama_cpp happens during routing
     import sys
     assert "llama_cpp" not in sys.modules or True  # heuristic should not import llama_cpp
@@ -167,4 +167,4 @@ def test_router_output_is_model_agnostic():
     dd = d.to_dict()
     assert "workload" in dd and "relation" in dd and "topic" in dd
     assert "model" not in dd and "capability" not in dd
-    assert d.workload in ("general", "code", "research")
+    assert d.workload in ("chat", "code", "research")

@@ -82,11 +82,15 @@ class ExecutionContext:
     summary: str = ""
 
     # ── Routing (resolved by runtime or caller) ──────────────────────────
+    # NOTE: ``workload`` is the legacy field name for the execution strategy
+    # (chat | code | research). Its value now represents an execution strategy
+    # and does not participate in model selection — every strategy uses the
+    # single primary model (llm.primary_model).
     model_name: str = ""
-    workload: str = "general"
+    workload: str = "chat"
     temperature: float = 0.4
     max_steps: int = 10
-    model_reason: str = ""  # "workload_match" | "config_override" | "execution_plan" | "force_capability"
+    model_reason: str = ""  # "primary_model" | "config_override" | "execution_plan" | "force_capability"
 
     # ── Tools ────────────────────────────────────────────────────────────
     allowed_tools: list[str] = field(default_factory=list)

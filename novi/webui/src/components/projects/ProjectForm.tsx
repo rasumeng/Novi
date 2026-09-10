@@ -33,20 +33,20 @@ export function ProjectForm({ initial, onSubmit, onCancel }: Props) {
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Project name"
+        placeholder="What should I call this?"
         className={inputClasses}
         autoFocus
       />
       <input
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        placeholder="Description (optional)"
+        placeholder="What is this about? (optional)"
         className={inputClasses}
       />
       <textarea
         value={sharedContext}
         onChange={(e) => setSharedContext(e.target.value)}
-        placeholder="Shared context — injected into every conversation in this project"
+        placeholder="Anything I should keep in mind for every conversation here?"
         rows={4}
         className={`${inputClasses} resize-none`}
       />
@@ -56,7 +56,7 @@ export function ProjectForm({ initial, onSubmit, onCancel }: Props) {
         disabled={!name.trim()}
         className="w-full py-2 rounded-lg bg-accent hover:bg-accent/90 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
       >
-        {initial ? 'Save changes' : 'Create project'}
+        {initial ? 'Save changes' : 'Start project'}
       </button>
     </form>
   )

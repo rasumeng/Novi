@@ -1,5 +1,6 @@
-import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle } from 'lucide-react'
-import type { DiscoveryPayload, SchemaResponse } from './api'
+import { useCallback, useEffect, useState } from 'react'
+import { CheckCircle2, Cpu, Download, Monitor, Settings, ShieldCheck, Cable, AlertTriangle, RefreshCw, CircleAlert } from 'lucide-react'
+import { fetchSystemHealth, type DiscoveryPayload, type SchemaResponse, type SystemHealth } from './api'
 import type { SectionId } from './types'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { primaryModelFromDiscovery } from './api'
@@ -11,6 +12,7 @@ interface Props {
   installing: Record<string, { phase: string; pct: number | null }>
   onInstall: (name: string) => Promise<boolean>
   onNavigate: (section: SectionId) => void
+  onRefresh: () => Promise<void>
   loading: boolean
 }
 
@@ -33,7 +35,15 @@ function isDevUnlocked(): boolean {
   }
 }
 
-export function GeneralSettings({ discovery, schema, installing, onInstall, onNavigate, loading }: Props) {
+export function GeneralSettings({ discovery, schema, installing, onInstall, onNavigate, onRefresh, loading }: Props) {
+  const [health, setHealth] = useState<SystemHealth | null>(null)
+  const [checking, setChecking] = useState(true)
+  const refreshHealth = useCallback(async () => {
+    setChecking(true)
+    setHealth(await fetchSystemHealth())
+    setChecking(false)
+  }, [])
+  useEffect(() => { void refreshHealth() }, [refreshHealth])
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
 
   const hardware = discovery.hardware
@@ -43,6 +53,7 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
 
   return (
     <div className="space-y-5">
+      <SystemHealthCard health={health} checking={checking} onRefresh={refreshHealth} onNavigate={onNavigate} />
       {/* Novi status */}
       <div className="flex items-center gap-3 p-4 rounded-2xl border border-base-700 bg-base-800/40">
         <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
@@ -92,15 +103,20 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
         )}
       </div>
 
-      {/* Hardware */}
-      <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
-        <div className="flex items-center gap-2">
-          <Monitor size={14} className="text-base-500" />
-          <span className="text-sm text-base-200">Hardware detected</span>
+      <div className="p-4 rounded-2xl border border-base-700 bg-base-800/40">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2">
+            <Monitor size={14} className="text-base-500" />
+            <p className="text-sm font-medium text-base-100">Hardware</p>
+          </div>
+          <button onClick={() => void onRefresh()} className="text-[11px] text-base-400 hover:text-base-200 transition-colors">Refresh</button>
         </div>
-        <span className="text-xs text-base-400 font-mono">
-          {hardware.ramGb > 0 ? `${hardware.ramGb} GB RAM` : 'unknown'}
-        </span>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+          <HardwareFact label="GPU" value={hardware.gpu?.name || 'Not detected'} />
+          <HardwareFact label="Video memory" value={hardware.gpu?.vramTotalGb == null ? 'Not detected' : `${hardware.gpu.vramTotalGb} GB`} />
+          <HardwareFact label="System memory" value={hardware.ramGb > 0 ? `${hardware.ramGb} GB` : 'Not detected'} />
+        </div>
+        <p className="mt-2 text-[11px] text-base-500">Detection confidence: {hardware.confidence || 'unknown'}</p>
       </div>
 
       {/* Warnings — honest Ollama status */}
@@ -132,6 +148,56 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
       </div>
     </div>
   )
+}
+
+function HardwareFact({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg border border-base-700/70 bg-base-900/40 px-2.5 py-2">
+    <p className="text-[10px] uppercase tracking-wide text-base-500">{label}</p>
+    <p className="mt-0.5 truncate text-xs text-base-200" title={value}>{value}</p>
+  </div>
+}
+
+function SystemHealthCard({ health, checking, onRefresh, onNavigate }: {
+  health: SystemHealth | null
+  checking: boolean
+  onRefresh: () => Promise<void>
+  onNavigate: (section: SectionId) => void
+}) {
+  const healthy = health?.ready === true
+  const unavailable = health === null && !checking
+  const items = health ? [
+    ['Ollama', health.ollama.ready],
+    ['Novi model', health.primaryModel.ready],
+    ['Memory embeddings', health.embedding.ready],
+  ] : []
+  return <section className={`p-4 rounded-2xl border ${healthy ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}>
+    <div className="flex items-start gap-3">
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${healthy ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'}`}>
+        {healthy ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-base-100">Local AI readiness</p>
+        <p className="text-xs text-base-500 mt-0.5">
+          {checking ? 'Checking your local models and memory…' : healthy ? 'Novi is ready for conversations and memory.' : unavailable ? 'Could not read the local readiness check.' : 'Finish these local requirements before relying on memory.'}
+        </p>
+      </div>
+      <button onClick={() => void onRefresh()} disabled={checking} className="p-2 rounded-lg border border-base-700 text-base-400 hover:text-base-100 disabled:opacity-50" title="Recheck local AI readiness">
+        <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+      </button>
+    </div>
+    {!checking && health && <>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3">
+        {items.map(([label, ready]) => <div key={label as string} className="flex items-center gap-2 rounded-lg border border-base-700/70 bg-base-900/40 px-2.5 py-2 text-[11px]">
+          <span className={`w-1.5 h-1.5 rounded-full ${ready ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+          <span className="text-base-300">{label as string}</span>
+        </div>)}
+      </div>
+      {!health.ready && <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-base-400">
+        <span>{health.embedding.error ?? health.ollama.error ?? 'Choose and install a local model to continue.'}</span>
+        <button onClick={() => onNavigate('models')} className="shrink-0 text-accent hover:text-accent/80">Open Models →</button>
+      </div>}
+    </>}
+  </section>
 }
 
 function QuickLink({ icon: Icon, label, onClick }: {

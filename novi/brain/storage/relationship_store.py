@@ -31,9 +31,9 @@ CREATE INDEX IF NOT EXISTS idx_rel_target ON relationships (target_id, kind);
 """
 
 # A (source, target, kind) triple is one semantic edge — never duplicated. The
-# unique index is applied after the base schema so pre-existing databases that
-# contain duplicates (from earlier builds) degrade to a warning instead of a
-# startup crash; diff-based re-indexing cleans those up over time.
+# unique index is applied after the base schema. Older databases may contain
+# exact duplicate edges, so startup repairs those rows before enabling the
+# constraint instead of leaving the store permanently unprotected.
 _UNIQUE_INDEX_SQL = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_rel_unique "
     "ON relationships (source_id, target_id, kind)"
@@ -56,9 +56,26 @@ class RelationshipStore:
                 self._conn.execute(_UNIQUE_INDEX_SQL)
             except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
                 if "duplicate" in str(e).lower() or "unique" in str(e).lower():
-                    log.warning(
-                        "relationships has duplicate edges; unique index not applied (%s)",
-                        e,
+                    # A relationship is identified solely by this triple.
+                    # Keep the first stored occurrence; duplicates carry no
+                    # additional information and used to prevent the unique
+                    # index from being installed forever.
+                    removed = self._conn.execute(
+                        """
+                        DELETE FROM relationships
+                        WHERE rowid NOT IN (
+                            SELECT keep_rowid FROM (
+                                SELECT MIN(rowid) AS keep_rowid
+                                FROM relationships
+                                GROUP BY source_id, target_id, kind
+                            )
+                        )
+                        """
+                    ).rowcount
+                    self._conn.execute(_UNIQUE_INDEX_SQL)
+                    log.info(
+                        "removed %d duplicate relationship edge(s) and applied unique index",
+                        max(removed, 0),
                     )
                 else:
                     raise

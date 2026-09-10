@@ -24,7 +24,7 @@ from novi.configuration.runtime_inventory import (
     _context_length_from_show,
 )
 from novi.configuration.discovery import ModelDiscovery, invalidate_cache
-from novi.configuration.resolver import recommend, WORKLOADS
+from novi.configuration.resolver import recommend
 
 
 # ── ModelRecord: unknown stays unknown ────────────────────────────────────
@@ -300,9 +300,9 @@ def test_unknown_model_with_runtime_evidence_is_recommended():
         {"name": "mystery-llava:7b", "capability_names": ["chat", "vision"]},
     ]
     r = recommend(hardware=None, installed=installed)
-    assert r.workloads["general"].model in {"gemma4:e4b", "mystery-llava:7b"}
+    assert r.primary.model in {"gemma4:e4b", "mystery-llava:7b"}
     # the vision-capable unknown participates with derived evidence
-    assert r.workloads["general"].capabilities
+    assert r.primary.capabilities
 
 
 def test_name_inference_only_model_ranks_last():
@@ -326,12 +326,12 @@ def test_name_inference_only_model_ranks_last():
         ),
     ]
     r = recommend(hardware=None, installed=records)
-    assert r.workloads["code"].model == "trusted-coder"
+    assert r.primary.model == "trusted-coder"
 
 
 def test_recommend_never_picks_unknown_without_evidence():
     r = recommend(hardware=None, installed=["random-unknown:99b"])
-    assert all(r.workloads[w].model == "" for w in WORKLOADS)
+    assert r.primary.model == ""
 
 
 # ── Runtime capability check is authoritative (no name inference) ─────────

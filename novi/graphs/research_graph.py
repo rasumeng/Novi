@@ -56,11 +56,20 @@ from .state import ResearchState, append_error, should_stop, emit_event
 log = logging.getLogger("novi.graphs.research")
 
 
-_DEFAULT_SYSTEM_PROMPT = (
-    "You are Novi, a helpful assistant. Answer the user's question using the "
-    "retrieved evidence below when it is relevant. If the evidence does not "
-    "answer the question, say so clearly rather than inventing facts."
-)
+try:
+    from ..runtime.strategies import get_strategy_prompt as _strategy_prompt
+    _DEFAULT_SYSTEM_PROMPT = (
+        "You are Novi, a helpful assistant. Answer the user's question using the "
+        "retrieved evidence below when it is relevant. If the evidence does not "
+        "answer the question, say so clearly rather than inventing facts."
+        + "\n\n" + _strategy_prompt("research")
+    )
+except Exception:
+    _DEFAULT_SYSTEM_PROMPT = (
+        "You are Novi, a helpful assistant. Answer the user's question using the "
+        "retrieved evidence below when it is relevant. If the evidence does not "
+        "answer the question, say so clearly rather than inventing facts."
+    )
 
 _MISSING_EVIDENCE_HINT = (
     "No retrieved evidence is available for this question. Answer from your "

@@ -1,9 +1,9 @@
-"""Model selection integration tests (Phase 1).
+"""Model selection integration tests (single primary model).
 
-Covers the boundary between pure advisory recommendations and persistent,
+Covers the boundary between pure advisory recommendation and persistent,
 authoritative selection:
 
-* Selection is user intent persisted verbatim to ``llm.workloads.*`` and is
+* Selection is user intent persisted verbatim to ``llm.primary_model`` and is
   never rewritten by installs, removals, or hardware refreshes.
 * Recommendation is advisory: it reflects the current installed set, but
   computing it never touches configuration.
@@ -25,7 +25,8 @@ from novi.configuration.hardware import (
 )
 from novi.configuration.manager import Configuration
 from novi.configuration.resolver import (
-    WORKLOADS,
+    PRIMARY_MODEL_KEY,
+    get_primary_model,
     recommend,
     apply_selection,
 )
@@ -53,7 +54,7 @@ def _make_cfg(tmp_path, bus=None, reg=None):
 
 
 def _selection(cfg):
-    return {w: cfg.get(f"llm.workloads.{w}.model", "") for w in WORKLOADS}
+    return cfg.get(PRIMARY_MODEL_KEY, "")
 
 
 # ── Selection is persistent and authoritative ─────────────────────────────
@@ -61,50 +62,49 @@ def _selection(cfg):
 
 def test_selection_persists_across_reload(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
-                          "code": "qwen2.5-coder:7b"})
+    apply_selection(cfg, model="llama3")
     cfg2 = _make_cfg(tmp_path)
-    assert _selection(cfg2) == {"general": "llama3", "research": "gemma2",
-                                "code": "qwen2.5-coder:7b"}
+    # fresh instance over same file path? _make_cfg uses tmp_path/novi.toml
+    # so reload from same store path:
+    cfg2 = Configuration(build_registry(), cfg.store.path, defaults=DEFAULT_CONFIG)
+    cfg2.initialize()
+    assert cfg2.get(PRIMARY_MODEL_KEY) == "llama3"
 
 
 def test_install_never_rewrites_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
-                          "code": ""})
+    apply_selection(cfg, model="llama3")
     before = _selection(cfg)
 
-    # a trusted model appears in the installed set -> advisory recommendations
-    # change, but the persisted selection is untouched.
+    # a trusted model appears in the installed set -> advisory recommendation
+    # changes, but the persisted selection is untouched.
     recs = recommend(HW_HIGH, ["llama3", "gemma2", "qwen3:8b"])
-    assert recs.workloads["general"].model == "qwen3:8b"
+    assert recs.primary.model == "qwen3:8b"
     assert _selection(cfg) == before
-    assert cfg.get("llm.workloads.general.model") == "llama3"
+    assert cfg.get("llm.primary_model") == "llama3"
 
 
 def test_removal_never_rewrites_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "gone:model", "research": "",
-                          "code": "llama3"})
+    apply_selection(cfg, model="gone:model")
     before = _selection(cfg)
 
     # model removal changes recommendations (advisory), selection stays.
     recs = recommend(HW_HIGH, [])
-    assert recs.workloads["general"].model == ""
+    assert recs.primary.model == ""
     assert _selection(cfg) == before
-    assert cfg.get("llm.workloads.general.model") == "gone:model"
+    assert cfg.get("llm.primary_model") == "gone:model"
 
 
 def test_hardware_change_never_rewrites_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "gemma4", "research": "gemma4",
-                          "code": ""})
+    apply_selection(cfg, model="gemma4")
     before = _selection(cfg)
     installed = ["gemma4", "llama3.1:8b"]
     recs_small = recommend(HW_HIGH, installed)      # gemma4 demoted
     recs_big = recommend(HW_BIG, installed)         # not demoted
-    assert recs_small.workloads["research"].model == "llama3.1:8b"
-    assert recs_big.workloads["research"].model == "gemma4"
+    assert recs_small.primary.model == "llama3.1:8b"
+    assert recs_big.primary.model == "gemma4"
     assert _selection(cfg) == before
 
 
@@ -113,20 +113,20 @@ def test_hardware_change_never_rewrites_selection(tmp_path):
 
 def test_not_installed_selection_is_kept_and_reported(tmp_path):
     cfg = _make_cfg(tmp_path)
-    out = apply_selection(cfg, {"general": "missing:model", "research": "",
-                                "code": ""}, installed=["llama3"])
-    assert cfg.get("llm.workloads.general.model") == "missing:model"
-    assert out["workloads"]["general"]["status"] == "not-installed"
+    out = apply_selection(cfg, model="missing:model", installed=["llama3"])
+    assert cfg.get("llm.primary_model") == "missing:model"
+    assert out["status"] == "not-installed"
+    assert out["model"] == "missing:model"
     # no automatic fallback substituted into config
-    assert cfg.get("llm.workloads.general.model") != "llama3"
+    assert cfg.get("llm.primary_model") != "llama3"
 
 
 def test_empty_discovery_never_fabricates_selection(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "", "research": "", "code": ""})
+    apply_selection(cfg, model="")
     recs = recommend(HW_HIGH, [])
-    assert all(recs.workloads[w].model == "" for w in WORKLOADS)
-    assert all(cfg.get(f"llm.workloads.{w}.model") == "" for w in WORKLOADS)
+    assert recs.primary.model == ""
+    assert cfg.get("llm.primary_model") == ""
 
 
 # ── Advisory recommendations track the installed set ──────────────────────
@@ -136,15 +136,15 @@ def test_recommendations_reflect_installed_set_change(tmp_path):
     cfg = _make_cfg(tmp_path)
     r1 = recommend(HW_HIGH, ["llama3.1:8b"])
     r2 = recommend(HW_HIGH, ["llama3.1:8b", "qwen3:8b"])
-    assert r1.workloads["general"].model == "llama3.1:8b"
-    assert r2.workloads["general"].model == "qwen3:8b"
+    assert r1.primary.model == "llama3.1:8b"
+    assert r2.primary.model == "qwen3:8b"
     # config unchanged by either computation
-    assert _selection(cfg) == {"general": "", "research": "", "code": ""}
+    assert _selection(cfg) == ""
 
 
 def test_recommendation_contains_derived_evidence_only():
     recs = recommend(HW_HIGH, ["qwen2.5vl:7b"])
-    g = recs.workloads["general"]
+    g = recs.primary
     assert g.model == "qwen2.5vl:7b"
     assert g.vision_capable is True
     assert g.capabilities  # derived, advisory-only
@@ -154,13 +154,13 @@ def test_recommendation_contains_derived_evidence_only():
 # ── Writes go through the framework ───────────────────────────────────────
 
 
-def test_apply_selection_writes_only_workloads(tmp_path):
+def test_apply_selection_writes_only_primary(tmp_path):
     cfg = _make_cfg(tmp_path)
-    apply_selection(cfg, {"general": "llama3", "research": "gemma2",
-                          "code": "qwen2.5-coder:7b"}, by="user")
+    apply_selection(cfg, model="llama3", by="user")
     # no mode/meta/provenance keys written
     assert cfg.get("models.mode", "absent") == "absent"
     assert cfg.get("llm.meta.source", "absent") == "absent"
+    assert cfg.get("llm.workloads", "absent") == "absent"
     raw = cfg.state.as_dict()
     assert "experience" not in raw
     assert "lightweight_mode" not in raw.get("runtime", {})
@@ -171,9 +171,14 @@ def test_apply_selection_reaches_runtime_apply_path(tmp_path):
     reg = build_registry()
     reg.require_owner("runtime", lambda p, v, prev: applied.append((p, v)))
     cfg = _make_cfg(tmp_path, reg=reg)
-    apply_selection(cfg, {"general": "llama3", "research": "",
-                          "code": ""}, by="user")
-    assert ("llm.workloads.general.model", "llama3") in applied
+    apply_selection(cfg, model="llama3", by="user")
+    assert ("llm.primary_model", "llama3") in applied
+
+
+def test_get_primary_model_reads_selection(tmp_path):
+    cfg = _make_cfg(tmp_path)
+    apply_selection(cfg, model="qwen3:8b")
+    assert get_primary_model(configuration=cfg) == "qwen3:8b"
 
 
 # ── No automatic installation ─────────────────────────────────────────────

@@ -33,6 +33,10 @@ const now = () =>
 
 const DRAFT_ID = '__draft__'
 const STOP_FALLBACK_MS = 8000
+// Startup data is useful, but it must never make the desktop window look
+// frozen. If a local request is delayed by disk, a migration, or an extension,
+// show the usable landing page and allow its result to arrive in the background.
+const STARTUP_HYDRATION_MAX_WAIT_MS = 8000
 
 export function useNoviChat() {
   const { showError } = useToast()
@@ -40,6 +44,7 @@ export function useNoviChat() {
   const clientRef = useRef<NoviClient | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   const [conversations, setConversations] = useState<Conversation[]>([])
+  const [conversationsHydrated, setConversationsHydrated] = useState(false)
   const [activeId, setActiveId] = useState(() => '')
 
   // The single generation owner. null when nothing is in flight. This is the
@@ -127,15 +132,34 @@ export function useNoviChat() {
 
   // Load conversations on mount
   useEffect(() => {
+    let active = true
+    let finished = false
+    const finishHydration = () => {
+      if (!active || finished) return
+      finished = true
+      setConversationsHydrated(true)
+    }
+    const fallback = window.setTimeout(finishHydration, STARTUP_HYDRATION_MAX_WAIT_MS)
+
     fetchConversations()
       .then((list) => {
-        setConversations(list)
+        if (active) setConversations(list)
       })
       .catch(() => {
-        setConversations([])
-        showError("Couldn't load your conversations. Is Novi's backend running?")
+        if (active) {
+          setConversations([])
+          showError("Couldn't load your conversations. Is Novi's backend running?")
+        }
+      })
+      .finally(() => {
+        window.clearTimeout(fallback)
+        finishHydration()
       })
     refreshProjects()
+    return () => {
+      active = false
+      window.clearTimeout(fallback)
+    }
   }, [refreshProjects, showError])
 
   useEffect(() => clearStopFallback, [])
@@ -171,8 +195,10 @@ export function useNoviChat() {
     }
   })
 
-  // activeId resolves lazily; fall back to draft
-  const resolvedActiveId = activeId || conversations[0]?.id || DRAFT_ID
+  // Novi always opens to a fresh landing page.  Conversation history remains
+  // one click away in the sidebar, but a restart never drops the user back
+  // into whichever chat happened to be active last time.
+  const resolvedActiveId = activeId || DRAFT_ID
 
   const updateConversation = useCallback(
     (id: string, fn: (c: Conversation) => Conversation) => {
@@ -631,13 +657,21 @@ export function useNoviChat() {
   handleEventRef.current = handleEvent
 
   useEffect(() => {
+    // Open the realtime session only after the initial history request has
+    // settled. This gives startup a deterministic order: conversations first,
+    // then WebSocket-driven chat. The hydration timeout above still prevents a
+    // slow local store from blocking the app forever.
+    if (!conversationsHydrated) return
     const client = new NoviClient()
     client.onEvent = (ev) => handleEventRef.current(ev)
     client.onConnectionChange = setConnection
     client.connect()
     clientRef.current = client
-    return () => client.disconnect()
-  }, [])
+    return () => {
+      client.disconnect()
+      if (clientRef.current === client) clientRef.current = null
+    }
+  }, [conversationsHydrated])
 
   // Reconnection awareness: surfacing a closed→open transition instead of
   // silently resuming. This does not touch the owner/streaming model — in-flight
@@ -689,7 +723,9 @@ export function useNoviChat() {
         if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
         setConversations((convs) => [newConv, ...convs])
         setActiveId(newId)
-        // Canonical: new conversation's projectId is persisted via saveConversation (dirtyIdRef) — no separate project update needed.
+        if (effectiveProjectId) {
+          setProjects(prev => prev.map(p => p.id === effectiveProjectId && !p.conversationIds.includes(newId) ? { ...p, conversationIds: [...p.conversationIds, newId] } : p))
+        }
         setOwner({ conversationId: newId })
         setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
         dirtyIdRef.current = newId
@@ -699,6 +735,40 @@ export function useNoviChat() {
         setLiveThought('')
         setInlineSteps([])
       } else {
+        // If caller explicitly scoped this send to a project that the current
+        // conversation doesn't belong to, fork a NEW conversation in that
+        // project rather than appending to an unrelated global chat.
+        const curPid = (conversations.find(c => c.id === resolvedActiveId) as any)?.projectId as string | undefined
+        const curProj = projects.find(p => p.id === projectId)
+        const belongsToOverride = projectIdOverride !== undefined
+          ? (projectId === curPid || !!curProj?.conversationIds.includes(resolvedActiveId))
+          : true
+        if (projectIdOverride !== undefined && projectId !== undefined && !belongsToOverride) {
+          const newId = nextId()
+          const newConv: Conversation = {
+            id: newId,
+            title: trimmed.slice(0, 48) || 'Attachments',
+            updatedAt: 'Just now',
+            pinned: false,
+            projectId: projectIdOverride as string,
+            messages: [{ id: nextId(), role: 'user', content: textToSend, createdAt: now(), attachments }],
+          } as Conversation
+          if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
+          setConversations((convs) => [newConv, ...convs])
+          setActiveId(newId)
+          if (projectIdOverride) {
+            setProjects(prev => prev.map(p => p.id === projectIdOverride && !p.conversationIds.includes(newId) ? { ...p, conversationIds: [...p.conversationIds, newId] } : p))
+          }
+          setOwner({ conversationId: newId })
+          setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
+          dirtyIdRef.current = newId
+          thoughtRef.current = ''
+          thoughtStartedAtRef.current = 0
+          setThinking(false)
+          setLiveThought('')
+          setInlineSteps([])
+          return
+        }
         if (!client.sendChat(textToSend, resolvedActiveId, attachments, projectId, deepResearch)) return
         const targetId = resolvedActiveId
         updateConversation(targetId, (c) => ({
@@ -738,6 +808,12 @@ export function useNoviChat() {
       stopTimeoutRef.current = null
     }, STOP_FALLBACK_MS)
   }, [finishStreaming])
+
+  // Folder access is a session-scoped, read-only grant. The backend indexes
+  // the selected path locally; no files are sent through the attachment API.
+  const attachFolder = useCallback((path: string) => {
+    return clientRef.current?.setDirectory(path) ?? false
+  }, [])
 
   const answerPermission = useCallback((allowed: boolean, requestId?: string) => {
     clientRef.current?.answerPermission(allowed, requestId)
@@ -893,7 +969,7 @@ export function useNoviChat() {
 
   const active: Conversation = resolvedActiveId === DRAFT_ID
     ? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
-    : conversations.find((c) => c.id === resolvedActiveId) ?? conversations[0] ?? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
+    : conversations.find((c) => c.id === resolvedActiveId) ?? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
 
   // Project for active conversation — single source: conversation's projectId OR conversationIds membership, fallback to selected project for draft
   const convProjectForActive = (() => {
@@ -929,6 +1005,7 @@ export function useNoviChat() {
 
   return {
     connection,
+    conversationsHydrated,
     conversations,
     active,
     activeId: resolvedActiveId,
@@ -963,6 +1040,7 @@ backgroundRuns,
     stopBackgroundRun: handleStopBackgroundRun,
     refreshBackgroundRuns: handleRefreshBackgroundRuns,
     stop,
+    attachFolder,
     answerPermission,
     answerPlan,
     newChat,

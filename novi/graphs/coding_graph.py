@@ -51,12 +51,20 @@ from .state import CodingState, append_error, should_stop, emit_event
 log = logging.getLogger("novi.graphs.coding")
 
 
-_DEFAULT_SYSTEM_PROMPT = (
-    "You are Novi, a coding assistant. Modify the codebase to satisfy the "
-    "user's request. Read relevant files before editing, make precise edits, "
-    "and verify your work when possible. Do not invent file contents — read "
-    "first."
-)
+try:
+    from ..runtime.strategies import get_strategy_prompt as _strategy_prompt
+    _DEFAULT_SYSTEM_PROMPT = (
+        "You are Novi, a coding assistant. Modify the codebase to satisfy the "
+        "user's request. Do not invent file contents — read first."
+        + "\n\n" + _strategy_prompt("code")
+    )
+except Exception:
+    _DEFAULT_SYSTEM_PROMPT = (
+        "You are Novi, a coding assistant. Modify the codebase to satisfy the "
+        "user's request. Read relevant files before editing, make precise edits, "
+        "and verify your work when possible. Do not invent file contents — read "
+        "first."
+    )
 
 
 def _stream_event(state: dict, ev: dict) -> None:

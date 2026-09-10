@@ -36,9 +36,8 @@ class WebUIBackend:
         # the shared Orchestrator resolves ExecutionPlan.tools through).
         capability_registry = ctx.orchestrator.capabilities
 
-        # Model selection is workload-based and centralized: ModelService +
-        # ModelSelector resolve llm.workloads.* at execution time. No router,
-        # no default_model, no role config here.
+        # Model selection is centralized: ModelService + ModelSelector resolve
+        # llm.primary_model at execution time. Strategies select behavior only.
 
         # MCP manager
         mcp = MCPManager(registry)
@@ -121,16 +120,14 @@ class WebUIBackend:
         # Event-driven wiring (no polling): config changes reach the shared
         # backend live through the framework's apply hooks. ModelSelector wraps
         # ModelService, so refreshing discovery is all that's needed — selection
-        # is re-read from llm.workloads.* at every resolution.
+        # is re-read from llm.primary_model at every resolution.
         def _reload_models(path, value, previous):
             if not path.startswith("llm."):
                 return
-            # A workload-model change is pure selection: it alters availability
-            # not at all. Model resolution re-reads llm.workloads.* live and the
-            # provider cache is keyed per model, so a changed selection builds a
-            # fresh provider with no I/O here. Only other llm.* writes (e.g. the
-            # Ollama URL) require a full provider re-list.
-            if path.startswith("llm.workloads."):
+            # A primary-model change is pure selection: resolution re-reads
+            # llm.primary_model live and the provider cache is keyed per model.
+            # Only other llm.* writes require a full provider re-list.
+            if path == "llm.primary_model":
                 return
             try:
                 ctx.model_service.refresh()

@@ -20,7 +20,7 @@ Constraints (Beta):
 
 Future: QwenRouter will implement same interface `route(...) -> RouterDecision`.
 
-Router outputs workload/relation/topic only; ModelSelector chooses concrete model.
+Router outputs strategy/relation/topic only; all strategies use the primary model.
 Never rewrites user message.
 """
 
@@ -32,18 +32,18 @@ from typing import Optional
 
 from .task_types import Relation
 
-# ── Workloads ────────────────────────────────────────────────────────────────
+# ── Strategies ───────────────────────────────────────────────────────────────
+# Router selects execution strategy, never a model. The legacy ``workload``
+# field names below now carry execution-strategy values (chat | code |
+# research) and do not participate in model selection.
 
-ROUTER_WORKLOADS = ("general", "research", "code")
-ROUTER_TO_SELECTOR_WORKLOAD = {
-    "general": "general",
-    "code": "code",
-    "research": "research",
-}
+from ..runtime.strategies import STRATEGIES
+
 _WORKLOAD_ALIASES = {
-    "conversation": "general",
+    "general": "chat",
+    "conversation": "chat",
     "coding": "code",
-    "vision": "general",
+    "vision": "chat",
     "planning": "code",
 }
 
@@ -51,7 +51,11 @@ _WORKLOAD_ALIASES = {
 
 @dataclass
 class RouterState:
-    """Compact conversation state. Topic is short label 2-8 words."""
+    """Compact conversation state. Topic is short label 2-8 words.
+
+    NOTE: ``workload`` is the persisted name for the execution strategy
+    (chat | code | research). It does not participate in model selection.
+    """
 
     topic: str = ""
     workload: str = ""
@@ -78,7 +82,11 @@ class RouterState:
 
 @dataclass
 class RouterDecision:
-    """Heuristic decision — workload/relation/topic."""
+    """Heuristic decision — strategy/relation/topic.
+
+    NOTE: ``workload`` carries the execution strategy (chat | code |
+    research) for persisted-state compatibility. It does not select a model.
+    """
 
     workload: str
     relation: Relation
@@ -103,8 +111,9 @@ class RouterDecision:
         }
 
     @property
-    def selector_workload(self) -> str:
-        return ROUTER_TO_SELECTOR_WORKLOAD.get(self.workload, "general")
+    def strategy(self) -> str:
+        from ..runtime.strategies import normalize_strategy
+        return normalize_strategy(self.workload)
 
 
 # Backwards compat: RouterConfig no longer needed but kept for interface
@@ -132,7 +141,7 @@ class RouterError(RuntimeError):
 # ── Heuristic signals (small, deterministic) ─────────────────────────────────
 
 # Keep lists tiny — strong signals only. Do not expand into giant dictionaries.
-_RESEARCH_SIGNALS = ("latest", "news", "price", "research", "recent", "who won", "super bowl", "current", "today", "weather", "trends", "version")
+_RESEARCH_SIGNALS = ("latest", "news", "price", "research", "recent", "who won", "super bowl", "current", "today", "weather", "trends", "version", "worth upgrading", "best ", "worth ", "buy ", "near me", "next ")
 # Code: triple backtick is strong, plus a few project/code words
 _CODE_SIGNALS = ("```", "projects panel", "projectspanel", "react", "debug", "fix the bug", "review", "build a react", "frontend", "feature", "add a new feature")
 _CODE_EXTS = (".py", ".js", ".ts", ".tsx", ".jsx")
@@ -140,6 +149,7 @@ _CODE_EXTS = (".py", ".js", ".ts", ".tsx", ".jsx")
 _STOPWORDS = frozenset(("what","is","the","how","can","you","explain","build","a","an","find","for","to","of","in","on","and","or","please","help","me","my","with","about","latest","recent","research"))
 
 def _detect_workload(message: str, state: Optional[RouterState] = None) -> str:
+    """Classify to execution strategy (chat/code/research). Never selects model."""
     low = message.lower()
     # Code first for hybrid queries like "Fix the bug using latest docs" (code + research)
     if "```" in message:
@@ -156,20 +166,25 @@ def _detect_workload(message: str, state: Optional[RouterState] = None) -> str:
     for sig in _RESEARCH_SIGNALS:
         if sig in low:
             return "research"
-    # State hint for short ambiguous follow-ups: preserve prior workload
+    # A stated calendar year normally asks for a time-bounded answer rather
+    # than timeless background knowledge (for example, release guidance or
+    # an ecosystem comparison "in 2026").
+    if re.search(r"\b20\d{2}\b", low):
+        return "research"
+    # State hint for short ambiguous follow-ups: preserve prior strategy
     if state and not state.is_empty() and len(message.strip()) < 70:
         low_tokens = set(re.findall(r"[a-z0-9]+", low))
         topic_tokens = set(re.findall(r"[a-z0-9]+", state.topic.lower())) if state.topic else set()
         # If message is a short continuation that clearly refers to prior topic
         # e.g., "Can you make the cards smaller?" after ProjectsPanel UI
-        if len(message.strip().split()) <= 7 and state.workload in ROUTER_WORKLOADS:
+        if len(message.strip().split()) <= 7 and state.workload in STRATEGIES:
             # Check for continuation cues or topic overlap
             if (low_tokens & topic_tokens) or any(w in low for w in ("make", "cards", "smaller", "move", "also", "delete", "button", "panel")):
                 return state.workload
             # Very short follow-ups like "Code" or "Continue"
             if len(message.strip().split()) <= 3:
                 return state.workload
-    return "general"
+    return "chat"
 
 
 def _extract_topic(message: str, workload: str) -> str:
@@ -283,6 +298,9 @@ class WorkloadRouter:
             if not topic or len(topic) < 2:
                 topic = state.topic if state and state.topic else workload
 
+        # Normalize legacy "general" state to "chat" strategy.
+        if workload == "general":
+            workload = "chat"
         # Build next state
         new_state = RouterState(
             topic=topic,

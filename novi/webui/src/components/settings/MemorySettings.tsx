@@ -18,6 +18,7 @@ export function MemorySettings({ framework }: Props) {
   const [allMemory, setAllMemory] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<'overview' | 'preferences' | 'dev'>('overview')
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const [memoryError, setMemoryError] = useState<string | null>(null)
   const [memoryStatus, setMemoryStatus] = useState<'ok' | 'disabled' | 'unavailable'>('ok')
@@ -171,15 +172,28 @@ export function MemorySettings({ framework }: Props) {
         >
           Preferences
         </button>
-        <button
-          onClick={() => setTab('dev')}
-          className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-            tab === 'dev' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
-          }`}
-        >
-          Developer
-        </button>
+        {showAdvanced && (
+          <button
+            onClick={() => setTab('dev')}
+            className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              tab === 'dev' ? 'bg-base-700 text-base-100' : 'text-base-400 hover:text-base-200'
+            }`}
+          >
+            Advanced
+          </button>
+        )}
       </div>
+
+      {!showAdvanced && (
+        <button
+          onClick={() => setShowAdvanced(true)}
+          className="w-full rounded-xl border border-base-700 bg-base-800/30 px-3 py-2.5 text-left transition-colors hover:bg-base-800/60"
+        >
+          <span className="block text-xs font-medium text-base-300">Memory troubleshooting</span>
+          <span className="mt-0.5 block text-[11px] text-base-500">Search the raw index and manage individual stored memories.</span>
+          <span className="mt-1.5 block text-[11px] font-medium text-accent">Show advanced controls</span>
+        </button>
+      )}
 
       {tab === 'overview' && (
         <KnowledgeOverview />

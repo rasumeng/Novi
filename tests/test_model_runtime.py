@@ -29,7 +29,7 @@ def _registry(*models: str) -> ModelRegistry:
 
 def _config(model: str) -> dict:
     return {
-        "llm": {"workloads": {"general": {"model": model}}},
+        "llm": {"primary_model": model},
         "providers": {"default": "ollama",
                       "ollama": {"url": "http://localhost:11434"}},
     }
@@ -105,13 +105,13 @@ def test_runtime_preserves_selected_model_identity():
 
 
 def test_modelservice_client_forwards_model_verbatim():
-    """End-to-end: llm.workloads.general.model='qwen3:8b' arrives at the
+    """End-to-end: llm.primary_model='qwen3:8b' arrives at the
     provider exactly as 'qwen3:8b'."""
     captured = {}
     runtime = ModelRuntime(provider_factory=lambda p, m, c: _RecorderProvider(m))
     ms = ModelService(_config("qwen3:8b"), _registry("qwen3:8b"), runtime=runtime)
 
-    ms.client("general")
+    ms.client()
 
     assert captured == {}
     # ModelRuntime cache: provider received the verbatim identity
@@ -141,7 +141,7 @@ def test_modelservice_client_forwards_model_verbatim_factory():
     rt = _RecorderRuntime()
     ms = ModelService(_config("qwen3:8b"), _registry("qwen3:8b"), runtime=rt)
 
-    ms.client("general", temperature=0.2)
+    ms.client(temperature=0.2)
     ms.bind_model("qwen3:8b", ["calc"], temperature=0.0)
 
     assert rt.seen[0] == ("ollama", "qwen3:8b", {"url": "http://localhost:11434"})
@@ -179,7 +179,7 @@ def test_runtime_empty_selection_never_constructs(monkeypatch):
 
 
 def test_empty_selection_never_constructs_langchain_model(monkeypatch):
-    """llm.workloads.general.model='' → ModelUnavailableError, and neither
+    """llm.primary_model='' → ModelUnavailableError, and neither
     ChatOllama nor ChatOpenAI is constructed."""
     langchain_constructed = {"ollama": 0, "openai": 0}
 
@@ -197,7 +197,7 @@ def test_empty_selection_never_constructs_langchain_model(monkeypatch):
     ms = ModelService(_config(""), _registry("qwen3:8b"))
 
     with pytest.raises(ModelUnavailableError) as exc_info:
-        ms.client("general")
+        ms.client()
 
     assert isinstance(exc_info.value, ModelUnavailableError)
     assert langchain_constructed == {"ollama": 0, "openai": 0}
@@ -222,7 +222,7 @@ def test_empty_selection_raises_no_fallback_no_substitution(monkeypatch):
     ms = ModelService(_config(""), _registry("qwen3:8b", "llama3.2:3b"))
 
     with pytest.raises(ModelUnavailableError):
-        ms.client("general")
+        ms.client()
 
     # no substitute was built even though other models exist in the registry
     assert langchain_constructed == {"ollama": 0, "openai": 0}
@@ -272,16 +272,16 @@ def test_modelservice_constructs_only_through_provider_layer(monkeypatch):
     monkeypatch.setattr("langchain_ollama.ChatOllama", _ChatOllama)
 
     ms = ModelService(_config("qwen3:8b"), _registry("qwen3:8b"))
-    llm = SimpleLLM(ms, workload="general")
+    llm = SimpleLLM(ms)
 
     assert llm.invoke("hello") == "ok:qwen3:8b"
     assert captured["model"] == "qwen3:8b"
 
 
-# ── Test D — SimpleLLM / general workload through the new boundary ───────
+# ── Test D — SimpleLLM / primary model through the new boundary ───────
 
 def test_simple_llm_general_through_model_runtime(monkeypatch):
-    """SimpleLLM on the general workload resolves the configured model and
+    """SimpleLLM resolves the primary model and
     constructs the LangChain client through ModelRuntime unchanged."""
     captured = {}
 
@@ -295,7 +295,7 @@ def test_simple_llm_general_through_model_runtime(monkeypatch):
     monkeypatch.setattr("langchain_ollama.ChatOllama", _ChatOllama)
 
     ms = ModelService(_config("qwen3:8b"), _registry("qwen3:8b"))
-    llm = SimpleLLM(ms, workload="general")
+    llm = SimpleLLM(ms)
 
     assert llm.invoke("hi") == "hello back"
     assert captured["model"] == "qwen3:8b"
@@ -303,7 +303,7 @@ def test_simple_llm_general_through_model_runtime(monkeypatch):
 
 
 def test_simple_llm_general_empty_selection_raises(monkeypatch):
-    """Unset general workload now raises ModelUnavailableError at the runtime
+    """Unset primary model now raises ModelUnavailableError at the runtime
     boundary instead of constructing a model with an empty name."""
     langchain_constructed = {"ollama": 0, "openai": 0}
 
@@ -319,7 +319,7 @@ def test_simple_llm_general_empty_selection_raises(monkeypatch):
     monkeypatch.setattr("langchain_openai.ChatOpenAI", _ChatOpenAI)
 
     ms = ModelService(_config(""), _registry())
-    llm = SimpleLLM(ms, workload="general")
+    llm = SimpleLLM(ms)
 
     with pytest.raises(ModelUnavailableError):
         llm.invoke("anything")
@@ -332,21 +332,21 @@ def test_simple_llm_general_empty_selection_raises(monkeypatch):
 def test_modelservice_tracks_selection_change():
     """Regression: a Settings model change must reach ModelService. The
     composition root pushes a fresh config snapshot on every configuration
-    event via ``update_configuration``; resolve() must reflect it."""
+    event via ``update_configuration``; resolve_primary() must reflect it."""
     runtime = ModelRuntime(provider_factory=lambda p, m, c: _RecorderProvider(m))
     ms = ModelService(_config("qwen3:8b"), _registry("qwen3:8b", "llama3.2:3b"),
                       runtime=runtime)
 
-    assert ms.resolve("general") == ("ollama", "qwen3:8b")
+    assert ms.resolve_primary() == ("ollama", "qwen3:8b")
 
     ms.update_configuration(_config("llama3.2:3b"))
 
-    assert ms.resolve("general") == ("ollama", "llama3.2:3b")
+    assert ms.resolve_primary() == ("ollama", "llama3.2:3b")
 
 
 def test_context_pushes_config_updates_to_model_service(monkeypatch):
     """NoviContext subscribes to configuration events on first config access
-    and re-issues the snapshot to ModelService so ``llm.workloads.*`` edits
+    and re-issues the snapshot to ModelService so ``llm.primary_model`` edits
     apply live instead of requiring a process restart."""
     from novi.configuration.events import ConfigEvent
     from novi.services import context as ctx_mod
@@ -365,7 +365,7 @@ def test_context_pushes_config_updates_to_model_service(monkeypatch):
 
         def emit(self, new_snap):
             self.snap = new_snap
-            event = ConfigEvent(path="llm.workloads.general.model",
+            event = ConfigEvent(path="llm.primary_model",
                                 value="llama3.2:3b")
             for handler in self.handlers:
                 handler(event)
@@ -382,8 +382,8 @@ def test_context_pushes_config_updates_to_model_service(monkeypatch):
     ])
     svc = ctx.model_service
 
-    assert svc.resolve("general") == ("ollama", "qwen3:8b")
+    assert svc.resolve_primary() == ("ollama", "qwen3:8b")
 
     fake.emit(_config("llama3.2:3b"))
 
-    assert svc.resolve("general") == ("ollama", "llama3.2:3b")
+    assert svc.resolve_primary() == ("ollama", "llama3.2:3b")

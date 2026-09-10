@@ -49,7 +49,10 @@ def bucket_confidence(status: KnowledgeStatus) -> int:
 
 
 def _last_used(item):
-    return item.last_seen_at or item.created_at
+    # ``created_at`` is often generated independently while materialising a
+    # batch, which would make otherwise equal store results reorder by a few
+    # microseconds.  Recency is a tiebreak for observed use, not insertion.
+    return item.last_seen_at
 
 
 def tier_key(hit: KnowledgeHit, active_scenario_ids: frozenset | set = ()) -> tuple:

@@ -1,6 +1,6 @@
 """ModelRuntime — thin execution boundary between Novi's model selection and LangChain.
 
-Novi resolves WHICH model to use (``llm.workloads.<workload>.model``, verbatim,
+Novi resolves WHICH model to use (``llm.primary_model``, verbatim,
 via ``ModelSelector`` / ``ModelService``). This layer receives that
 already-resolved identity and turns it into a LangChain runnable/model by
 delegating construction to the existing provider layer (``novi.providers``).
@@ -45,7 +45,7 @@ class ResolvedModel:
     already-selected model:
 
       * ``provider`` — which provider owns this model (``ollama``/``openai``)
-      * ``model``    — the verbatim ``llm.workloads.<workload>.model`` value
+      * ``model``    — the verbatim ``llm.primary_model`` value
       * ``config``   — provider settings (url/base_url, api key env, reasoning)
       * ``supports_tools`` — descriptive capability: may tools be bound onto
         this model. Informational only — never used to select/substitute.
@@ -99,7 +99,7 @@ class ModelRuntime:
     def _provider_for(self, resolved: ResolvedModel):
         if not resolved.model:
             raise ModelUnavailableError(
-                "runtime", None, [],
+                "", [],
                 detail="No model is selected — refusing to construct a LangChain model.",
             )
         key = f"{resolved.provider}:{resolved.model}"

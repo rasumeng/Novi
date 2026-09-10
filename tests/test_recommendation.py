@@ -46,7 +46,7 @@ from novi.configuration.recommendation import (
     rank_components,
     recommendation_score,
 )
-from novi.configuration.resolver import WORKLOADS, recommend
+from novi.configuration.resolver import recommend
 
 
 def _record(name="test:model", **kw) -> ModelRecord:
@@ -386,23 +386,21 @@ def test_unseeded_model_with_runtime_evidence_is_recommendable():
                              ("reasoning", True, "runtime")),
         qualification=Qualification.EXPERIMENTAL)
     r = recommend(hw(vram=8.0, ram=32.0), [record], catalog={})
-    assert r.workloads["general"].model == "fresh:model"
-    assert "runtime reported capability" in r.workloads["general"].reasons
+    assert r.primary.model == "fresh:model"
+    assert "runtime reported capability" in r.primary.reasons
 
 
 def test_catalog_disabled_still_recommends_unseeded_evidence():
     a = _record(name="a", capabilities=_claims(("chat", True, "runtime")))
     b = _record(name="b", capabilities=_claims(("chat", True, "runtime")))
     r = recommend(hw(vram=8.0, ram=32.0), [a, b], catalog={})
-    assert r.workloads["general"].model in {"a", "b"}
-    assert r.workloads["general"].model in {"a", "b"}
+    assert r.primary.model in {"a", "b"}
 
 
 def test_unknown_model_with_no_evidence_never_recommended():
     r = recommend(hw(vram=8.0, ram=32.0), ["random-unknown:99b"], catalog={})
-    for w in WORKLOADS:
-        assert r.workloads[w].model == ""
-        assert "no installed candidate" in r.workloads[w].reasons[0]
+    assert r.primary.model == ""
+    assert "no installed candidate" in r.primary.reasons[0]
 
 
 def test_seed_membership_alone_is_not_evidence_strength():

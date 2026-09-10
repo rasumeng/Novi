@@ -1,15 +1,15 @@
 """WebUI selection/recommendation wiring (integration).
 
-Proves the Phase 1 selection <-> recommendation split is wired to real
-lifecycle points:
+Proves the single-primary-model selection <-> recommendation split is wired
+to real lifecycle points:
 
-* startup: discovery payload exposes workloads + advisory recommendations;
+* startup: discovery payload exposes primary + advisory recommendation;
   selection is NOT auto-populated (user intent is authoritative)
-* ``POST /api/configuration/models/selection`` persists workloads verbatim
+* ``POST /api/configuration/models/selection`` persists primary verbatim
 * ``POST /api/configuration/models/recommend`` is advisory unless ``apply``
 * model install completion refreshes recommendations, never selection
-* discovery payload carries workloads + recommended + visionCapable, and no
-  longer exposes roles / presets / activeExperience
+* discovery payload carries primary + recommended + visionCapable, and no
+  longer exposes roles / presets / activeExperience / workloads.*
 
 Hermetic: process config is pointed at tmp, model discovery and the Ollama
 installer are stubbed — no network, no real user config, no Ollama.
@@ -51,24 +51,18 @@ def _config():
     return get_configuration()
 
 
-def _selection():
-    return _config().get("llm.workloads", {}) or {}
+def _primary():
+    return _config().get("llm.primary_model", "") or ""
 
 
-def _workload_models():
-    return {w: (spec or {}).get("model", "") if isinstance(spec, dict) else (spec or "")
-            for w, spec in _selection().items()}
-
-
-def test_startup_exposes_workloads_but_never_autofills_selection(monkeypatch):
+def test_startup_exposes_primary_but_never_autofills_selection(monkeypatch):
     client, holder = _make_app(
         monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"])
 
     snap = client.get("/api/configuration").json()
     # selection surface is present but empty — user intent, never auto-resolved
-    assert snap["llm"]["workloads"]["general"]["model"] == ""
-    assert snap["llm"]["workloads"]["research"]["model"] == ""
-    assert snap["llm"]["workloads"]["code"]["model"] == ""
+    assert snap["llm"]["primary_model"] == ""
+    assert "workloads" not in snap["llm"]
 
     # legacy surfaces are gone
     assert "mode" not in snap.get("models", {})
@@ -76,14 +70,14 @@ def test_startup_exposes_workloads_but_never_autofills_selection(monkeypatch):
     assert "meta" not in snap["llm"]
 
 
-def test_startup_discovery_payload_has_workloads_and_recommended(monkeypatch):
+def test_startup_discovery_payload_has_primary_and_recommended(monkeypatch):
     client, holder = _make_app(
         monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"])
     payload = client.get("/api/models/discovery").json()
-    assert set(payload["workloads"]) == {"general", "research", "code"}
-    assert payload["workloads"]["general"] == ""
-    assert "workloads" in payload["recommended"]
-    rec = payload["recommended"]["workloads"]["general"]
+    assert payload["primary"] == ""
+    assert payload["model"] == ""
+    assert "primary" in payload["recommended"]
+    rec = payload["recommended"]["primary"]
     assert rec["model"] == "llama3.1:8b"
     assert "visionCapable" in rec
     # structured explanation is additive and exposed to the UI
@@ -149,14 +143,14 @@ def test_discovery_hardware_unknown_vram_stays_unknown(monkeypatch):
 def test_vision_capable_flag_derived_in_discovery(monkeypatch):
     client, holder = _make_app(monkeypatch, ["qwen2.5vl:7b"])
     payload = client.get("/api/models/discovery").json()
-    assert payload["recommended"]["workloads"]["general"]["model"] == "qwen2.5vl:7b"
-    assert payload["recommended"]["workloads"]["general"]["visionCapable"] is True
+    assert payload["recommended"]["primary"]["model"] == "qwen2.5vl:7b"
+    assert payload["recommended"]["primary"]["visionCapable"] is True
     # no selection yet -> vision_capable must be False (never implied)
     assert payload["vision_capable"] is False
 
-    # select a vision-capable general model -> flag derived from selection
+    # select a vision-capable primary model -> flag derived from selection
     client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "qwen2.5vl:7b", "research": "", "code": ""}})
+        "model": "qwen2.5vl:7b"})
     payload = client.get("/api/models/discovery").json()
     assert payload["vision_capable"] is True
 
@@ -166,29 +160,27 @@ def test_selection_get_and_post(monkeypatch):
 
     # empty by default
     got = client.get("/api/configuration/models/selection").json()
-    assert got == {"ok": True, "workloads": {
-        "general": "", "research": "", "code": ""}}
+    assert got["ok"] is True
+    assert got["model"] == ""
+    assert got["primary"] == ""
 
     # persist verbatim. The save path is deliberately I/O-free: it never does a
-    # blocking installed-model lookup, so every entry reports "configured"
+    # blocking installed-model lookup, so the entry reports "configured"
     # (persisted). Availability is surfaced by the separate discovery endpoint.
     resp = client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "llama3.1:8b", "research": "not-installed:model",
-                      "code": "qwen2.5-coder:7b"},
+        "model": "llama3.1:8b",
     }).json()
     assert resp["ok"] is True
-    assert resp["workloads"]["general"]["status"] == "configured"
-    assert resp["workloads"]["research"]["status"] == "configured"
+    assert resp["model"] == "llama3.1:8b"
+    assert resp["status"] == "configured"
 
-    assert _workload_models()["general"] == "llama3.1:8b"
-    assert _workload_models()["research"] == "not-installed:model"
-    assert _workload_models()["code"] == "qwen2.5-coder:7b"
+    assert _primary() == "llama3.1:8b"
 
     # survives reload
     import novi.configuration.bootstrap as boot
     monkeypatch.setattr(boot, "_configuration", None)
     got2 = client.get("/api/configuration/models/selection").json()
-    assert got2["workloads"]["general"] == "llama3.1:8b"
+    assert got2["model"] == "llama3.1:8b"
 
 
 def test_selection_never_auto_resolved_at_startup(monkeypatch):
@@ -197,9 +189,9 @@ def test_selection_never_auto_resolved_at_startup(monkeypatch):
     client, holder = _make_app(
         monkeypatch, ["qwen3:8b", "qwen2.5vl:7b", "nomic-embed-text"])
     payload = client.get("/api/models/discovery").json()
-    assert payload["recommended"]["workloads"]["general"]["model"] == "qwen3:8b"
-    assert payload["workloads"]["general"] == ""
-    assert _config().get("llm.workloads.general.model") == ""
+    assert payload["recommended"]["primary"]["model"] == "qwen3:8b"
+    assert payload["primary"] == ""
+    assert _config().get("llm.primary_model") == ""
 
 
 def test_recommend_is_advisory_unless_applied(monkeypatch):
@@ -208,16 +200,15 @@ def test_recommend_is_advisory_unless_applied(monkeypatch):
     # advisory: recommendations returned, selection untouched
     resp = client.post("/api/configuration/models/recommend", json={}).json()
     assert resp["ok"] is True
-    assert resp["workloads"]["general"]["model"] == "llama3.1:8b"
-    assert _config().get("llm.workloads.general.model") == ""
+    assert resp["primary"]["model"] == "llama3.1:8b"
+    assert _config().get("llm.primary_model") == ""
 
-    # apply=true: recommendations written via the verbatim selection path
+    # apply=true: recommendation written via the verbatim selection path
     resp2 = client.post("/api/configuration/models/recommend",
                         json={"apply": True}).json()
     assert resp2["ok"] is True
     assert "selection" in resp2
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
-    assert _config().get("llm.workloads.code.model") == "qwen2.5-coder:7b"
+    assert _config().get("llm.primary_model") == "llama3.1:8b"
 
 
 def test_install_completion_refreshes_recommendations_not_selection(monkeypatch):
@@ -230,9 +221,8 @@ def test_install_completion_refreshes_recommendations_not_selection(monkeypatch)
     )
     client, holder = _make_app(monkeypatch, ["llama3.1:8b", "nomic-embed-text"])
     client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "llama3.1:8b", "research": "",
-                      "code": ""}}).json()
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
+        "model": "llama3.1:8b"}).json()
+    assert _config().get("llm.primary_model") == "llama3.1:8b"
 
     # install qwen3:8b -> advisory recommendations change...
     holder["names"] += ["qwen3:8b"]
@@ -241,16 +231,15 @@ def test_install_completion_refreshes_recommendations_not_selection(monkeypatch)
     deadline = time.time() + 5
     while time.time() < deadline:
         payload = client.get("/api/models/discovery").json()
-        if payload["recommended"]["workloads"]["general"]["model"] == "qwen3:8b":
+        if payload["recommended"]["primary"]["model"] == "qwen3:8b":
             break
         time.sleep(0.05)
-    assert payload["recommended"]["workloads"]["general"]["model"] == "qwen3:8b"
+    assert payload["recommended"]["primary"]["model"] == "qwen3:8b"
     # ...but selection is never rewritten
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
+    assert _config().get("llm.primary_model") == "llama3.1:8b"
 
 
 def test_recommend_endpoint_never_installs(monkeypatch):
-    from fastapi.testclient import TestClient
     from novi.configuration.install import ModelInstaller
     calls = []
     monkeypatch.setattr(ModelInstaller, "pull",
@@ -261,9 +250,9 @@ def test_recommend_endpoint_never_installs(monkeypatch):
     assert calls == []  # recommendation must never pull/download models
 
 
-def _workloads_snapshot(client):
+def _primary_snapshot(client):
     snap = client.get("/api/configuration").json()
-    return snap["llm"]["workloads"]
+    return snap["llm"]["primary_model"]
 
 
 def _walk_keys(obj, prefix=""):
@@ -274,84 +263,16 @@ def _walk_keys(obj, prefix=""):
 
 
 def _has_retired_segment(key):
-    forbidden = {"mode", "auto", "roles", "presets", "activeExperience"}
-    return any(seg.lower() in forbidden for seg in key.split("."))
-
-
-def test_recommend_apply_single_workload_touches_only_that_workload(monkeypatch):
-    client, holder = _make_app(
-        monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"])
-    # establish an explicit, non-recommended selection for all workloads
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "qwen2.5-coder:7b",
-                      "research": "qwen2.5-coder:7b",
-                      "code": "qwen2.5-coder:7b"}})
-    before = _workloads_snapshot(client)
-
-    # apply only the "code" recommendation
-    resp = client.post("/api/configuration/models/recommend", json={
-        "apply": True, "workloads": ["code"]}).json()
-    assert resp["ok"] is True
-    after = _workloads_snapshot(client)
-
-    # code flipped to its recommendation; general/research byte-for-byte intact
-    assert after["code"]["model"] == "qwen2.5-coder:7b"
-    assert after["general"] == before["general"]
-    assert after["research"] == before["research"]
-
-
-def test_recommend_apply_single_workload_keeps_other_selections_verbatim(monkeypatch):
-    client, holder = _make_app(
-        monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b"])
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "not-installed:model",
-                      "research": "llama3.1:8b",
-                      "code": "qwen2.5-coder:7b"}})
-    before = _workloads_snapshot(client)
-
-    client.post("/api/configuration/models/recommend", json={
-        "apply": True, "workloads": ["general"]}).json()
-
-    after = _workloads_snapshot(client)
-    assert after["general"]["model"] == "llama3.1:8b"
-    # untouched workloads keep their verbatim (even not-installed) selections
-    assert after["research"] == before["research"]
-    assert after["code"] == before["code"]
-    assert _config().get("llm.workloads.research.model") == "llama3.1:8b"
-    assert _config().get("llm.workloads.code.model") == "qwen2.5-coder:7b"
-
-
-def test_recommend_apply_omitted_workloads_applies_all(monkeypatch):
-    client, holder = _make_app(monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b"])
-    resp = client.post("/api/configuration/models/recommend",
-                       json={"apply": True}).json()
-    assert resp["ok"] is True
-    assert _config().get("llm.workloads.general.model") == "llama3.1:8b"
-    assert _config().get("llm.workloads.research.model") == "llama3.1:8b"
-    assert _config().get("llm.workloads.code.model") == "qwen2.5-coder:7b"
-
-
-def test_recommend_apply_rejects_unknown_workloads(monkeypatch):
-    client, holder = _make_app(monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b"])
-    resp = client.post("/api/configuration/models/recommend", json={
-        "apply": True, "workloads": ["code", "no-such-workload"]}).json()
-    assert resp["ok"] is False
-    assert "unknown workload" in resp["error"]
-    # nothing was written
-    assert _config().get("llm.workloads.code.model") == ""
-    # non-list payloads are rejected too
-    resp2 = client.post("/api/configuration/models/recommend", json={
-        "apply": True, "workloads": "code"}).json()
-    assert resp2["ok"] is False
+    forbidden = {"mode", "auto", "roles", "presets", "activeExperience", "workloads"}
+    return any(seg.lower() in {f.lower() for f in forbidden} for seg in key.split("."))
 
 
 def test_selection_never_introduces_retired_keys(monkeypatch):
     client, holder = _make_app(
         monkeypatch, ["llama3.1:8b", "qwen2.5-coder:7b", "nomic-embed-text"])
     client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "llama3.1:8b", "research": "", "code": ""}})
-    client.post("/api/configuration/models/recommend", json={
-        "apply": True, "workloads": ["code"]})
+        "model": "llama3.1:8b"})
+    client.post("/api/configuration/models/recommend", json={"apply": True})
     snap = client.get("/api/configuration").json()
     for key in _walk_keys(snap):
         assert not _has_retired_segment(key), key
@@ -400,49 +321,42 @@ def test_delete_triggers_discovery_refresh(monkeypatch):
 def test_delete_selected_model_keeps_selection_intact(monkeypatch):
     _patch_delete(monkeypatch, True)
     client, _ = _make_app(monkeypatch, ["qwen3:8b", "llama3.1:8b"])
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "qwen3:8b", "research": "llama3.1:8b", "code": ""}})
+    client.post("/api/configuration/models/selection", json={"model": "qwen3:8b"})
     resp = client.post("/api/models/delete", json={"name": "qwen3:8b"}).json()
     assert resp["ok"] is True
-    after = _workloads_snapshot(client)
-    assert after["general"]["model"] == "qwen3:8b"
-    assert after["research"]["model"] == "llama3.1:8b"
-    assert after["code"]["model"] == ""
+    assert _primary_snapshot(client) == "qwen3:8b"
 
 
 def test_deleted_selected_model_is_reported_missing(monkeypatch):
     _patch_delete(monkeypatch, True)
     client, holder = _make_app(monkeypatch, ["qwen3:8b", "llama3.1:8b"])
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "qwen3:8b", "research": "", "code": ""}})
+    client.post("/api/configuration/models/selection", json={"model": "qwen3:8b"})
     # the daemon no longer has qwen3:8b
     holder["names"] = ["llama3.1:8b"]
     client.post("/api/models/delete", json={"name": "qwen3:8b"})
     payload = client.get("/api/models/discovery").json()
     assert "qwen3:8b" in payload["missingModels"]
     assert "qwen3:8b" not in payload["installedNames"]
-    assert payload["workloads"]["general"] == "qwen3:8b"
+    assert payload["primary"] == "qwen3:8b"
 
 
-def test_delete_unselected_model_leaves_selections_unchanged(monkeypatch):
+def test_delete_unselected_model_leaves_selection_unchanged(monkeypatch):
     _patch_delete(monkeypatch, True)
     client, _ = _make_app(monkeypatch, ["qwen3:8b", "llama3.1:8b"])
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "llama3.1:8b", "research": "llama3.1:8b", "code": "llama3.1:8b"}})
-    before = _workloads_snapshot(client)
+    client.post("/api/configuration/models/selection", json={"model": "llama3.1:8b"})
+    before = _primary_snapshot(client)
     client.post("/api/models/delete", json={"name": "qwen3:8b"})
-    assert _workloads_snapshot(client) == before
+    assert _primary_snapshot(client) == before
 
 
 def test_delete_failure_leaves_configuration_untouched(monkeypatch):
     _patch_delete(monkeypatch, False)
     client, _ = _make_app(monkeypatch, ["qwen3:8b"])
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "qwen3:8b", "research": "", "code": ""}})
+    client.post("/api/configuration/models/selection", json={"model": "qwen3:8b"})
     resp = client.post("/api/models/delete", json={"name": "qwen3:8b"}).json()
     assert resp["ok"] is False
     assert resp["name"] == "qwen3:8b"
-    assert _config().get("llm.workloads.general.model") == "qwen3:8b"
+    assert _config().get("llm.primary_model") == "qwen3:8b"
     # discovery still lists the model as installed (nothing changed)
     payload = client.get("/api/models/discovery").json()
     assert "qwen3:8b" in payload["installedNames"]
@@ -463,15 +377,15 @@ def test_delete_rejects_empty_or_missing_name(monkeypatch):
 def test_recommendations_may_change_after_delete_but_never_autoapplied(monkeypatch):
     _patch_delete(monkeypatch, True)
     client, holder = _make_app(monkeypatch, ["qwen3:8b"])
-    client.post("/api/configuration/models/selection", json={
-        "workloads": {"general": "qwen3:8b", "research": "", "code": ""}})
+    client.post("/api/configuration/models/selection", json={"model": "qwen3:8b"})
     before = client.get("/api/models/discovery").json()
-    assert before["recommended"]["workloads"]["general"]["model"] == "qwen3:8b"
+    assert before["recommended"]["primary"]["model"] == "qwen3:8b"
     # after deletion the available set changed: recommendation can move on…
     holder["names"] = ["llama3.1:8b"]
     client.post("/api/models/delete", json={"name": "qwen3:8b"})
     after = client.get("/api/models/discovery").json()
-    assert after["recommended"]["workloads"]["general"]["model"] == "llama3.1:8b"
+    assert after["recommended"]["primary"]["model"] == "llama3.1:8b"
     # …but the persisted selection is untouched and the model is reported missing
-    assert after["workloads"]["general"] == "qwen3:8b"
+    assert after["primary"] == "qwen3:8b"
+    assert after["model"] == "qwen3:8b"
     assert "qwen3:8b" in after["missingModels"]

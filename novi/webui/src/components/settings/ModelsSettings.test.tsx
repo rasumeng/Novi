@@ -83,7 +83,7 @@ describe('ModelsSettings - single primary surface', () => {
   it('renders exactly one primary selector, not three workload selectors', () => {
     renderPage()
     const section = selectionSection()
-    expect(section.getAllByText('Novi Model').length).toBeGreaterThanOrEqual(1)
+    expect(section.getAllByText('Model').length).toBeGreaterThanOrEqual(1)
     const selects = section.getAllByRole('combobox')
     expect(selects).toHaveLength(1)
     // No legacy workload labels/selectors
@@ -125,8 +125,7 @@ describe('ModelsSettings - single primary surface', () => {
   it('Use Recommended applies the single advisory recommendation', () => {
     const onApplyRecommended = vi.fn().mockResolvedValue({ ok: true })
     renderPage({ onApplyRecommended })
-    const section = within(screen.getByLabelText('Recommended models'))
-    fireEvent.click(section.getByRole('button', { name: /use recommended/i }))
+    fireEvent.click(selectionSection().getByTitle('Use the recommended model'))
     expect(onApplyRecommended).toHaveBeenCalledTimes(1)
     expect(onApplyRecommended.mock.calls[0]).toEqual([])
   })
@@ -159,7 +158,7 @@ describe('ModelsSettings - single primary surface', () => {
       discovery: { ...BASE, recommended: { primary: null, provisional: true } },
     })
     expect(selectionSection().getByText('No recommendation available')).toBeTruthy()
-    expect(screen.queryByLabelText('Recommended models')).toBeNull()
+    expect(selectionSection().queryByTitle('Use the recommended model')).toBeNull()
   })
 
   it('reports a selected-but-missing model without substituting', () => {
@@ -213,7 +212,6 @@ describe('ModelsSettings - memory embedding model (read-only)', () => {
   it('shows embedding model', () => {
     renderPage()
     const section = within(screen.getByLabelText('Memory embedding model'))
-    expect(section.getByText('Embedding Model')).toBeTruthy()
     expect(screen.getByText(/nomic-embed-text/)).toBeTruthy()
   })
 
@@ -243,7 +241,7 @@ describe('ModelsSettings - memory embedding model (read-only)', () => {
     renderPage()
     const section = within(screen.getByLabelText('Memory embedding model'))
     expect(section.getByText('missing')).toBeTruthy()
-    expect(section.getByText(/Install from setup \/ check Ollama/)).toBeTruthy()
+    expect(section.getByText(/Not installed — check General/)).toBeTruthy()
   })
 
   it('keeps the embedding model out of the primary chat-model dropdown', () => {

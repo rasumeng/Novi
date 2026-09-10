@@ -131,12 +131,12 @@ class NoviContext:
         """Lightweight wrapper around ModelService for intent classification & summarization.
 
         Provides the simple `invoke(prompt) -> str` API that `classify_intent`
-        and history compaction expect. Resolves the ``general`` workload's
-        configured model — the advisory LLM surface, not a router.
+        and history compaction expect. Resolves the primary model — the
+        advisory LLM surface, not a router.
         """
         from .simple_llm import SimpleLLM
         if self._simple_llm is None:
-            self._simple_llm = SimpleLLM(self.model_service, "general")
+            self._simple_llm = SimpleLLM(self.model_service)
         return self._simple_llm
 
     @property

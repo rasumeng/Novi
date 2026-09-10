@@ -46,6 +46,8 @@ dependencies = [
 
 [project.optional-dependencies]
 telegram = ["python-telegram-bot>=21.0"]
+desktop-build = ["pyinstaller>=6.0"]
+test = ["pytest>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/rasumeng/novi"

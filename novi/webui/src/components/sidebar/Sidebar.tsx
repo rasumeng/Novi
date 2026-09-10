@@ -345,10 +345,10 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                                   {isPinned && <Pin size={10} className="text-accent shrink-0" />}
                                 </button>
                                 <button
-                                  onClick={() => { if (onNewChatInProject) onNewChatInProject(p.id); else { onSelectProject?.(p.id); onNewChat() } }}
-                                  aria-label={`New chat in ${p.name}`}
+                                  onClick={() => onSelectProject?.(p.id)}
+                                  aria-label={`Open project ${p.name}`}
                                   className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 rounded hover:bg-base-700 text-base-400 hover:text-base-100 transition-all focus-visible:ring-2 focus-visible:ring-accent/20"
-                                  title="New chat"
+                                  title="Open project"
                                 >
                                   <Plus size={12} />
                                 </button>

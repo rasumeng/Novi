@@ -1,3 +1,4 @@
+// Conversation.tsx
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
@@ -35,6 +36,7 @@ interface Props {
   activeProject: Project | null
   backgroundRuns: BackgroundRunInfo[]
   onSend: (content: string, attachments?: Attachment[], deepResearch?: boolean) => void
+  onAttachFolder?: (path: string) => boolean
   onStop: () => void
   deepResearch?: boolean
   onToggleDeepResearch?: () => void
@@ -65,6 +67,7 @@ export function Conversation({
   activeProject,
   backgroundRuns,
   onSend,
+  onAttachFolder,
   onStop,
   deepResearch,
   onToggleDeepResearch,
@@ -102,13 +105,35 @@ export function Conversation({
     try { localStorage.setItem('novi_activity_panel', String(next)) } catch {}
   })
 
-  // stick to bottom as tokens stream in
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [conversation.messages])
 
   const hasStreamingAnswer = conversation.messages.some(m => m.role === 'assistant' && m.streaming)
+  const isEmpty = conversation.messages.length === 0
+
+  // Single composer instance — placed inline (centered, under the greeting)
+  // while the chat is empty, or in the pinned footer once a conversation
+  // exists. Never rendered twice.
+  const composer = (
+    <>
+      {busyReason && (
+        <div className="mb-2 text-[11px] text-base-500 px-1">{busyReason}</div>
+      )}
+      <PromptInput
+        generating={generating}
+        disabled={connection !== 'open' || !!busyReason}
+        onSend={(content, attachments) => { setSuggestionText(''); onSend(content, attachments, deepResearch) }}
+        onAttachFolder={onAttachFolder}
+        onStop={onStop}
+        onOpenSettings={onOpenSettings}
+        suggestion={suggestionText}
+        deepResearch={!!deepResearch}
+        onToggleDeepResearch={onToggleDeepResearch}
+      />
+    </>
+  )
 
   return (
     <div className="flex-1 flex min-w-0">
@@ -116,20 +141,27 @@ export function Conversation({
       <ProjectContextBar project={activeProject} />
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-          {conversation.messages.length === 0 ? (
-            <LandingPage
-              onSuggestion={setSuggestionText}
-              connection={connection}
-              conversations={conversations}
-              backgroundRuns={backgroundRuns}
-              generating={generating}
-              generatingElsewhereTitle={workingActivityTitle}
-              onOpenConversation={onOpenConversation}
-              timeline={timeline}
-            />
-          ) : (
-            conversation.messages.map((m, i, arr) => (
+        {isEmpty ? (
+          // Centered "talking to Novi" moment: greeting → composer → quiet
+          // context. Composer lives here, not in the footer, while empty.
+          <div className="min-h-full flex flex-col justify-center px-6 py-8">
+            <div className="max-w-3xl mx-auto w-full">
+              <LandingPage
+                onSuggestion={setSuggestionText}
+                conversations={conversations}
+                backgroundRuns={backgroundRuns}
+                generating={generating}
+                generatingElsewhereTitle={workingActivityTitle}
+                onOpenConversation={onOpenConversation}
+                timeline={timeline}
+                composer={composer}
+                onOpenSettings={() => onOpenSettings?.('models')}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+            {conversation.messages.map((m, i, arr) => (
               <div key={m.id}>
                 <MessageBubble message={m} />
                 {m.role === 'user' && (i === arr.length - 1 || i === arr.length - 2) && generating && !hasStreamingAnswer && (
@@ -160,28 +192,19 @@ export function Conversation({
                   </div>
                 )}
               </div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="border-t border-base-800/20 bg-base-950/60 backdrop-blur-sm px-6 py-3">
-        <div className="max-w-3xl mx-auto">
-          {busyReason && (
-            <div className="mb-2 text-[11px] text-base-500 px-1">{busyReason}</div>
-          )}
-          <PromptInput
-            generating={generating}
-            disabled={connection !== 'open' || !!busyReason}
-            onSend={(content, attachments) => { setSuggestionText(''); onSend(content, attachments, deepResearch) }}
-            onStop={onStop}
-            onOpenSettings={onOpenSettings}
-            suggestion={suggestionText}
-            deepResearch={!!deepResearch}
-            onToggleDeepResearch={onToggleDeepResearch}
-          />
+      {/* Footer composer only once a conversation has started */}
+      {!isEmpty && (
+        <div className="border-t border-base-800/20 bg-base-950/60 backdrop-blur-sm px-6 py-3">
+          <div className="max-w-3xl mx-auto">
+            {composer}
+          </div>
         </div>
-      </div>
+      )}
     </main>
       <ActivityPanel
         open={activityOpen}

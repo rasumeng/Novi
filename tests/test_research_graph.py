@@ -117,7 +117,7 @@ def test_graph_never_resolves_model():
     forbidden = (
         "ModelService", "ModelSelector", "ModelRecommendationEngine",
         "recommend", "apply_selection", "create_provider",
-        "configuration.resolver", "llm.workloads",
+        "configuration.resolver", "llm.primary_model",
     )
     found = _code_references(src, list(forbidden))
     assert not found, f"graph references forbidden authority: {found}"
@@ -129,7 +129,7 @@ def test_graph_state_has_no_configuration_or_checkpoint():
     from novi.graphs import state as st
 
     src = inspect.getsource(st)
-    forbidden = ("checkpointer", "checkpoint", "llm.workloads",
+    forbidden = ("checkpointer", "checkpoint", "llm.primary_model",
                  "apply_selection", "config")
     found = _code_references(src, list(forbidden))
     assert not found, f"graph state carries forbidden field: {found}"
@@ -291,8 +291,11 @@ def test_runtime_research_intent_goes_through_graph():
             return type("R", (), {"content": "graph answer"})
 
     class _ModelService:
-        def resolve(self, workload):
+        def resolve_primary(self):
             return ("ollama", "m1")
+
+        def validate(self, *a, **k):
+            return []
 
         def bind_model(self, model_name, tools, temperature=0.0):
             return _InvokeRunnable()

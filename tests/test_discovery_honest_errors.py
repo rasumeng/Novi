@@ -121,7 +121,7 @@ def test_error_shape_additive(monkeypatch):
         assert isinstance(data["ollamaError"], str)
         assert len(data["ollamaError"]) > 0
     # Original contract still intact
-    for key in ("hardware", "models", "missingModels", "installedNames", "workloads", "recommended"):
+    for key in ("hardware", "models", "missingModels", "installedNames", "primary", "model", "recommended"):
         assert key in data
 
 

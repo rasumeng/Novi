@@ -45,11 +45,12 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
   const [applying, setApplying] = useState(false)
   const [stateError, setStateError] = useState<string | null>(null)
   const [expandedWhy, setExpandedWhy] = useState<string | null>(null)
+  const [showManagement, setShowManagement] = useState(false)
 
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
 
-  const PRIMARY_LABEL = 'Novi Model'
-  const PRIMARY_DESC = "This model powers Novi's conversations, coding, research, and agent tasks."
+  const PRIMARY_LABEL = 'Model'
+  const PRIMARY_DESC = "This model powers Novi's conversations and tools."
 
   const refresh = async () => {
     setRefreshing(true)
@@ -110,7 +111,6 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
   )
 
   const singleRec = primaryRecommendation(discovery)
-  const anyRecommended = !!singleRec?.model
   const provisional = discovery.recommended?.provisional ?? false
 
   const isUnreachable = discovery.ollamaReachable === false || discovery.status === 'error' || discovery.status === 'degraded'
@@ -118,10 +118,7 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
   const ollamaError = discovery.ollamaError ?? (isUnreachable ? `Ollama not reachable at ${ollamaUrl}` : null)
 
   return (
-    <div className="space-y-8">
-      {/* 0. Hardware — reference context for every decision below, not a recommendation itself */}
-      <HardwareBar hardware={discovery.hardware} provisional={provisional} onRefresh={refresh} refreshing={refreshing} />
-
+    <div className="space-y-4">
       {/* Task 2.1 — honest Ollama discovery failure banner */}
       {isUnreachable && (
         <div data-testid="ollama-unreachable-banner" className="flex items-center justify-between gap-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/10">
@@ -153,77 +150,52 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
         </div>
       )}
 
-      {/* 1. Current selection — the thing the user came here to do, front and center */}
-      <section aria-label="Current selection">
-        <SectionHeader
-          title="Novi Model"
-          subtitle="This model powers Novi's conversations, coding, research, and agent tasks. Changes save immediately — recommendations below are advisory and never change your choice on their own."
-        />
-        <div className="space-y-2">
-          <SelectionRow
-            label={PRIMARY_LABEL}
-            desc={PRIMARY_DESC}
-            model={primary}
-            entry={modelByName(discovery, primary)}
-            installedModels={chatModels}
-            missing={primary !== '' && !discovery.installedNames.includes(primary)}
-            caps={(discovery.capabilities as any ?? null)}
-            recommended={singleRec?.model ?? ''}
-            recommendation={singleRec}
-            explanation={singleRec?.explanation ?? null}
-            expanded={expandedWhy === 'primary'}
-            onToggleWhy={() => setExpandedWhy(expandedWhy === 'primary' ? null : 'primary')}
-            saving={saving}
-            applying={applying}
-            onSelect={onSelect}
-            onUseRecommended={useRecommendedFor}
-          />
-        </div>
-      </section>
-
-      {/* 2. Advisory recommendations */}
-      {anyRecommended && singleRec && (
-        <RecommendedModels
-          rec={singleRec}
-          installedNames={discovery.installedNames}
+      <section aria-label="Current selection" className="space-y-2">
+        <SelectionRow
+          label={PRIMARY_LABEL}
+          desc={PRIMARY_DESC}
+          model={primary}
+          entry={modelByName(discovery, primary)}
+          installedModels={chatModels}
+          missing={primary !== '' && !discovery.installedNames.includes(primary)}
+          caps={(discovery.capabilities as any ?? null)}
+          recommended={singleRec?.model ?? ''}
+          recommendation={singleRec}
+          explanation={singleRec?.explanation ?? null}
+          expanded={expandedWhy === 'primary'}
+          onToggleWhy={() => setExpandedWhy(expandedWhy === 'primary' ? null : 'primary')}
+          saving={saving}
           applying={applying}
-          onUseRecommended={useRecommended}
+          onSelect={onSelect}
+          onUseRecommended={useRecommendedFor}
         />
-      )}
-
-      {/* Explicit-consent setup for missing recommended models */}
-      <RecommendedSetup
-        models={missingRecommended}
-        installing={installing}
-        onInstall={onInstall}
-        onDismiss={onDismiss}
-      />
-
-      {/* 2b. Memory — embedding model (read-only; never a chat choice) */}
-      <section aria-label="Memory embedding model">
-        <SectionHeader
-          title="Memory"
-          subtitle="Embedding model powering Novi Memory."
-        />
-        <div className="p-3.5 rounded-xl bg-base-800/50 border border-base-700 flex items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm text-base-100 font-medium">Embedding Model</p>
-            <p className="font-mono text-sm text-base-200 truncate mt-0.5">{embeddingName}</p>
-            {!embeddingInstalled && (
-              <p className="text-[11px] text-amber-400 mt-1">
-                Not installed — Install from setup / check Ollama
-              </p>
-            )}
-          </div>
-          <StatusBadge status={embeddingInstalled ? 'installed' : 'missing'} />
-        </div>
       </section>
+    
 
-      {/* 3. Model library */}
-      <section>
+    
+
+        <RecommendedSetup
+          models={missingRecommended}
+          installing={installing}
+          onInstall={onInstall}
+          onDismiss={onDismiss}
+        />
+
+        <section aria-label="Memory embedding model">
+          <SectionHeader title="Memory model" subtitle="Used only to help Novi remember; it is not your chat model." />
+          <div className="p-3 rounded-xl  border border-base-700 flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-sm text-base-200 truncate">{embeddingName}</p>
+              {!embeddingInstalled && <p className="text-[11px] text-amber-400 mt-1">Not installed — check General.</p>}
+            </div>
+            <StatusBadge status={embeddingInstalled ? 'installed' : 'missing'} />
+          </div>
+        </section>
+
+        <section>
         <SectionHeader
           title="Model library"
-          subtitle="Models installed on this machine plus curated candidates Novi can recommend. Not an exhaustive catalog. Install is explicit — nothing happens until you choose."
+          subtitle="Installed models and models available to install."
         />
         <div className="flex items-center gap-2 mb-3">
           <input
@@ -266,7 +238,8 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
             </p>
           )}
         </div>
-      </section>
+        </section>
+     
     </div>
   )
 }
@@ -335,84 +308,6 @@ function HardwareFact({ icon, label, value, unknown }: { icon?: React.ReactNode;
 
 // ── 2. Advisory recommendations ──────────────────────────────────────────
 
-function RecommendedModels({ rec, installedNames, applying, onUseRecommended }: {
-  rec: PrimaryRecommendation
-  installedNames: string[]
-  applying: boolean
-  onUseRecommended: () => void
-}) {
-  const installed = installedNames.includes(rec.model)
-  return (
-    <section aria-label="Recommended models">
-      <div className="p-4 rounded-xl border border-sky-500/30 bg-sky-500/5 space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles size={14} className="text-sky-400 shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-base-100">Recommended models</p>
-              <p className="text-[11px] text-base-500 leading-relaxed mt-0.5">
-                Suggestions computed from your hardware and installed models. Advisory only — nothing changes until you choose.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onUseRecommended}
-            disabled={applying}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-60 shrink-0"
-          >
-            {applying ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            {applying ? 'Applying…' : 'Use Recommended'}
-          </button>
-        </div>
-        <div className="space-y-2">
-          <div className="p-3 rounded-lg bg-base-900/60 border border-base-700">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm text-base-100 font-mono truncate">Novi Model</p>
-                  <span className="text-[10px] text-base-400 bg-base-800 border border-base-700 px-1.5 py-0.5 rounded">
-                    {installed ? 'installed' : 'not installed'}
-                  </span>
-                </div>
-                <p className="text-sm text-base-200 font-mono truncate mt-1">{rec.model}</p>
-                {rec.reasons.length > 0 && (
-                  <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
-                    <Sparkles size={11} /> {rec.reasons.join(' · ')}
-                  </p>
-                )}
-                {(rec.caveats.length > 0 || rec.qualification) && (
-                  <div className="flex flex-wrap items-center gap-1 mt-1">
-                    {rec.qualification && (
-                      <span className="text-[10px] text-base-400 capitalize">{rec.qualification}</span>
-                    )}
-                    {rec.caveats.map((c) => (
-                      <span key={c} className="flex items-center gap-1 text-[10px] text-amber-400">
-                        <AlertTriangle size={9} /> {c}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <CapabilityChips caps={{
-                  vision: rec.capabilities?.includes('vision') || rec.visionCapable,
-                  tools: rec.capabilities?.includes('tools'),
-                  reasoning: rec.capabilities?.includes('reasoning'),
-                  thinking: rec.capabilities?.includes('reasoning'),
-                  audio: rec.capabilities?.includes('audio'),
-                  coding: rec.capabilities?.includes('coding'),
-                }} />
-              </div>
-            </div>
-          </div>
-        </div>
-        <p className="text-[10px] text-base-500 leading-relaxed">
-          These are suggestions — you control the actual selected model. A recommendation changing never changes your
-          selection; only the &ldquo;Use Recommended&rdquo; action does.
-        </p>
-      </div>
-    </section>
-  )
-}
-
 // ── M3.4 — Recommended model setup (explicit consent) ─────────────────────
 
 function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
@@ -424,13 +319,12 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
   if (models.length === 0) return null
   return (
     <section aria-label="Recommended model setup">
-      <div className="p-4 rounded-xl border border-sky-500/30 bg-sky-500/5 space-y-3">
+      
         <div className="flex items-center gap-2">
-          <Sparkles size={14} className="text-sky-400 shrink-0" />
           <div>
-            <p className="text-sm font-medium text-base-100">Recommended model unavailable</p>
-            <p className="text-[11px] text-base-500 leading-relaxed mt-0.5">
-              Novi would prefer these for your hardware, but they are not installed.
+            <p className="text-sm font-medium text-base-100 m-1">Recommended model unavailable</p>
+            <p className="text-[11px] text-base-500 leading-relaxed m-1">
+              Novi would recommend these for your hardware, but they are not installed.
               Installing happens only when you choose — skipping keeps your current eligible models.
             </p>
           </div>
@@ -452,11 +346,7 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
                         <span className="text-[10px] text-base-500">~{m.approxRamGb} GB RAM footprint</span>
                       )}
                     </div>
-                    {m.reasons.length > 0 && (
-                      <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
-                        <Sparkles size={11} /> {m.reasons.join(' · ')}
-                      </p>
-                    )}
+                   
                     {busy && (
                       <p className="text-[11px] text-base-500 mt-1">
                         {busy.phase === 'done' ? 'Install complete' : `${busy.phase}${busy.pct != null ? ` — ${busy.pct}%` : ''}`}
@@ -486,7 +376,6 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
             )
           })}
         </div>
-      </div>
     </section>
   )
 }
@@ -794,11 +683,7 @@ function ModelRow({ model, install, onInstall, onDelete }: {
             <AlertTriangle size={10} className="shrink-0" /> Stale inventory — showing cached model information
           </p>
         )}
-        {model.reasons.length > 0 && (
-          <p className="flex items-center gap-1 text-[11px] text-accent mt-1">
-            <Sparkles size={11} /> {model.reasons.join(' · ')}
-          </p>
-        )}
+        
         {[model.parameterCount, model.quantization, model.family,
           model.contextLength ? `${model.contextLength.toLocaleString()} ctx` : null]
             .filter(Boolean).length > 0 && (

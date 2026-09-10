@@ -1,6 +1,6 @@
 [package]
 name = "novi-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Novi desktop shell (Tauri) wrapping the Novi WebUI"
 authors = ["Novi"]
 license = "MIT"

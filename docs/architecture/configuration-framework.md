@@ -406,20 +406,20 @@ Migration of real user files: one-directional, idempotent (old `models` →
 ## Phase 5 — Dynamic Model Intelligence
 
 The model layer is a *dynamic, evidence-based* intelligence system. It keeps
-the strict runtime contract (workload → selected model → validate capabilities
+the strict runtime contract (strategy → primary model → validate capabilities
 → execute) and adds real model metadata with provenance.
 
 ### Locked constraints
 
 1. **No Automatic/Custom model mode.** No `models.mode`, no automatic/custom
    semantics under any name, no separate automatic/custom selection path. The
-   only persisted selection is `llm.workloads.{general, research, code}.model`.
+   only persisted selection is `llm.primary_model`.
 2. **No authoritative hardcoded model universe.** `SEED_MODEL_FACTS`
    (`model_seeds.py`) is curated *seed/evidence metadata*, never authoritative:
    it does not define the universe, does not gate discovery, and is not
    required for a model to receive recommendations.
-3. **Capabilities belong to models**, not workloads.
-4. **Recommendations are advisory only** and never mutate `llm.workloads.*`.
+3. **Capabilities belong to models**, not strategies.
+4. **Recommendations are advisory only** and never mutate `llm.primary_model`.
    `POST /api/configuration/models/recommend` `{"apply": true}` is the only
    apply path; installing/refreshing discovery never silently selects.
 5. **Runtime strict:** `ModelSelector` resolves verbatim; no ranking, no

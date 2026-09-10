@@ -24,6 +24,7 @@ interface Props {
   onClose: () => void
   initialSection?: SectionId
   onCreateSkill?: () => void
+  onSectionChange?: (section: SectionId) => void
 }
 
 const PAGE_LABEL: Record<string, string> = {
@@ -34,6 +35,16 @@ const PAGE_LABEL: Record<string, string> = {
   connectors: 'Connectors',
   permissions: 'Permissions',
   developer: 'Developer',
+}
+
+const NAV_GROUP: Record<string, string> = {
+  general: 'Get started',
+  models: 'Get started',
+  memory: 'Get started',
+  skills: 'Customize',
+  connectors: 'Control',
+  permissions: 'Control',
+  developer: 'Advanced',
 }
 
 // Beta IA hides Developer from the sidebar nav. Advanced escape hatch:
@@ -49,9 +60,9 @@ function isDevUnlocked(): boolean {
   }
 }
 
-export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: Props) {
-  const framework = useFrameworkSettings()
+export function SettingsModal({ open, onClose, initialSection, onCreateSkill, onSectionChange }: Props) {
   const [section, setSection] = useState<SectionId>('general')
+  const framework = useFrameworkSettings()
   const [search, setSearch] = useState('')
   const [tools, setTools] = useState<ToolInfo[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
@@ -61,7 +72,10 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
 
   const schema = framework.schema
 
-  const migrateSection = (target: SectionId) => setSection(target)
+  const migrateSection = (target: SectionId) => {
+    setSection(target)
+    onSectionChange?.(target)
+  }
 
   const filteredSections = useMemo(() => {
     const pages = SECTIONS.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))
@@ -130,11 +144,15 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                   />
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto py-1">
-                {filteredSections.map((s) => (
+              <div className="flex-1 overflow-y-auto py-2">
+                {filteredSections.map((s, index) => (
+                  <div key={s.id}>
+                  {(index === 0 || NAV_GROUP[s.id] !== NAV_GROUP[filteredSections[index - 1].id]) && (
+                    <p className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-base-600">{NAV_GROUP[s.id]}</p>
+                  )}
                   <button
                     key={s.id}
-                    onClick={() => setSection(s.id as SectionId)}
+                    onClick={() => migrateSection(s.id as SectionId)}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors ${
                       section === s.id
                         ? 'bg-base-800 text-base-100 border-l-2 border-accent'
@@ -144,6 +162,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     <s.icon size={14} />
                     {s.label}
                   </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -172,6 +191,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill }: 
                     installing={framework.installs}
                     onInstall={framework.install}
                     onNavigate={migrateSection}
+                    onRefresh={framework.refreshDiscovery}
                     loading={false}
                   />
                 )}

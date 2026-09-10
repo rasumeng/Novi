@@ -1,27 +1,19 @@
 """Model recommendation + selection.
 
-Workloads are the persisted user surface: ``llm.workloads.{general,research,
-code}.model``. Selection is user intent and is written verbatim through the
-configuration framework — it is never silently substituted when a model is not
-installed. Recommendation is pure, advisory output: it never writes any config.
+``llm.primary_model`` is the single persisted user surface. Selection is user
+intent and is written verbatim through the configuration framework — it is
+never silently substituted when a model is not installed. Recommendation is
+pure, advisory output: it never writes any config.
 
 Design constraints honoured here:
 * ``recommend()`` is a pure function of (hardware, installed, catalog). It
-  produces per-workload advice and evidence only; it never mutates state.
-* ``apply_selection()`` is the ONLY write path for workload selection. It
-  persists exactly ``llm.workloads.*`` and never re-derives or falls back.
-* Ranking is evidence-based (Phase 5.5): capability evidence strength, hardware
-  fit, evidence confidence and breadth. An unseeded model with real runtime
-  capability evidence is ranked on that evidence — not penalized for lacking
-  seed membership. A deterministic name tie-break is used ONLY as a final,
-  stable ordering mechanism, never as a quality signal.
-* VRAM is never invented; a missing requirement stays unknown. Curated VRAM
-  caveats are respected via the ``min_vram_gb`` hint.
-* Capabilities belong to models, not config: a recommendation carries the
-  model's derived capabilities (incl. vision) as evidence only.
-* Capability evidence may come from curated seed facts, runtime-reported
-  capabilities, or weak name inference. Unknown models with real evidence
-  participate; pure name-inference-only models rank last among candidates.
+  produces one overall primary-model recommendation and evidence only.
+* ``apply_selection()`` is the ONLY write path for model selection. It
+  persists exactly ``llm.primary_model`` and never re-derives or falls back.
+* Ranking is evidence-based: capability evidence strength, hardware fit,
+  evidence confidence and breadth. Deterministic name tie-break last only.
+* VRAM is never invented; a missing requirement stays unknown.
+* Capabilities belong to models, not config.
 * The catalog is NOT authoritative and does NOT define the model universe.
 """
 
@@ -44,17 +36,31 @@ from .recommendation import (
 )
 
 
-# The persisted selection surface. A workload is a model selection slot; the
-# selected model's capabilities are derived from the model itself.
-WORKLOADS = ["general", "research", "code"]
+# The persisted selection surface: one user-configured primary model.
+PRIMARY_MODEL_KEY = "llm.primary_model"
 
-# Capability each workload is recommended against (capabilities belong to
-# models; this only drives which installed model fits best).
-WORKLOAD_CAPABILITY = {
-    "general": "chat",
-    "research": "reasoning",
-    "code": "coding",
-}
+# Execution strategies select behavior, never models. All strategies use the
+# primary model. Kept for classification compatibility only.
+STRATEGIES = ("chat", "code", "research")
+
+# Overall recommendation weighs general capability breadth: a primary brain
+# must handle conversation, tools, and reasoning. Coding/research are
+# execution strategies, not hard binary capabilities.
+PRIMARY_CAPABILITIES = ("chat", "tools", "reasoning", "coding")
+
+
+def get_primary_model(configuration=None, config: dict | None = None) -> str:
+    """Return the user's selected primary model (verbatim, may be "")."""
+    if configuration is not None:
+        try:
+            value = configuration.get(PRIMARY_MODEL_KEY, "")
+        except Exception:
+            value = ""
+        return value.strip() if isinstance(value, str) else ""
+    cfg = config or {}
+    llm = cfg.get("llm", {}) if isinstance(cfg, dict) else {}
+    value = llm.get("primary_model", "") if isinstance(llm, dict) else ""
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _installed_names(installed) -> set[str]:
@@ -231,12 +237,10 @@ class RecommendationExplanation:
 
 
 @dataclass
-class WorkloadRecommendation:
-    """Advisory per-workload recommendation (derived, never persisted)."""
+class PrimaryRecommendation:
+    """Advisory primary-model recommendation (derived, never persisted)."""
 
-    workload: str
     model: str
-    capability: str = ""
     qualification: Optional[Qualification] = None
     hardware_confidence: DetectionConfidence = DetectionConfidence.UNKNOWN
     reasons: list[str] = field(default_factory=list)
@@ -247,9 +251,7 @@ class WorkloadRecommendation:
 
     def to_dict(self) -> dict:
         return {
-            "workload": self.workload,
             "model": self.model,
-            "capability": self.capability,
             "qualification": self.qualification.value if self.qualification else "",
             "hardwareConfidence": self.hardware_confidence.value,
             "reasons": self.reasons,
@@ -262,9 +264,9 @@ class WorkloadRecommendation:
 
 @dataclass
 class Recommendations:
-    """Pure advisory output of ``recommend()``."""
+    """Pure advisory output of ``recommend()``: one primary recommendation."""
 
-    workloads: dict[str, WorkloadRecommendation] = field(default_factory=dict)
+    primary: PrimaryRecommendation | None = None
     provisional: bool = False
     hardware_confidence: DetectionConfidence = DetectionConfidence.UNKNOWN
 
@@ -272,37 +274,47 @@ class Recommendations:
         return {
             "hardwareConfidence": self.hardware_confidence.value,
             "provisional": self.provisional,
-            "workloads": {w: r.to_dict() for w, r in self.workloads.items()},
+            "primary": self.primary.to_dict() if self.primary else None,
         }
 
 
-def _pick_workload_model(
-    workload: str, capability: str, hw: HardwareProfile,
-    evidence: dict[str, _CandidateEvidence], seen: set[str],
+def _pick_primary_model(
+    hw: HardwareProfile,
+    evidence: dict[str, _CandidateEvidence],
     provisional: bool = False,
-) -> Optional[tuple[str, WorkloadRecommendation]]:
-    """Deterministically pick the best installed model for ``capability``.
+) -> Optional[tuple[str, PrimaryRecommendation]]:
+    """Deterministically pick best installed model overall.
 
-    Returns (model_name, WorkloadRecommendation) or None if no usable model.
-    ``seen`` tracks models already recommended; a not-yet-used model with an
-    identical rank is preferred (better coverage), but reuse-avoidance never
-    outranks VRAM/evidence/qualification/breadth constraints.
+    Scores each candidate across PRIMARY_CAPABILITIES and picks highest
+    aggregate evidence. Returns (model_name, PrimaryRecommendation) or None.
     """
-    ranked = []
+    scored = []
     for name, cand in evidence.items():
-        res = _candidate_rank(cand, capability, hw)
-        if res is not None:
-            ranked.append((res[0], name, cand, res[1]))
-    ranked.sort(key=lambda x: (*x[0], x[1] in seen, x[1]))
-
-    if not ranked:
+        if cand.record.qualification == Qualification.INCOMPATIBLE:
+            continue
+        per_cap = []
+        total = 0
+        best_strength = EvidenceStrength.NONE
+        for capability in PRIMARY_CAPABILITIES:
+            res = _candidate_rank(cand, capability, hw)
+            if res is None:
+                continue
+            rank, score = res
+            per_cap.append((capability, rank, score))
+            total += 1
+        if not per_cap:
+            continue
+        per_cap.sort(key=lambda x: x[1])
+        _, _, best = per_cap[0]
+        scored.append((total, per_cap[0][1], name, cand, best, per_cap))
+    if not scored:
         return None
-
-    _, name, cand, score = ranked[0]
+    scored.sort(key=lambda x: (-x[0], *x[1], x[2]))
+    total, _, name, cand, score, per_cap = scored[0]
     grade = score.strength
     fit = score.fit.fit
     qual = cand.record.qualification
-    reasons = [f"capability '{capability}'"]
+    reasons = [f"covers {total} primary capabilities"]
     if grade == EvidenceStrength.RUNTIME:
         reasons.append("runtime reported capability")
     elif grade == EvidenceStrength.SEED_TRUSTED:
@@ -322,28 +334,20 @@ def _pick_workload_model(
     elif fit == HardwareFit.UNKNOWN:
         reasons.append("hardware fit unknown")
     caveats = list(cand.record.caveats)
-    low_confidence = grade in (EvidenceStrength.SEED_EXPERIMENTAL,
-                               EvidenceStrength.NAME_INFERENCE) \
-        or fit == HardwareFit.DOES_NOT_FIT
-    if low_confidence:
-        caveats.append("No trusted/supported candidate installed; using "
-                       "experimental model as last resort.")
-
+    if grade in (EvidenceStrength.SEED_EXPERIMENTAL, EvidenceStrength.NAME_INFERENCE) \
+            or fit == HardwareFit.DOES_NOT_FIT:
+        caveats.append("No trusted/supported candidate installed; using experimental model as last resort.")
     alternatives = []
-    for _, alt_name, alt_cand, alt_score in ranked[1:]:
+    for _, _, alt_name, alt_cand, alt_score, _ in scored[1:]:
         alternatives.append({
             "model": alt_name,
             "fit": alt_score.fit.fit.value,
             "strength": _strength_label(alt_score.strength),
-            "capability": capability,
             "qualification": alt_score.qualification.value,
             "reasons": _alt_reasons(alt_score),
         })
-
-    selection = WorkloadRecommendation(
-        workload=workload,
+    selection = PrimaryRecommendation(
         model=name,
-        capability=capability,
         qualification=qual,
         hardware_confidence=hw.confidence,
         reasons=reasons,
@@ -351,16 +355,9 @@ def _pick_workload_model(
         capabilities=sorted(cand.capabilities),
         vision_capable=bool("vision" in cand.capabilities),
         explanation=RecommendationExplanation(
-            provenance={
-                "source": score.source or "",
-                "confidence": score.confidence,
-            },
-            hardwareFit={
-                "fit": score.fit.fit.value,
-                "confidence": hw.confidence.value,
-                "strength": score.fit.strength,
-                "basis": list(score.fit.sources),
-            },
+            provenance={"source": score.source or "", "confidence": score.confidence},
+            hardwareFit={"fit": score.fit.fit.value, "confidence": hw.confidence.value,
+                         "strength": score.fit.strength, "basis": list(score.fit.sources)},
             alternatives=alternatives,
             provisional=provisional,
         ),
@@ -373,78 +370,50 @@ def recommend(
     installed=None,
     catalog: Optional[dict] = None,
 ) -> Recommendations:
-    """Compute advisory per-workload model recommendations.
+    """Compute advisory primary-model recommendation.
 
     Pure: accepts (hardware, installed, catalog) and returns evidence; it never
     reads or writes configuration.
-
-    ``installed``: iterable of model names (strings) or ModelRecord/DiscoveredModel
-    objects (their ``.name`` and capability evidence are used). ``catalog``
-    defaults to the curated seed facts and is advisory only.
     """
     if hardware is None:
         hardware = detect_hardware()
-
     evidence = _candidate_evidence(installed, catalog)
-
     recs = Recommendations(hardware_confidence=hardware.confidence)
-
-    if hardware.confidence in (DetectionConfidence.LOW,
-                               DetectionConfidence.UNKNOWN):
+    if hardware.confidence in (DetectionConfidence.LOW, DetectionConfidence.UNKNOWN):
         recs.provisional = True
-
-    seen: set[str] = set()
-    for workload, capability in WORKLOAD_CAPABILITY.items():
-        result = _pick_workload_model(workload, capability, hardware,
-                                      evidence, seen, provisional=recs.provisional)
-        if result is None:
-            # No usable candidate: recommend nothing, never fabricate.
-            recs.workloads[workload] = WorkloadRecommendation(
-                workload=workload,
-                model="",
-                capability=capability,
-                hardware_confidence=hardware.confidence,
-                reasons=["no installed candidate for capability"],
-            )
-            continue
-        name, selection = result
-        seen.add(name)
-        recs.workloads[workload] = selection
-
+    result = _pick_primary_model(hardware, evidence, provisional=recs.provisional)
+    if result is None:
+        recs.primary = PrimaryRecommendation(
+            model="",
+            hardware_confidence=hardware.confidence,
+            reasons=["no installed candidate"],
+        )
+    else:
+        _, recs.primary = result
     return recs
 
 
-def apply_selection(
-    configuration, workloads, installed=None, by: str = "user",
-) -> dict:
-    """Persist the user's workload selection through the configuration framework.
+def _normalize_model_value(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def apply_selection(configuration, model: str = "", installed=None, by: str = "user") -> dict:
+    """Persist the user's primary model selection.
 
     The ONLY write path for model selection. Writes exactly
-    ``llm.workloads.<workload>.model`` for each workload. Values are persisted
-    verbatim — a model that is not installed is kept, reported as
-    ``not-installed``, and never silently substituted.
-
-    ``workloads``: {workload: model-name} mapping. ``installed``: optional
-    iterable of installed model names (or ModelRecord objects) used only to
-    compute the ``installed``/``not-installed``/``unset`` status labels.
-
-    Returns {"workloads": {workload: {"model": ..., "status": ...}}}.
+    ``llm.primary_model`` verbatim.
     """
+    model = _normalize_model_value(model)
+    configuration.set(PRIMARY_MODEL_KEY, model, by=by)
     installed_names = _installed_names(installed)
-    result = {}
-    for workload in WORKLOADS:
-        model = workloads.get(workload) if isinstance(workloads, dict) else ""
-        if not isinstance(model, str):
-            model = ""
-        model = model.strip()
-        configuration.set(f"llm.workloads.{workload}.model", model, by=by)
-        if not model:
-            status = "unset"
-        elif installed is not None and model not in installed_names:
-            status = "not-installed"
-        elif installed is not None:
-            status = "installed"
-        else:
-            status = "configured"
-        result[workload] = {"model": model, "status": status}
-    return {"workloads": result}
+    if not model:
+        status = "unset"
+    elif installed is not None and model not in installed_names:
+        status = "not-installed"
+    elif installed is not None:
+        status = "installed"
+    else:
+        status = "configured"
+    return {"model": model, "status": status, "primary": {"model": model, "status": status}}

@@ -24,23 +24,41 @@ export function WindowControls() {
 
   useEffect(() => {
     const updateMaximizedState = async () => {
-      setIsMaximized(await appWindow.isMaximized())
+      try {
+        setIsMaximized(await appWindow.isMaximized())
+      } catch {
+        // The webview can paint before its native window bridge is ready.
+        // Keep the startup screen responsive and let the next resize update it.
+      }
     }
 
     updateMaximizedState()
 
     let unlisten: (() => void) | undefined
 
-    appWindow.onResized(() => {
+    void appWindow.onResized(() => {
       updateMaximizedState()
     }).then((cleanup) => {
       unlisten = cleanup
-    })
+    }).catch(() => {})
 
     return () => {
       unlisten?.()
     }
   }, [appWindow])
+
+  const toggleMaximize = async () => {
+    try {
+      await appWindow.toggleMaximize()
+    } catch {
+      return
+    }
+    // The resize event can arrive before the native maximize state settles.
+    // Read it again after the toggle so the glyph immediately reflects reality.
+    try {
+      setIsMaximized(await appWindow.isMaximized())
+    } catch {}
+  }
 
   if (isMac) {
     return (
@@ -74,7 +92,7 @@ export function WindowControls() {
         {/* Maximize / Restore */}
         <button
           type="button"
-          onClick={() => appWindow.toggleMaximize()}
+          onClick={() => void toggleMaximize()}
           className="group flex h-3 w-3 items-center justify-center rounded-full bg-green-500"
           aria-label={isMaximized ? 'Restore' : 'Maximize'}
           title={isMaximized ? 'Restore' : 'Maximize'}
@@ -103,7 +121,7 @@ export function WindowControls() {
       {/* Maximize / Restore */}
       <button
         type="button"
-        onClick={() => appWindow.toggleMaximize()}
+        onClick={() => void toggleMaximize()}
         className="flex h-full w-12 items-center justify-center text-base-400 transition-colors hover:bg-base-800 hover:text-base-100"
         aria-label={isMaximized ? 'Restore' : 'Maximize'}
         title={isMaximized ? 'Restore' : 'Maximize'}

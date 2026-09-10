@@ -177,13 +177,25 @@ def _make_runtime(model_name: str):
     from novi.runtime.runtime import NoviRuntime
 
     class FakeModelService:
-        def __init__(self, mapping):
-            self.mapping = mapping
+        def __init__(self, model):
+            self._model = model
 
-        def resolve(self, workload):
-            return (workload, self.mapping.get(workload, ""))
+        def resolve_primary(self):
+            return ("", self._model)
 
-    svc = FakeModelService({"general": model_name, "research": model_name, "code": model_name})
+        def client(self, temperature=0.0):
+            raise AssertionError("stub: use _bind_runnable")
+
+        def bind_model(self, name, tools, temperature=0.0):
+            raise AssertionError("stub: use _bind_runnable")
+
+        def client_for_model(self, name, temperature=0.0):
+            raise AssertionError("stub: use _bind_runnable")
+
+        def validate(self, *a, **k):
+            return []
+
+    svc = FakeModelService(model_name)
     # Minimal cfg; runtime will read ollama url from cfg
     rt = NoviRuntime(model_service=svc, cfg={"runtime": {}}, simple_llm=None)
     # Ensure selector url points to localhost for mocking
@@ -219,11 +231,11 @@ def test_runtime_allows_unknown_vision_with_trace(monkeypatch):
     # We'll drive run_stream until after validation; easiest is to check that no error yielded for unknown with live success.
     # Mock retrieve/orchestrator to avoid extra.
     rt._orchestrator = None
-    # Force workload resolution to use our model
+    # Force strategy resolution to use our model
     events = list(rt.run_stream(user_input="hi", attachments=[{"type": "image", "name": "a.png", "path": "D:/tmp/fake.png", "mime": "image/png"}]))
     kinds = [k for k, *_ in events]
-    # Should not contain error about does not support image
-    assert not any(k == "error" and "does not support image" in str(v) for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
+    # Should not contain user-friendly vision error
+    assert not any(k == "error" and "support image" in str(v).lower() for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
     # Should contain capability_unverified trace when live required? In this case live succeeded so supported -> no trace needed
     # For unknown that succeeded, it's now supported, so no verification_failed trace.
     # Instead test verification_failed allows.
@@ -245,7 +257,7 @@ def test_runtime_allows_verification_failed_with_notice(monkeypatch):
     events = list(rt.run_stream(user_input="hi", attachments=[{"type": "image", "name": "a.png", "path": "D:/tmp/fake.png", "mime": "image/png"}]))
     kinds = [k for k, *_ in events]
     # Should not block as unsupported
-    assert not any(k == "error" and "does not support image" in str(v) for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
+    assert not any(k == "error" and "support image" in str(v).lower() for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
     # Should have trace with capability_unverified
     trace_texts = [e[1].summary if hasattr(e[1], "summary") else str(e[1]) for e in events if e[0] == "trace"]
     assert any("capability_unverified" in t for t in trace_texts)
@@ -262,7 +274,7 @@ def test_runtime_blocks_known_unsupported(monkeypatch):
     rt._bind_runnable = lambda ctx, lc_tools: FakeRunnable()  # type: ignore
     rt._orchestrator = None
     events = list(rt.run_stream(user_input="hi", attachments=[{"type": "image", "name": "a.png", "path": "D:/tmp/fake.png", "mime": "image/png"}]))
-    assert any(k == "error" and "does not support image" in str(v) for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
+    assert any(k == "error" and "support image" in str(v).lower() for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
 
 
 def test_runtime_blocks_unsupported_via_live(monkeypatch):
@@ -279,4 +291,4 @@ def test_runtime_blocks_unsupported_via_live(monkeypatch):
     rt._bind_runnable = lambda ctx, lc_tools: FakeRunnable()  # type: ignore
     rt._orchestrator = None
     events = list(rt.run_stream(user_input="hi", attachments=[{"type": "image", "name": "a.png", "path": "D:/tmp/fake.png", "mime": "image/png"}]))
-    assert any(k == "error" and "does not support image" in str(v) for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])
+    assert any(k == "error" and "support image" in str(v).lower() for k, v in [(e[0], e[1] if len(e) > 1 else "") for e in events])

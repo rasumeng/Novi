@@ -317,3 +317,19 @@ export async function dismissRecommendedModel(name: string): Promise<{ ok: boole
     return { ok: false, error: 'request failed' }
   }
 }
+
+export interface SystemHealth {
+  ready: boolean
+  ollama: { ready: boolean; url: string; error?: string | null }
+  primaryModel: { name: string; ready: boolean }
+  embedding: { model: string; ready: boolean; dimension: number; error?: string | null }
+}
+
+export async function fetchSystemHealth(): Promise<SystemHealth | null> {
+  try {
+    const response = await fetch(`${API_BASE}/api/health`)
+    return response.ok ? await response.json() as SystemHealth : null
+  } catch {
+    return null
+  }
+}

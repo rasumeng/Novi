@@ -63,9 +63,15 @@ class FakeModelService:
         self._runnable = runnable
         self.resolved = []
 
-    def resolve(self, workload):
-        self.resolved.append(workload)
+    def resolve_primary(self):
+        self.resolved.append("primary")
         return ("ollama", "parity-model")
+
+    def validate(self, *a, **k):
+        return []
+
+    def client(self, temperature=0.0):
+        return self._runnable
 
     def bind_model(self, name, tools=None, temperature=0.0):
         return self._runnable
@@ -75,8 +81,11 @@ class FakeModelService:
 
 
 class UnavailableService:
-    def resolve(self, workload):
-        raise ModelUnavailableError(workload, None, [])
+    def resolve_primary(self):
+        raise ModelUnavailableError("parity-model", [])
+
+    def validate(self, *a, **k):
+        return [ModelUnavailableError("parity-model", [])]
 
 
 class FakeBrain:

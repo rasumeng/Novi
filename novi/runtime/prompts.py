@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from .strategies import get_strategy_prompt
+
 
 BASE_PROMPT = """You are Novi, a local AI assistant running entirely on-device via Ollama.
 
@@ -13,7 +15,8 @@ BASE_PROMPT = """You are Novi, a local AI assistant running entirely on-device v
 """
 
 
-def build_system_prompt(tools: list, workspace: str = "", git_repo: str = "") -> str:
+def build_system_prompt(tools: list, workspace: str = "", git_repo: str = "",
+                        strategy: str = "chat") -> str:
     tool_names = [t.__name__ for t in tools]
     tool_list = ", ".join(tool_names)
 
@@ -24,7 +27,10 @@ def build_system_prompt(tools: list, workspace: str = "", git_repo: str = "") ->
         context += f"\n- Git repository: {git_repo}"
 
     today = datetime.now().strftime("%Y-%m-%d")
+    strategy_block = get_strategy_prompt(strategy)
     return f"""{BASE_PROMPT}
+
+{strategy_block}
 
 ## Available Tools
 

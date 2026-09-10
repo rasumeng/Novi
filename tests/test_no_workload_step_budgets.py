@@ -1,6 +1,7 @@
-"""Task 7 — Guardrails: no workload-specific step budgets, safety rail invariant.
+"""Task 7 — Guardrails: no strategy-specific step budgets, safety rail invariant.
 
-Fails CI if workload-specific step budgets appear.
+Single primary model: strategies (chat|code|research) select behavior only.
+Fails CI if strategy-specific step budgets appear.
 """
 
 import pathlib
@@ -8,7 +9,7 @@ import re
 
 
 def test_no_workload_specific_max_steps():
-    # Complexity: must not branch max_steps by workload
+    # Complexity: must not branch max_steps by strategy (compat: workload)
     text = pathlib.Path("novi/orchestrator/complexity.py").read_text(encoding="utf-8")
     lower = text.lower()
     # Guard: no per-workload max_steps map/branch like general=8 research=12

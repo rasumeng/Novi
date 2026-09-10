@@ -142,7 +142,7 @@ class Setting:
 
 @dataclass
 class SettingGroup:
-    """A named group of settings (e.g. ``llm.workloads``), registered by one owner."""
+    """A named group of settings (e.g. ``llm``), registered by one owner."""
 
     key: str
     label: str

@@ -22,11 +22,7 @@ def cfg(tmp_path):
     return {
         "llm": {
             "max_tokens": 65536,
-            "workloads": {
-                "general": {"model": "qwen3:8b"},
-                "research": {"model": ""},
-                "code": {"model": ""},
-            },
+            "primary_model": "qwen3:8b",
         },
         "embedding": {
             "backend": "ollama",

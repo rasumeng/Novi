@@ -29,7 +29,7 @@ from novi.configuration.model_records import (
     ModelStatus,
 )
 from novi.configuration.qualification import Qualification
-from novi.configuration.resolver import WORKLOADS, recommend
+from novi.configuration.resolver import recommend
 
 
 def hw(gpu="", vram=None, gpu_conf=GpuConfidence.UNKNOWN, ram=None,
@@ -64,9 +64,8 @@ def seed_record(name, qual, caps, **extra):
     )
 
 
-def _explanation(r, workload="general"):
-    rec = r.workloads[workload]
-    return rec.to_dict()["explanation"]
+def _explanation(r):
+    return r.primary.to_dict()["explanation"]
 
 
 # ── 1. Structured explanation present ──────────────────────────────────────
@@ -79,10 +78,9 @@ def test_workload_recommendation_contains_structured_explanation():
                     ["chat", "reasoning"]),
     ]
     r = recommend(HW_HIGH, installed)
-    for w in WORKLOADS:
-        assert r.workloads[w].model  # a winner exists
-        exp = _explanation(r, w)
-        assert set(exp.keys()) == {"provenance", "hardwareFit", "alternatives", "provisional"}
+    assert r.primary.model  # a winner exists
+    exp = _explanation(r)
+    assert set(exp.keys()) == {"provenance", "hardwareFit", "alternatives", "provisional"}
 
 
 # ── 2. Winner provenance preserved ─────────────────────────────────────────
@@ -146,15 +144,14 @@ def test_alternatives_are_viable_candidates_from_engine():
         seed_record("qwen2.5-coder:7b", Qualification.SUPPORTED, ["chat", "coding"]),
     ]
     r = recommend(HW_HIGH, installed)
-    exp = _explanation(r, "general")
-    winner = r.workloads["general"].model
+    exp = _explanation(r)
+    winner = r.primary.model
     assert winner == "qwen3:8b"
     assert exp["alternatives"], "expected viable alternatives"
     for alt in exp["alternatives"]:
         assert alt["model"] != winner
-        assert set(alt.keys()) == {"model", "fit", "strength", "capability",
+        assert set(alt.keys()) == {"model", "fit", "strength",
                                    "qualification", "reasons"}
-        assert alt["capability"] == "chat"
         assert alt["strength"] in {
             "runtime", "trusted-seed", "supported-seed", "reported",
             "experimental-seed", "name-inference"}
@@ -173,7 +170,7 @@ def test_no_alternatives_when_single_candidate():
 def test_unseeded_runtime_evidenced_model_can_be_winner():
     # catalog={} -> no seed enrichment at all; runtime evidence alone wins.
     r = recommend(HW_HIGH, [runtime_record("custom:7b", ["chat", "reasoning"])], catalog={})
-    rec = r.workloads["general"]
+    rec = r.primary
     assert rec.model == "custom:7b"
     assert _explanation(r)["provenance"]["source"] == "runtime"
 
@@ -181,7 +178,7 @@ def test_unseeded_runtime_evidenced_model_can_be_winner():
 def test_unseeded_runtime_evidenced_model_can_be_alternative():
     r = recommend(HW_HIGH, [runtime_record("winner:7b", ["chat", "reasoning"]),
                             runtime_record("runnerup:7b", ["chat"])], catalog={})
-    rec = r.workloads["general"]
+    rec = r.primary
     assert rec.model == "winner:7b"
     models = [a["model"] for a in _explanation(r)["alternatives"]]
     assert "runnerup:7b" in models
@@ -197,7 +194,7 @@ def test_seed_membership_does_not_determine_alternative_validity():
         runtime_record("b:7b", ["chat", "reasoning"]),
     ]
     r = recommend(HW_HIGH, installed, catalog=catalog)
-    models = [a["model"] for a in _explanation(r, "general")["alternatives"]]
+    models = [a["model"] for a in _explanation(r)["alternatives"]]
     assert "ghost:8b" not in models
     assert "a:7b" in models or "b:7b" in models
 
@@ -209,8 +206,7 @@ def test_explanation_contains_no_hardcoded_model_names():
     r = recommend(HW_HIGH, [runtime_record("a:7b", ["chat", "reasoning", "coding"]),
                             runtime_record("b:7b", ["chat", "reasoning", "coding"])],
                   catalog={})
-    for w in WORKLOADS:
-        assert r.workloads[w].model  # deterministic winner (name tie-break)
+    assert r.primary.model  # deterministic winner (name tie-break)
     text = str(_explanation(r))
     for token in ("llama", "qwen", "gemma", "mistral", "phi"):
         assert token not in text.lower()
@@ -238,4 +234,4 @@ def test_explanation_generation_never_writes_configuration(tmp_path):
                              ["chat", "reasoning", "coding"])]
     recommend(HW_HIGH, installed)
     assert cfg.snapshot() == before
-    assert cfg.get("llm.workloads.general.model") == ""
+    assert cfg.get("llm.primary_model") == ""

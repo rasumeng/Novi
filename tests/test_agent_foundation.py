@@ -251,8 +251,11 @@ def test_no_coordinator_bypass_possible_via_runtime():
     captured = {}
 
     class _M:
-        def resolve(self, workload):
+        def resolve_primary(self):
             return ("ollama", "m1")
+
+        def validate(self, *a, **k):
+            return []
 
         def bind_model(self, name, tools, temperature=0.0):
             return _StubModel()

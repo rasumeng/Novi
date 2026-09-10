@@ -1704,7 +1704,10 @@ class NoviRuntime:
         self.history.append((user_input, final))
         if len(self.history) > self.max_history:
             self._compact()
-        if not _memory_enabled(self.cfg):
+        # Keep this helper usable in deliberately lightweight runtimes (for
+        # example CLI/test harnesses created without __init__).  Memory is
+        # opt-in only when a configuration explicitly disables it.
+        if not _memory_enabled(getattr(self, "cfg", {})):
             return
         if self.brain is not None:
             try:

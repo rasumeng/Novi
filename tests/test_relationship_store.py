@@ -1,5 +1,7 @@
 """Phase D — RelationshipStore (SQLite edges) tests."""
 
+import sqlite3
+
 from novi.brain.storage.relationship_store import RelationshipStore
 from novi.brain.types import EdgeKind, Relationship
 
@@ -97,3 +99,36 @@ def test_reopen_retains_edges(tmp_path):
     reopened = RelationshipStore(persist_dir=dirpath)
     assert reopened.outgoing("kn-1")[0].target_id == "conv-1"
     reopened.close()
+
+
+def test_opening_legacy_database_deduplicates_and_installs_unique_index(tmp_path):
+    """Legacy duplicate rows are repaired once, without losing distinct edges."""
+    database = tmp_path / "relationships.sqlite"
+    conn = sqlite3.connect(database)
+    conn.execute(
+        """
+        CREATE TABLE relationships (
+            source_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO relationships VALUES (?, ?, ?, ?)",
+        [
+            ("kn-1", "conv-1", "derived_from", "2026-01-01T00:00:00"),
+            ("kn-1", "conv-1", "derived_from", "2026-01-02T00:00:00"),
+            ("kn-2", "conv-1", "derived_from", "2026-01-03T00:00:00"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    store = RelationshipStore(persist_dir=tmp_path)
+    assert store.count() == 2
+    assert [edge.created_at.isoformat() for edge in store.outgoing("kn-1")] == ["2026-01-01T00:00:00"]
+    indexes = store._conn.execute("PRAGMA index_list('relationships')").fetchall()
+    assert any(row[1] == "idx_rel_unique" and row[2] for row in indexes)
+    store.close()

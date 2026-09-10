@@ -36,9 +36,9 @@ def registry():
 
 
 def test_unique_owner_enforced(registry):
-    registry.register(mk("llm.workloads.general.model", owner="runtime"))
+    registry.register(mk("llm.primary_model", owner="runtime"))
     with pytest.raises(DuplicateSettingError):
-        registry.register(mk("llm.workloads.general.model", owner="memory"))
+        registry.register(mk("llm.primary_model", owner="memory"))
 
 
 def test_unknown_setting_raises(registry):
@@ -51,9 +51,9 @@ def test_unknown_setting_raises(registry):
 
 def test_no_hardcoded_model_names():
     llm = DEFAULT_CONFIG.get("llm", {})
-    for workload, spec in llm.get("workloads", {}).items():
-        assert spec.get("model", "") == "", \
-            f"workload {workload} default must be empty"
+    assert llm.get("primary_model", "") == "", \
+        "llm.primary_model default must be empty"
+    assert "workloads" not in llm, "retired llm.workloads must not exist"
 
 
 # ── Validation ────────────────────────────────────────────────────────
@@ -128,28 +128,26 @@ def test_apply_hook_invoked(tmp_path):
 # ── Migration ─────────────────────────────────────────────────────────
 
 
-def test_migrate_old_models_to_workloads():
+def test_migrate_old_models_drops_legacy_models():
     cfg = {"models": {"chat": "llama3", "max_tokens": 4096}}
     out = migrate(dict(cfg))
     assert "models" not in out, "legacy models mirror must be dropped"
-    assert out["llm"]["workloads"]["general"]["model"] == "llama3"
-    assert out["llm"]["workloads"]["research"]["model"] == ""
-    assert out["llm"]["max_tokens"] == 4096
+    assert out["llm"]["primary_model"] == ""
+    assert "workloads" not in out["llm"]
 
 
-def test_migrate_roles_to_workloads():
-    src = {"llm": {"roles": {"chat": {"model": "x"}}}, "embedding": {}}
+def test_migrate_roles_dropped_without_carryover():
+    src = {"llm": {"roles": {"chat": {"model": "x"}}, "workloads": {"general": {"model": "y"}}}, "embedding": {}}
     out = migrate(dict(src))
     assert "models" not in out
     assert "roles" not in out["llm"], "legacy llm.roles must be dropped"
-    assert out["llm"]["workloads"]["general"]["model"] == "x"
+    assert "workloads" not in out["llm"], "retired llm.workloads must be dropped"
+    assert out["llm"]["primary_model"] == ""
 
 
-def test_migrate_planner_and_coder_roles_map_to_research_and_code():
-    src = {"llm": {"roles": {
-        "chat": {"model": "a"}, "planner": {"model": "b"},
-        "coder": {"model": "c"}}}}
+def test_migrate_workloads_dropped_without_carryover():
+    src = {"llm": {"primary_model": "keep:model",
+                   "workloads": {"general": {"model": "drop:me"}}}}
     out = migrate(dict(src))
-    assert out["llm"]["workloads"]["general"]["model"] == "a"
-    assert out["llm"]["workloads"]["research"]["model"] == "b"
-    assert out["llm"]["workloads"]["code"]["model"] == "c"
+    assert out["llm"]["primary_model"] == "keep:model"
+    assert "workloads" not in out["llm"]
