@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react'
 import { Sidebar } from '@/components/sidebar/Sidebar'
 import { Conversation } from '@/components/chat/Conversation'
 import type { SectionId } from '@/components/settings/SettingsModal'
@@ -6,8 +6,7 @@ import { useNoviChat } from '@/hooks/useNoviChat'
 import { TitleBar } from '@/components/common/TitleBar'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
 
-// These views are entered on demand.  Keeping them out of the initial chat
-// bundle improves desktop startup without changing the user-facing routes.
+// Lazy views — no loading fallback; fresh loading design will decide UX.
 const ProjectsPanel = lazy(() => import('@/components/projects/ProjectsPanel').then(
   ({ ProjectsPanel }) => ({ default: ProjectsPanel })
 ))
@@ -20,36 +19,6 @@ const SearchModal = lazy(() => import('@/components/search/SearchModal').then(
 const SettingsModal = lazy(() => import('@/components/settings/SettingsModal').then(
   ({ SettingsModal }) => ({ default: SettingsModal })
 ))
-
-function DeferredView({ children }: { children: ReactNode }) {
-  return <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-base-400">Loading…</div>}>
-    {children}
-  </Suspense>
-}
-
-function BackendLoadingScreen({ connected }: { connected: boolean }) {
-  // This deliberately mirrors the native splash and the HTML boot layer in
-  // index.html. Keeping all three the same prevents a visual jump while the
-  // desktop shell hands off to React and React hydrates the workspace.
-  const phase = connected ? 2 : 0
-  const status = connected ? 'Loading conversations and memory…' : 'Starting local services…'
-  return <main className="novi-boot">
-    <section className="novi-boot__card" aria-live="polite">
-      <div className="novi-boot__brand"><span className="novi-boot__mark">✦</span>NOVI DESKTOP</div>
-      <div className="novi-boot__heading"><span className="novi-boot__spinner" /><h1>Starting Novi</h1></div>
-      <p className="novi-boot__status">{status}</p>
-      <div className="novi-boot__progress" />
-      <ul className="novi-boot__steps">
-        {['Start local services', 'Connect your workspace', 'Load conversations and memory'].map((label, index) => (
-          <li key={label} className={index < phase ? 'done' : index === phase ? 'active' : ''}>
-            <i className="novi-boot__dot" /><span>{label}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="novi-boot__foot">Everything is running locally on your device.</p>
-    </section>
-  </main>
-}
 
 type WorkspaceLocation = {
   noviWorkspace: true
@@ -76,7 +45,6 @@ export default function App() {
     return false
   })
   const chat = useNoviChat()
-  const historyReady = useRef(false)
   const workspaceRef = useRef<WorkspaceLocation | null>(null)
 
   const applyWorkspace = useCallback((location: WorkspaceLocation) => {
@@ -110,11 +78,7 @@ export default function App() {
   }, [activeSection, chat.activeId, searchOpen, settingsOpen, settingsSection])
 
   useEffect(() => {
-    if (chat.connection !== 'open' || !chat.conversationsHydrated || historyReady.current) return
-    historyReady.current = true
     const initial = workspaceRef.current!
-    // Add a guarded app entry after boot. Going back from it never reaches the
-    // startup surface; it is immediately returned to this workspace state.
     window.history.pushState(initial, '')
     const restore = (event: PopStateEvent) => {
       const state = event.state
@@ -122,13 +86,11 @@ export default function App() {
         applyWorkspace(state as WorkspaceLocation)
         return
       }
-      // The entry before Novi's workspace is a browser/startup entry. Return to
-      // the current Novi location instead of ever rendering the boot screen.
       window.history.go(1)
     }
     window.addEventListener('popstate', restore)
     return () => window.removeEventListener('popstate', restore)
-  }, [applyWorkspace, chat.connection, chat.conversationsHydrated])
+  }, [applyWorkspace])
 
   const handleSectionChange = useCallback((id: NavItemId) => {
     if (id === 'settings') {
@@ -189,7 +151,7 @@ export default function App() {
     switch (activeSection) {
       case 'projects':
         return (
-          <DeferredView><ProjectsPanel
+          <Suspense fallback={null}><ProjectsPanel
             projects={chat.projects}
             conversations={chat.conversations}
             onCreateProject={chat.createProject}
@@ -209,18 +171,18 @@ export default function App() {
             loading={(chat as any).projectsLoading}
             error={(chat as any).projectsError}
             onRetry={(chat as any).refreshProjects}
-          /></DeferredView>
+          /></Suspense>
         )
       case 'timeline':
         return (
-          <DeferredView><TimelinePage
+          <Suspense fallback={null}><TimelinePage
             entries={chat.timeline}
             onRefresh={chat.refreshTimeline}
             onOpenConversation={handleSelectConversation}
             error={(chat as any).timelineError}
             status={(chat as any).timelineStatus}
             loading={(chat as any).timelineLoading}
-          /></DeferredView>
+          /></Suspense>
         )
       default:
         return (
@@ -256,12 +218,6 @@ export default function App() {
           />
         )
     }
-  }
-
-  // The desktop shell can paint before the Python sidecar is ready. Keep a
-  // single intentional startup surface until its session handshake completes.
-  if (chat.connection !== 'open' || !chat.conversationsHydrated) {
-    return <BackendLoadingScreen connected={chat.connection === 'open'} />
   }
 
   return (

@@ -33,10 +33,7 @@ const now = () =>
 
 const DRAFT_ID = '__draft__'
 const STOP_FALLBACK_MS = 8000
-// Startup data is useful, but it must never make the desktop window look
-// frozen. If a local request is delayed by disk, a migration, or an extension,
-// show the usable landing page and allow its result to arrive in the background.
-const STARTUP_HYDRATION_MAX_WAIT_MS = 8000
+// Startup hydration timeout removed — fresh loading design will decide policy.
 
 export function useNoviChat() {
   const { showError } = useToast()
@@ -130,17 +127,9 @@ export function useNoviChat() {
     }
   }
 
-  // Load conversations on mount
+  // Load conversations on mount — no hydration gate; UI renders immediately.
   useEffect(() => {
     let active = true
-    let finished = false
-    const finishHydration = () => {
-      if (!active || finished) return
-      finished = true
-      setConversationsHydrated(true)
-    }
-    const fallback = window.setTimeout(finishHydration, STARTUP_HYDRATION_MAX_WAIT_MS)
-
     fetchConversations()
       .then((list) => {
         if (active) setConversations(list)
@@ -152,13 +141,11 @@ export function useNoviChat() {
         }
       })
       .finally(() => {
-        window.clearTimeout(fallback)
-        finishHydration()
+        if (active) setConversationsHydrated(true)
       })
     refreshProjects()
     return () => {
       active = false
-      window.clearTimeout(fallback)
     }
   }, [refreshProjects, showError])
 
@@ -657,11 +644,6 @@ export function useNoviChat() {
   handleEventRef.current = handleEvent
 
   useEffect(() => {
-    // Open the realtime session only after the initial history request has
-    // settled. This gives startup a deterministic order: conversations first,
-    // then WebSocket-driven chat. The hydration timeout above still prevents a
-    // slow local store from blocking the app forever.
-    if (!conversationsHydrated) return
     const client = new NoviClient()
     client.onEvent = (ev) => handleEventRef.current(ev)
     client.onConnectionChange = setConnection
@@ -671,7 +653,7 @@ export function useNoviChat() {
       client.disconnect()
       if (clientRef.current === client) clientRef.current = null
     }
-  }, [conversationsHydrated])
+  }, [])
 
   // Reconnection awareness: surfacing a closed→open transition instead of
   // silently resuming. This does not touch the owner/streaming model — in-flight

@@ -83,12 +83,17 @@ fn main() {
             app_handle.manage(AppState { launcher });
             let state = app_handle.state::<AppState>();
 
-            // Show the window immediately with a startup screen instead of leaving
-            // the user staring at nothing for up to 60s while the backend boots.
-            let loading_url = splash::loading_url()
-                .ok_or_else(|| "failed to prepare the startup screen".to_string())?;
+            // No loading screen — window navigates directly to the backend/frontend
+            // URL after wait_until_ready; fresh loading design will replace this.
+            let initial_url = if dev {
+                tauri::Url::parse("http://localhost:5173").expect("invalid dev url")
+            } else {
+                // Placeholder until backend reports ready; thread will navigate to real URL.
+                // Use a blank page to avoid showing stale loading UX.
+                tauri::Url::parse("about:blank").expect("blank url")
+            };
 
-            let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(loading_url))
+            let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(initial_url))
                 .title("Novi — AI Agent")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(960.0, 640.0)

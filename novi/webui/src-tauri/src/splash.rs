@@ -22,14 +22,6 @@ fn write_temp(name: &str, html: &str) -> Option<Url> {
     Url::from_file_path(&path).ok()
 }
 
-pub fn loading_url() -> Option<Url> {
-    let html = format!(
-        "<!doctype html><html><head><meta charset='utf-8'><style>{STYLE}</style></head>\
-         <body><main class='boot'><section class='card' aria-live='polite'><div class='brand'><span class='mark'>✦</span>NOVI DESKTOP</div><div class='heading'><span class='spinner'></span><h1>Starting Novi</h1></div><p id='status'>Starting local services…</p><div class='progress'></div><ul class='steps'><li class='active'><i class='dot'></i><span>Start local services</span></li><li><i class='dot'></i><span>Connect your workspace</span></li><li><i class='dot'></i><span>Load conversations and memory</span></li></ul><p class='foot'>Everything is running locally on your device.</p></section></main><script>const steps=[...document.querySelectorAll('.steps li')],status=document.querySelector('#status');let phase=0;const update=()=>{{steps.forEach((step,i)=>step.className=i<phase?'done':i===phase?'active':'');status.textContent=['Starting local services…','Connecting your workspace…','Loading conversations and memory…'][phase]}};update();setInterval(()=>{{phase=Math.min(phase+1,2);update()}},1800);</script></body></html>"
-    );
-    write_temp("novi-desktop-loading.html", &html)
-}
-
 pub fn error_url(message: &str) -> Option<Url> {
     let escaped = html_escape(message);
     let html = format!(
