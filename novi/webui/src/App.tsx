@@ -4,7 +4,6 @@ import { Conversation } from '@/components/chat/Conversation'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { useNoviChat } from '@/hooks/useNoviChat'
 import { useBoot } from '@/hooks/useBoot'
-import { BootScreen } from '@/components/boot/BootScreen'
 import { TitleBar } from '@/components/common/TitleBar'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
 
@@ -150,8 +149,6 @@ export default function App() {
     // stay in projects section — user sees thread inside project
   }, [chat])
 
-  if (boot.phase !== 'ready') return <BootScreen state={boot} />
-
   const renderSection = () => {
     switch (activeSection) {
       case 'projects':
@@ -269,6 +266,7 @@ export default function App() {
           onCreateProject={chat.createProject}
           onUpdateProject={chat.updateProject}
           onDeleteProject={chat.deleteProject}
+          boot={boot}
         />
 
         {renderSection()}

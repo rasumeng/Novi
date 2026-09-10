@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown } from 'lucide-react'
+import { Plus, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown, Loader2 } from 'lucide-react'
 import { Conversation, Project } from '@/types'
 import { SidebarItem } from './SidebarItem'
 import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
 import { ProjectForm } from '@/components/projects/ProjectForm'
+import type { BootState } from '@/hooks/useBoot'
 
 interface Props {
   collapsed: boolean
@@ -26,9 +27,10 @@ interface Props {
   onSectionChange: (id: NavItemId) => void
   jobsCount?: number
   generatingConversationId?: string | null
+  boot?: BootState
 }
 
-export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null }: Props) {
+export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null, boot }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem('novi_sidebar_expanded_projects')
@@ -49,6 +51,9 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const headerMenuRef = useRef<HTMLDivElement>(null)
+
+  const isChatLoading = boot ? boot.phase !== 'ready' && boot.loaded < 1 : false
+  const isProjectsLoading = boot ? boot.phase !== 'ready' && boot.loaded < 2 : false
 
   const pinnedConvos = useMemo(() => conversations.filter((c) => c.pinned), [conversations])
   const pinnedProjects = useMemo(() => (projects ?? []).filter((p) => (p as any).pinned).sort((a,b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")), [projects])
@@ -241,9 +246,11 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                     aria-expanded={projectsExpanded}
                     className="flex items-center gap-1.5 flex-1 text-left focus-visible:ring-2 focus-visible:ring-accent/20 rounded"
                   >
-                    {projectsExpanded ? <ChevronDown size={12} className="text-base-500" /> : <ChevronRight size={12} className="text-base-500" />}
                     <span className="text-[10px] uppercase tracking-widest text-base-500 font-medium">Projects</span>
-                    {(projects?.length ?? 0) > 0 && <span className="text-[10px] text-base-600">- {projects?.length}</span>}
+                    <span className="ml-auto flex items-center gap-1.5 text-base-500">
+                      {isProjectsLoading && <Loader2 size={10} className="animate-spin text-accent shrink-0" aria-label="Loading projects" />}
+                      {projectsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    </span>
                   </button>
                   <button
                     onClick={handleCreateProject}
@@ -459,9 +466,11 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                   aria-expanded={chatsExpanded}
                   className="w-full flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-base-400 hover:text-base-200 hover:bg-base-800/40 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
                 >
-                  {chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  <span className="text-[10px] uppercase tracking-widest font-medium">Chats</span>
-                  <span className="text-[10px] text-base-600">- {unassigned.length}</span>
+                  <span className="text-[10px] uppercase tracking-widest font-medium">Chat</span>
+                  <span className="ml-auto flex items-center gap-1.5 text-base-500">
+                    {isChatLoading && <Loader2 size={10} className="animate-spin text-accent shrink-0" aria-label="Loading chats" />}
+                    {chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </span>
                 </button>
                 {chatsExpanded && (
                   <div className="mt-1 px-2 space-y-0.5">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Search, Settings, Server, SlidersHorizontal } from 'lucide-react'
+import { X, Search, Settings, Server, SlidersHorizontal, Loader2 } from 'lucide-react'
 import { fetchTools, fetchSkills } from '@/services/novi'
 import type { SchemaResponse } from './api'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -132,6 +132,7 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill, on
                 <div className="flex items-center gap-2 mb-3">
                   <Settings size={16} className="text-accent" />
                   <span className="text-sm font-semibold text-base-100">Settings</span>
+                  {framework.loading && <Loader2 size={12} className="animate-spin text-accent ml-auto" aria-label="Loading settings" />}
                 </div>
                 <div className="relative">
                   <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-500" />
