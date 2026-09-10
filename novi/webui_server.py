@@ -117,6 +117,31 @@ _connection_senders: dict[int, Callable[[str], None]] = {}
 _connection_senders_lock = threading.Lock()
 _next_conn_id = 0
 
+# Live permission propagation: every WebSocket Session holds a
+# PermissionResolver built from a snapshot at connection time.
+# Without refresh, a permission edited in Settings only takes effect
+# after relaunch. Track active sessions and push new snapshots on
+# permissions.* changes.
+_active_sessions: set["Session"] = set()
+_active_sessions_lock = threading.Lock()
+
+def _refresh_sessions_permissions() -> None:
+    try:
+        from .configuration.bootstrap import get_configuration
+        snap = get_configuration().snapshot()
+    except Exception:
+        return
+    with _active_sessions_lock:
+        sessions = list(_active_sessions)
+    for sess in sessions:
+        try:
+            sess.runtime._perms.refresh(snap)
+            # Also keep the runtime's cfg reference in sync for any
+            # direct cfg reads outside the resolver.
+            sess.runtime.cfg = snap
+        except Exception:
+            pass
+
 
 def _register_sender(loop, ws) -> int:
     """Register a WebSocket for background-run broadcasts. Returns conn_id."""
@@ -451,6 +476,8 @@ class Session:
 
     def __init__(self, cfg: dict | None = None, loop: asyncio.AbstractEventLoop = None):
         self.runtime, self.orchestrator, self.job_manager, self.event_bus = build_runtime(cfg)
+        with _active_sessions_lock:
+            _active_sessions.add(self)
         self.loop = loop
         self.events: asyncio.Queue = asyncio.Queue()
         self.stop_flag = threading.Event()
@@ -1076,6 +1103,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 {"type": "config_updated", "event": redactor.redact_event(ev)}))
     except Exception as e:
         print(f"[novi] config broadcast hook failed: {e}")
+
+    # Live permission refresh: push new snapshot into every active
+    # Session's PermissionResolver so a toggle in Settings → Permissions
+    # takes effect for the next tool call without relaunch.
+    try:
+        def _on_permissions_change(ev):
+            if ev.path == "permissions" or ev.path.startswith("permissions."):
+                _refresh_sessions_permissions()
+            elif ev.path == "agents" or ev.path.startswith("agents."):
+                _refresh_sessions_permissions()
+        get_bus().subscribe("permissions", _on_permissions_change)
+        get_bus().subscribe("agents", _on_permissions_change)
+    except Exception as e:
+        print(f"[novi] permission live-refresh hook failed: {e}")
 
     def _after_models_changed():
         """Model-set lifecycle seam.
@@ -2641,6 +2682,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         except WebSocketDisconnect:
             session.stop()
         finally:
+            with _active_sessions_lock:
+                _active_sessions.discard(session)
             pump.cancel()
             _unregister_sender(conn_id)
 

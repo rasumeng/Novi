@@ -54,7 +54,7 @@ export function useFrameworkSettings() {
   }, [showError])
 
   const set = useCallback(async (id: string, value: unknown) => {
-    setValues((prev) => ({ ...prev, [id]: value }))
+    setValues((prev) => applyWithParents(prev, id, value))
     const ok = await setSetting(id, value)
     if (!ok) showError(`Couldn't save ${id} — change wasn't persisted.`)
     return ok
@@ -87,7 +87,7 @@ export function useFrameworkSettings() {
       try {
         const msg = JSON.parse(e.data)
         if (msg.type === 'config_updated' && msg.event?.path) {
-          setValues((prev) => ({ ...prev, [msg.event.path]: msg.event.value }))
+          setValues((prev) => applyWithParents(prev, msg.event.path, msg.event.value))
         } else if (msg.type === 'models_resolved') {
           void load()
         } else if (msg.type === 'install_progress' && msg.name) {
@@ -241,4 +241,60 @@ function readPath(obj: Record<string, unknown>, path: string): unknown {
     }
   }
   return cur
+}
+
+function deepSetCopy(obj: unknown, path: string, value: unknown): unknown {
+  const parts = path.split('.')
+  const root = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? { ...(obj as Record<string, unknown>) } : {}
+  let cur: Record<string, unknown> = root as Record<string, unknown>
+  let src: unknown = obj
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i]
+    const nextSrc = (src && typeof src === 'object' ? (src as Record<string, unknown>)[p] : undefined)
+    const nextCopy = (nextSrc && typeof nextSrc === 'object' && !Array.isArray(nextSrc))
+      ? { ...(nextSrc as Record<string, unknown>) }
+      : {}
+    cur[p] = nextCopy
+    cur = nextCopy as Record<string, unknown>
+    src = nextSrc
+  }
+  cur[parts[parts.length - 1]] = value
+  return root
+}
+
+function applyWithParents(prev: SettingValues, path: string, value: unknown): SettingValues {
+  const next: SettingValues = { ...prev, [path]: value }
+  for (const key of Object.keys(prev)) {
+    if (key === path) continue
+    if (path.startsWith(key + '.')) {
+      const suffix = path.slice(key.length + 1)
+      const parentVal = prev[key]
+      if (parentVal && typeof parentVal === 'object' && !Array.isArray(parentVal)) {
+        next[key] = deepSetCopy(parentVal, suffix, value)
+      }
+    } else if (key.startsWith(path + '.')) {
+      // Parent wholesale update — keep leaf in sync if leaf existed
+      // e.g., path=permissions, key=permissions.write_file
+      // When parent dict changes, reflect leaf values from new parent.
+      const suffix = key.slice(path.length + 1)
+      if (value && typeof value === 'object') {
+        const leafVal = readPath(value as Record<string, unknown>, suffix)
+        if (leafVal !== undefined) next[key] = leafVal
+      }
+    }
+  }
+  // Also create parent entry if it didn't exist yet but path is nested
+  // e.g., first clipboard_read when permissions dict was empty
+  const dot = path.indexOf('.')
+  if (dot !== -1) {
+    const top = path.slice(0, dot)
+    if (!(top in next) || next[top] == null) {
+      // initialize top from deep path
+      const suffix = path.slice(dot + 1)
+      next[top] = deepSetCopy({}, suffix, value)
+    } else if (!(path.split('.').slice(0, -1).join('.') in prev)) {
+      // ensure intermediate parents created via generic loop already handled
+    }
+  }
+  return next
 }

@@ -82,6 +82,7 @@ body::before {
 
 /* BootScreen — mirrors splash.rs STYLE, class names novi-boot__* */
 .novi-boot{min-height:100vh;box-sizing:border-box;display:grid;place-items:center;padding:32px;background:radial-gradient(circle at 50% 42%,#25223d 0,#17181f 39%,#111216 100%);color:#f3f2f7}
+.novi-boot--embedded{min-height:0;flex:1}
 .novi-boot__card{width:min(100%,440px);padding:32px;box-sizing:border-box;border:1px solid rgba(255,255,255,.09);border-radius:20px;background:rgba(25,26,33,.84);box-shadow:0 22px 64px rgba(0,0,0,.32);text-align:left}
 .novi-boot__brand{display:flex;align-items:center;gap:10px;margin-bottom:30px;color:#bcb7ff;font-size:11px;font-weight:700;letter-spacing:.13em}
 .novi-boot__mark{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:#7a6ee0;color:#fff;font-size:16px;letter-spacing:0}

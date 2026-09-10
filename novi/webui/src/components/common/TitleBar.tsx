@@ -6,33 +6,44 @@ import { ConnectionState } from '@/services/novi'
 import { CONNECTION_LABEL } from '@/components/chat/connectionStatus'
 
 interface Props {
-  connection: ConnectionState
+  connection?: ConnectionState
   reconnected?: boolean
   workingActivityTitle?: string | null
   isActiveConversation?: boolean
   onSelectConversation?: (id: string) => void
-  collapsed: boolean
-  onToggleSidebar: () => void
-  activityOpen: boolean
-  onToggleActivity: () => void
-  onSearch: () => void
-  onOpenSettings: () => void
+  collapsed?: boolean
+  onToggleSidebar?: () => void
+  activityOpen?: boolean
+  onToggleActivity?: () => void
+  onSearch?: () => void
+  onOpenSettings?: () => void
+  minimal?: boolean
 }
 
 export function TitleBar({
-  connection,
+  connection = 'closed' as ConnectionState,
   reconnected,
   workingActivityTitle,
   isActiveConversation,
   onSelectConversation,
-  collapsed,
+  collapsed = false,
   onToggleSidebar,
-  activityOpen,
+  activityOpen = false,
   onToggleActivity,
   onSearch,
   onOpenSettings,
+  minimal = false,
 }: Props) {
   const conn = CONNECTION_LABEL[connection]
+
+  if (minimal) {
+    return (
+      <div className="relative z-[60] flex h-8 w-full shrink-0 items-center bg-base-950 border-b border-base-800/40">
+        <div data-tauri-drag-region className="flex-1 h-full min-w-0" />
+        <WindowControls />
+      </div>
+    )
+  }
 
   return (
     <div className="relative z-[60] flex h-8 w-full shrink-0 items-center bg-base-950 border-b border-base-800/40 px-2 gap-1">

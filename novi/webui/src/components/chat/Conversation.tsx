@@ -1,10 +1,11 @@
 // Conversation.tsx
 import { useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
 import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
 import { ConnectionState } from '@/services/novi'
 import type { SectionId } from '@/components/settings/SettingsModal'
-import { MessageBubble } from './MessageBubble'
+import { UserMessage } from './UserMessage'
+import { AssistantResponse, AssistantWorkingIndicator } from './AssistantResponse'
+import { AssistantArtifacts } from './AssistantArtifacts'
 import { ThinkingTrace } from './ThinkingTrace'
 import { InlinePlanApproval } from './InlinePlanApproval'
 import { PermissionPrompt } from '@/components/common/PermissionPrompt'
@@ -161,38 +162,48 @@ export function Conversation({
           </div>
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-            {conversation.messages.map((m, i, arr) => (
-              <div key={m.id}>
-                <MessageBubble message={m} />
-                {m.role === 'user' && (i === arr.length - 1 || i === arr.length - 2) && generating && !hasStreamingAnswer && (
-                  <div className="mt-3">
-                    {thinking ? (
-                      <ThinkingTrace text={liveThought} />
-                    ) : (
-                      <motion.div
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="flex items-center gap-1 px-1"
-                      >
-                        <span className="w-1 h-1 rounded-full bg-accent/70 animate-glow" />
-                        <span className="w-1 h-1 rounded-full bg-accent/70 animate-glow" style={{ animationDelay: '0.2s' }} />
-                        <span className="w-1 h-1 rounded-full bg-accent/70 animate-glow" style={{ animationDelay: '0.4s' }} />
-                      </motion.div>
-                    )}
-                    {plan && (
-                      <div className="mt-3">
+            {conversation.messages.map((m, i, arr) => {
+              const isLast = i === arr.length - 1
+              const isStreamingAssistant = m.role === 'assistant' && m.streaming
+              // Pending generation: no assistant token yet, show working state below last user message
+              const showPending = m.role === 'user' && (i === arr.length - 1 || i === arr.length - 2) && generating && !hasStreamingAnswer
+
+              return (
+                <div key={m.id} className="min-w-0">
+                  {m.role === 'user' ? (
+                    <UserMessage message={m} />
+                  ) : (
+                    <AssistantResponse message={m}>
+                      {isLast && isStreamingAssistant && (plan || permission) && (
+                        <AssistantArtifacts
+                          plan={plan}
+                          permission={permission}
+                          onApprovePlan={onApprovePlan}
+                          onRejectPlan={onRejectPlan}
+                          onAnswerPermission={(allowed, id) => onAnswerPermission(allowed, id)}
+                          onCancel={onStop}
+                        />
+                      )}
+                    </AssistantResponse>
+                  )}
+                  {showPending && (
+                    <div className="mt-3 space-y-3">
+                      {thinking ? (
+                        <ThinkingTrace text={liveThought} />
+                      ) : (
+                        <AssistantWorkingIndicator />
+                      )}
+                      {plan && (
                         <InlinePlanApproval plan={plan} onApprove={onApprovePlan} onReject={onRejectPlan} />
-                      </div>
-                    )}
-                    {permission && (
-                      <div className="mt-3">
+                      )}
+                      {permission && (
                         <PermissionPrompt request={permission} onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)} onCancel={onStop} />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

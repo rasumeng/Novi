@@ -2,11 +2,11 @@ import { BOOT_COPY, type BootState } from '@/hooks/useBoot'
 
 const STEPS = ['conversations', 'projects', 'timeline', 'presets'] as const
 
-export function BootScreen({ state }: { state: BootState }) {
+export function BootScreen({ state, embedded = false }: { state: BootState; embedded?: boolean }) {
   const copy = state.phase === 'connecting' ? BOOT_COPY.connecting : BOOT_COPY[state.step]
 
   return (
-    <main className="novi-boot" aria-live="polite">
+    <main className={embedded ? 'novi-boot novi-boot--embedded' : 'novi-boot'} aria-live="polite">
       <section className="novi-boot__card">
         <div className="novi-boot__brand">
           <span className="novi-boot__mark">✦</span>NOVI DESKTOP

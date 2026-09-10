@@ -5,6 +5,7 @@ import type { SectionId } from '@/components/settings/SettingsModal'
 import { useNoviChat } from '@/hooks/useNoviChat'
 import { useBoot } from '@/hooks/useBoot'
 import { TitleBar } from '@/components/common/TitleBar'
+import { BootScreen } from '@/components/boot/BootScreen'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
 
 // Lazy views — no loading fallback; fresh loading design will decide UX.
@@ -221,6 +222,15 @@ export default function App() {
         )
     }
   }
+
+  // if (boot.phase !== 'ready') {
+  //   return (
+  //     <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
+  //       <TitleBar minimal />
+  //       <BootScreen state={boot} embedded />
+  //     </div>
+  //   )
+  // }
 
   return (
     <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">

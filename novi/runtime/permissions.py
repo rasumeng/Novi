@@ -27,6 +27,10 @@ class PermissionResolver:
         self.auto = auto
         self._session_allow: set[str] = set()
 
+    def refresh(self, cfg: dict):
+        """Live-update the backing config snapshot (config bus)."""
+        self.cfg = cfg
+
     def resolve(self, tool: str, args: dict, agent: str = "build") -> str:
         """Check permission. Returns 'allow', 'deny', or 'ask'.
 
