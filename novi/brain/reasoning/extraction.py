@@ -83,7 +83,7 @@ def _heuristic_confidence(sentence: str) -> float:
     elif length >= 35:
         conf += 0.08
     low = sentence.lower()
-    if any(m in low for m in ("prefers", "uses", "learned", "fixed", "installed", "version", "is a")):
+    if any(m in low for m in ("prefers", "uses", "learned", "fixed", "failed", "exited", "installed", "version", "is a")):
         conf += 0.1
     if any(m in low for m in ("user", "i prefer", "i like", "i use", "we use", "the project")):
         conf += 0.1
@@ -108,7 +108,7 @@ def _dedup(claims: list["ExtractedClaim"]) -> list["ExtractedClaim"]:
     """
     seen: dict[str, ExtractedClaim] = {}
     for claim in claims:
-        key = _normalize(claim.statement)
+        key = claim.speaker + ':' + _normalize(claim.statement)
         if not key:
             continue
         existing = seen.get(key)
@@ -126,6 +126,7 @@ class ExtractedClaim:
     statement: str
     confidence: float
     tags: tuple[str, ...] = ()
+    speaker: str = "user"
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,13 @@ class KnowledgeExtractor:
         if not turns:
             return ExtractionResult()
         text = self._turns_to_text(turns)
-        sentences = _sentences(text)
+        attributed = []
+        for turn in turns:
+            for speaker, payload in (("user", turn.user), ("assistant", turn.assistant)):
+                attributed.extend((speaker, s) for s in _sentences(payload))
+            for payload in turn.tool_outputs:
+                attributed.extend(("tool", s) for s in _sentences(payload[:_TOOL_LINE_CAP]))
+        sentences = [s for _, s in attributed]
         if not sentences:
             summary = self._summarize(turns, text)
             name = self._title(turns, text)
@@ -174,7 +181,7 @@ class KnowledgeExtractor:
 
         confidences = self._classify(sentences)
         claims: list[ExtractedClaim] = []
-        for sentence, (conf, tags) in zip(sentences, confidences):
+        for (speaker, sentence), (conf, tags) in zip(attributed, confidences):
             if conf < self._min_confidence:
                 continue
             claims.append(
@@ -182,6 +189,7 @@ class KnowledgeExtractor:
                     statement=sentence,
                     confidence=round(float(conf), 3),
                     tags=tuple(tags) or _tag_sentence(sentence),
+                    speaker=speaker,
                 )
             )
         claims = _dedup(claims)

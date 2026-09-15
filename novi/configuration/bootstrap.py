@@ -39,7 +39,8 @@ DEFAULT_CONFIG: dict = {
         "ollama": {"url": "http://localhost:11434", "reasoning": True},
         "openai": {"api_key_env": "OPENAI_API_KEY"},
     },
-    "memory": {"enabled": True, "max_turns_before_summary": 5, "max_short_term_pairs": 10},
+    "memory": {"enabled": True, "automatic_updates": True,
+               "max_turns_before_summary": 5, "max_short_term_pairs": 10},
     "workspace": {"path": "~/.novi/workspace", "knowledge": "~/.novi/knowledge", "git_repo": ""},
     "personality": "",
     # Web search is opt-in for beta: empty backend = "not configured". Novi
@@ -51,7 +52,7 @@ DEFAULT_CONFIG: dict = {
         "max_steps": 8,
         "max_tool_output_chars": 8000,
         "temperature": 0.4,
-        "memory_distance_threshold": 0.5,
+        "memory_distance_threshold": 0.8,
         "max_memory_results": 3,
         "max_project_results": 3,
         "tool_gate": {"chat": [], "research": []},

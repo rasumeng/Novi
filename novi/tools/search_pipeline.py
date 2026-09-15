@@ -109,64 +109,21 @@ def _search_multi(query: str, config: SearchConfig) -> tuple[list[SearchResult],
 # ─── Phase 3: Fetch Full Pages ────────────────────────────────────────────────
 
 def _fetch_with_trafilatura(url: str, timeout: int = 15) -> str:
-    """Fetch URL content using trafilatura for best extraction."""
-    try:
-        import trafilatura
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded:
-            text = trafilatura.extract(
-                downloaded,
-                include_comments=False,
-                include_tables=True,
-                favor_precision=False,
-                favor_recall=True,
-            )
-            if text:
-                return text[:8000]
-    except Exception:
-        pass
-    return ""
+    from ..search.reader import read_page
+    return read_page(url, timeout=timeout)
 
 
 def _fetch_with_fallback(url: str, timeout: int = 15) -> str:
-    """Fetch URL with fallback to basic extraction."""
-    text = _fetch_with_trafilatura(url, timeout)
-    if text and len(text) > 200:
-        return text
-
-    try:
-        import urllib.request
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-
-        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        return text[:8000] if text else ""
-    except Exception:
-        return ""
+    return _fetch_with_trafilatura(url, timeout)
 
 
 def fetch_pages(results: list[SearchResult], max_fetch: int = 3, timeout: int = 15) -> list[SearchResult]:
-    """Fetch full page content for top results."""
-    to_fetch = results[:max_fetch]
-
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(_fetch_with_fallback, r.url, timeout): i
-            for i, r in enumerate(to_fetch)
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                text = future.result()
-                to_fetch[idx].full_text = text
-            except Exception as e:
-                log.warning("Failed to fetch page %s: %s", to_fetch[idx].url, e)
-
+    # Sequential bounded reads preserve the per-turn policy and deadline.
+    for result in results[:max_fetch]:
+        try:
+            result.full_text = _fetch_with_fallback(result.url, timeout)
+        except Exception as exc:
+            log.warning("Page read failed for %s: %s", result.url, exc)
     return results
 
 

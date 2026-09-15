@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown, Loader2 } from 'lucide-react'
+import { Plus, Folder, FolderOpen, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown, Loader2 } from 'lucide-react'
 import { Conversation, Project } from '@/types'
 import { SidebarItem } from './SidebarItem'
 import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
@@ -217,7 +217,7 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
               })}
             </div>
 
-            <div className="flex-1 overflow-y-auto px-1.5 space-y-4 mt-2">
+            <div className="flex-1 overflow-y-auto px-1.5 space-y-1 mt-2">
               {(pinnedProjects.length > 0 || pinnedConvos.length > 0) && (
                 <div>
                   <p className="px-2.5 text-[10px] uppercase tracking-widest text-base-500 mb-1.5">Pinned</p>
@@ -247,9 +247,9 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                     className="flex items-center gap-1.5 flex-1 text-left focus-visible:ring-2 focus-visible:ring-accent/20 rounded"
                   >
                     <span className="text-[10px] uppercase tracking-widest text-base-500 font-medium">Projects</span>
-                    <span className="ml-auto flex items-center gap-1.5 text-base-500">
-                      {isProjectsLoading && <Loader2 size={10} className="animate-spin text-accent shrink-0" aria-label="Loading projects" />}
-                      {projectsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    <span className="flex items-center gap-1.5 text-base-500">
+                      {isProjectsLoading && <Loader2 size={10} className="novi-sidebar-spinner text-accent shrink-0" aria-label="Loading projects" />}
+                      <span className={`transition-opacity ${projectsExpanded ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>{projectsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                     </span>
                   </button>
                   <button
@@ -339,16 +339,14 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                                   aria-label={`${expanded ? 'Collapse' : 'Expand'} ${p.name}`}
                                   className="p-0.5 rounded hover:bg-base-700 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20"
                                 >
-                                  {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                                  {expanded ? <FolderOpen size={15} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} /> : <Folder size={15} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} />}
                                 </button>
                                 <button
                                   onClick={() => toggleProject(p.id)}
                                   className="flex-1 flex items-center gap-1.5 text-left min-w-0"
                                   aria-label={`${expanded ? 'Collapse' : 'Expand'} ${p.name}`}
                                 >
-                                  <FolderKanban size={13} className={activeProjectId === p.id ? 'text-accent' : 'text-base-500'} />
                                   <span className="truncate text-[13px] font-normal">{p.name}</span>
-                                  <span className="text-[11px] text-base-500">{chats.length}</span>
                                   {isPinned && <Pin size={10} className="text-accent shrink-0" />}
                                 </button>
                                 <button
@@ -460,16 +458,16 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                   </div>
                 )}
               </div>
-              <div className="mt-2">
+              <div>
                 <button
                   onClick={toggleChatsSection}
                   aria-expanded={chatsExpanded}
-                  className="w-full flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-base-400 hover:text-base-200 hover:bg-base-800/40 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
+                  className="group w-full flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-base-400 hover:text-base-200 hover:bg-base-800/40 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
                 >
                   <span className="text-[10px] uppercase tracking-widest font-medium">Chat</span>
-                  <span className="ml-auto flex items-center gap-1.5 text-base-500">
-                    {isChatLoading && <Loader2 size={10} className="animate-spin text-accent shrink-0" aria-label="Loading chats" />}
-                    {chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  <span className="flex items-center gap-1.5 text-base-500">
+                    {isChatLoading && <Loader2 size={10} className="novi-sidebar-spinner text-accent shrink-0" aria-label="Loading chats" />}
+                    <span className={`transition-opacity ${chatsExpanded ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>{chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                   </span>
                 </button>
                 {chatsExpanded && (

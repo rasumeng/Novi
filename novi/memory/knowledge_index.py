@@ -153,9 +153,13 @@ class KnowledgeIndex:
             return
 
         count = 0
+        present = {f.relative_to(self.knowledge_dir).as_posix() for f in self.knowledge_dir.rglob('*.md')}
+        stored_paths = {r.get('metadata', {}).get('path') for r in self.store.list_all(limit=self.store.count())}
+        for stale in stored_paths - present - {None}:
+            self.remove_file(stale)
         for f in sorted(self.knowledge_dir.rglob("*.md")):
             try:
-                rel = str(f.relative_to(self.knowledge_dir))
+                rel = f.relative_to(self.knowledge_dir).as_posix()
                 mtime = f.stat().st_mtime
                 if not force and rel in self._indexed_files and self._indexed_files[rel] == mtime:
                     continue
@@ -184,12 +188,11 @@ class KnowledgeIndex:
 
         # Remove existing chunks for this file (matches both deterministic rows
         # and any legacy uuid rows) before re-adding.
-        existing = self.store.query_sql(f"metadata LIKE '%\"path\": \"{rel}\"%'")
-        for e in existing:
-            self.store.delete(e.get("id", ""))
+        existing = self._file_rows(rel)
 
         chunks = _chunk_with_overlap(body)
         ids = [f"{rel}::{i}" for i in range(len(chunks))]
+        metadatas = []
         for i, chunk in enumerate(chunks):
             metadata = {
                 "path": rel,
@@ -211,7 +214,33 @@ class KnowledgeIndex:
                 "timestamp": meta.get("timestamp", datetime.now().isoformat()),
                 "embed_model": self._embedder.model_name,
             }
-            self.store.add_texts([chunk], [metadata], ids=[ids[i]])
+            metadatas.append(metadata)
+        # Embed the entire replacement before changing searchable state.
+        self.store.add_texts(chunks, metadatas, ids=ids, upsert=True)
+        retained = set(ids)
+        for row in existing:
+            if row['id'] not in retained:
+                self.store.delete(row['id'])
+        self._indexed_files[rel] = path.stat().st_mtime
+
+    def remove_file(self, rel: str) -> None:
+        """Remove only this path's chunks; quoted/wildcard filenames are safe."""
+        for row in self._file_rows(rel):
+            self.store.delete(row['id'])
+        self._indexed_files.pop(rel, None)
+
+    def _file_rows(self, rel: str) -> list[dict]:
+        import json
+        fragment = json.dumps({'path': rel})[1:-1].replace("'", "''")
+        existing = self.store.query_sql(f"metadata LIKE '%{fragment}%'")
+        rows = []
+        for row in existing:
+            meta = row.get('metadata', {})
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            if meta.get('path') == rel:
+                rows.append(row)
+        return rows
 
     def search(self, query: str, k: int = 5, rerank: bool = True) -> list[dict]:
         """Search knowledge base. Returns ranked results with metadata.

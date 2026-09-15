@@ -94,6 +94,10 @@ class ModelRuntime:
         """Drop cached provider instances (e.g. after re-discovery)."""
         self._providers.clear()
 
+    def create_memory_client(self, resolved: ResolvedModel, **limits):
+        from ...providers.memory import OllamaMemoryClient
+        return OllamaMemoryClient(resolved, **limits)
+
     # ── internal ────────────────────────────────────────────────────────
 
     def _provider_for(self, resolved: ResolvedModel):

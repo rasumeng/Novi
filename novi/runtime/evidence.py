@@ -178,6 +178,7 @@ class EvidenceCollector:
             parts.append(
                 f"\n**Source {i}** ({r.title})\n"
                 f"URL: {r.url}\n"
+                f"Published: {r.freshness or 'unknown'}\n"
                 f"{content}\n"
             )
 

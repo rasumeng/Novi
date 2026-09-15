@@ -21,15 +21,23 @@ class SimpleLLM:
     def __init__(self, model_service):
         self._client = None
         self._model = ""
+        self._provider = ""
         self._ms = model_service
 
     def invoke(self, prompt: str, **kwargs) -> str:
+        from contextlib import nullcontext
+        coordinator = getattr(self._ms, 'inference', None)
+        with coordinator.acquire_foreground() if coordinator else nullcontext():
+            return self._invoke(prompt, **kwargs)
+
+    def _invoke(self, prompt: str, **kwargs) -> str:
         # Re-resolve primary model every call so Settings change applies live.
         if self._ms is not None:
-            _, model_name = self._ms.resolve_primary()
-            if model_name != self._model:
+            provider, model_name = self._ms.resolve_primary()
+            if (provider, model_name) != (self._provider, self._model):
                 self._client = None
                 self._model = model_name
+                self._provider = provider
         if self._client is None:
             if self._ms is None:
                 raise ModelUnavailableError(None, [])

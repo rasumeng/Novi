@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { PanelRightClose, PanelRightOpen, Activity, Target, Clock, FolderKanban, Cpu, Layers, Loader2 } from 'lucide-react'
+import { PanelRightClose, PanelRightOpen, Activity, Target, Clock, FolderKanban, Cpu, Layers, Loader2, Brain } from 'lucide-react'
 import { InlineStep, AgentStateInfo, ProgressInfo, Project } from '@/types'
+import type { MemoryActivityState } from '@/services/novi'
 import { EmptyState } from '@/components/common/EmptyState'
+import { MemoryActivity } from './MemoryActivity'
 
 interface Props {
   open: boolean
@@ -12,6 +14,7 @@ interface Props {
   agentState: AgentStateInfo | null
   progress: ProgressInfo | null
   activeProject: Project | null
+  memoryActivity: MemoryActivityState | null
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -56,8 +59,37 @@ export function ActivityPanel({
   agentState,
   progress,
   activeProject,
+  memoryActivity,
 }: Props) {
   const hasActivity = generating || inlineSteps.length > 0 || agentState !== null || progress !== null
+  const memoryBusy = !!memoryActivity && ['proposing', 'verifying', 'applying'].includes(memoryActivity.state)
+  const [tab, setTab] = useState<'activity' | 'memory'>(memoryBusy ? 'memory' : 'activity')
+  const [width, setWidth] = useState(() => {
+    try { return Math.min(520, Math.max(280, Number(localStorage.getItem('novi_inspector_width')) || 320)) } catch { return 320 }
+  })
+  useEffect(() => { if (memoryBusy) setTab('memory') }, [memoryBusy])
+
+  function beginResize(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = width
+    let finalWidth = startWidth
+    const move = (next: PointerEvent) => {
+      finalWidth = Math.min(520, Math.max(280, startWidth + startX - next.clientX))
+      setWidth(finalWidth)
+    }
+    const end = () => {
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', end)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      try { localStorage.setItem('novi_inspector_width', String(Math.round(finalWidth))) } catch {}
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('pointermove', move)
+    document.addEventListener('pointerup', end)
+  }
 
   return (
     <>
@@ -75,18 +107,33 @@ export function ActivityPanel({
         {open && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 286, opacity: 1 }}
+            animate={{ width, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="border-l border-base-800/30 bg-base-950 overflow-hidden shrink-0"
+            className="relative border-l border-base-800/30 bg-base-950 overflow-hidden shrink-0"
           >
-            <div className="w-[286px] h-full flex flex-col">
-              <div className="flex items-center justify-between px-4 h-11 shrink-0">
-                <div className="flex items-center gap-2 text-sm font-medium text-base-200">
-                  <Activity size={14} className="text-accent" />
-                  Activity
-                </div>
-                {generating && (
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-label="Resize side panel"
+              aria-orientation="vertical"
+              aria-valuemin={280}
+              aria-valuemax={520}
+              aria-valuenow={Math.round(width)}
+              onPointerDown={beginResize}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                const next = Math.min(520, Math.max(280, width + (event.key === 'ArrowLeft' ? 16 : -16)))
+                setWidth(next)
+                try { localStorage.setItem('novi_inspector_width', String(next)) } catch {}
+              }}
+              className="absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize hover:bg-accent/35 focus:bg-accent/35"
+            />
+            <div style={{ width }} className="h-full flex flex-col">
+              <div role="tablist" aria-label="Side panel" className="flex h-11 shrink-0 items-end gap-1 border-b border-base-800/30 px-3">
+                <Tab active={tab === 'activity'} onClick={() => setTab('activity')} icon={Activity} label="Activity" />
+                <Tab active={tab === 'memory'} onClick={() => setTab('memory')} icon={Brain} label="Memory" />
+                {(generating || memoryBusy) && (
                   <span className="flex gap-0.5">
                     <span className="w-1 h-1 rounded-full bg-accent animate-glow" />
                     <span className="w-1 h-1 rounded-full bg-accent animate-glow" style={{ animationDelay: '0.2s' }} />
@@ -95,7 +142,7 @@ export function ActivityPanel({
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+              {tab === 'memory' ? <MemoryActivity activity={memoryActivity} /> : <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
                 {!hasActivity && (
                   <EmptyState
                     compact
@@ -193,7 +240,7 @@ export function ActivityPanel({
                     <p className="text-[13px] text-base-100">{agentState.tools_used}</p>
                   </Section>
                 )}
-              </div>
+              </div>}
             </div>
           </motion.aside>
         )}
@@ -212,4 +259,12 @@ function Section({ icon: Icon, label, children }: { icon: React.ElementType; lab
       {children}
     </div>
   )
+}
+
+function Tab({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: React.ElementType; label: string }) {
+  return <button type="button" role="tab" aria-selected={active} onClick={onClick}
+    className={`relative flex h-10 items-center gap-1.5 px-2 text-xs transition-colors ${active ? 'text-base-100' : 'text-base-500 hover:text-base-200'}`}>
+    <Icon size={13} />{label}
+    {active && <span className="absolute inset-x-2 bottom-0 h-px bg-accent" />}
+  </button>
 }

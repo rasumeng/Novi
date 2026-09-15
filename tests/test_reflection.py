@@ -52,6 +52,7 @@ def _item(id, content, status=KnowledgeStatus.CANDIDATE, last_seen=None, created
         confidence=0.9,
         status=status,
         tags=("preference",),
+        sources=('conversation-1', 'conversation-2', 'conversation-3', 'conversation-4'),
         last_seen_at=last_seen,
         created_at=created or datetime(2026, 1, 1),
     )

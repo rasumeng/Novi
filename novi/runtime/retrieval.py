@@ -129,7 +129,7 @@ class RetrievalExecutor:
         brain=None,
         project_index=None,
         max_memory_results: int = 3,
-        memory_distance_threshold: float = 0.5,
+        memory_distance_threshold: float = 0.8,
         max_project_results: int = 3,
         web_source: WebRetrievalSource | None = None,
         knowledge_source: KnowledgeRetrievalSource | None = None,
@@ -150,6 +150,7 @@ class RetrievalExecutor:
         self._web_source = web_source or WebRetrievalSource()
         self._knowledge_source = knowledge_source
         self._workspace_service = workspace_service
+        self.knowledge_cycle = None
         # Project sharedContext retrieval — first-class, isolated by project_id
         try:
             from .sources.project_context import ProjectContextRetrievalSource
@@ -226,6 +227,8 @@ class RetrievalExecutor:
           2. Pre-loop retrieval left grounding quality below sufficient
              (recorded as an attempt regardless of current tool binding).
         """
+        if self.knowledge_cycle is not None:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason='Knowledge cycle owns recovery')
         state = self._recovery(ctx)
         plan = self._retrieval_plan(ctx)
         if self.plan_requires_web(plan):
@@ -249,6 +252,8 @@ class RetrievalExecutor:
         requested, and a recovery attempt remains. Runtime invokes this only
         on the "no tool calls" path.
         """
+        if self.knowledge_cycle is not None:
+            return RecoveryDecision(action=RecoveryAction.NONE, reason='Knowledge cycle owns recovery')
         state = self._recovery(ctx)
         if not ctx.grounding_quality:
             return RecoveryDecision(action=RecoveryAction.NONE,
@@ -393,6 +398,11 @@ class RetrievalExecutor:
         hits = sum(1 for t in key_terms if t in lower)
         return hits / len(key_terms)
 
+    @classmethod
+    def evidence_relevance(cls, bundle, key_terms):
+        return cls.compute_relevance('\n'.join(
+            f'{r.title}\n{r.full_text or r.snippet}' for r in bundle.results), key_terms)
+
     @staticmethod
     def reformulate_query(original: str, key_terms: list[str]) -> str:
         return " ".join(key_terms[:6])
@@ -496,7 +506,7 @@ class RetrievalExecutor:
             return bundle
 
         key_terms = self.extract_key_terms(user_input)
-        relevance = self.compute_relevance(bundle.merged_text, key_terms) if key_terms else 1.0
+        relevance = self.evidence_relevance(bundle, key_terms) if key_terms else 1.0
         if key_terms and relevance < 0.3:
             reformulated = self.reformulate_query(user_input, key_terms)
             log.info("low relevance (%.2f) for '%s', retrying with '%s'",
@@ -504,7 +514,7 @@ class RetrievalExecutor:
             retry = collector.collect(reformulated, min_sources=1)
             if retry.results and retry.source_count > 0:
                 bundle = retry
-                relevance = self.compute_relevance(bundle.merged_text, key_terms) if key_terms else 1.0
+                relevance = self.evidence_relevance(bundle, key_terms) if key_terms else 1.0
 
         has_text = bool(bundle.merged_text and bundle.merged_text.strip())
         bundle.quality = (
@@ -596,6 +606,19 @@ class RetrievalExecutor:
         populates memory/project prompt context.
         """
         self.init_recovery(ctx)
+        if self.knowledge_cycle is not None:
+            self._setup_coordinator(ctx)
+            self.knowledge_cycle.prepare(ctx, user_input)
+            session = ctx.retrieval_coordinator.network_session
+            ctx.retrieval_budget.max_web_searches = 2
+            ctx.retrieval_budget.max_web_fetches = 3
+            ctx.retrieval_budget.searches_used = session.searches
+            ctx.retrieval_budget.fetches_used = session.fetches
+            self._setup_project_context(ctx, user_input)
+            self._setup_workspace_context(ctx, user_input)
+            self._recovery(ctx).quality = ctx.grounding_quality or ''
+            yield ('thinking', 'Knowledge assessment complete', ctx.metadata.get('knowledge_origin', ''), None)
+            return
         if (ctx.analysis is not None
                 and ctx.analysis.retrieval_plan is not None
                 and ctx.analysis.retrieval_plan.strategy != RetrievalStrategy.NONE):
@@ -681,6 +704,7 @@ class RetrievalExecutor:
             store,
             memory_types=_MEMORY_TYPE_FILTERS.get(ctx.intent_str),
             distance_threshold=self.memory_distance_threshold,
+            conversation_id=getattr(ctx, 'conversation_id', None),
         )
         t0 = time.time()
         result = source.retrieve(
@@ -694,7 +718,11 @@ class RetrievalExecutor:
         if result.quality != RetrievalQuality.SUFFICIENT or not result.items:
             return
         try:
-            items = self._rank_memories(result.items)[:self.max_memory_results]
+            from .result_merger import ResultMerger
+            allocation = ContextAllocation(max_results=self.max_memory_results)
+            merger = ResultMerger()
+            merged = merger.merge([result], user_input, allocation)
+            items = list(merger.select(merged.items, user_input, allocation))
             if ctx.trace is not None:
                 ctx.trace.memory_result_count = len(items)
                 ctx.trace.memory_latency_ms = round((time.time() - t0) * 1000, 2)

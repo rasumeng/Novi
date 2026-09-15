@@ -368,6 +368,8 @@ def _build_timeline_bridge(backend: dict) -> TimelineService | None:
         bus = ctx.brain_event_bus
         if bus is None:
             return None
+        bus.on('memory.activity', lambda event: _broadcast_sync(
+            {'type': 'memory_activity', 'activity': event.data}))
         service = TimelineService(
             bus,
             on_entry=lambda entry: _broadcast_sync(
@@ -721,6 +723,9 @@ def _shutdown_backend():
         backend = _shared_backend
     if backend is None:
         return
+    context = backend.get('context')
+    if context is not None:
+        context.close()
     mcp = backend.get("mcp")
     if mcp is not None:
         try:
@@ -755,6 +760,23 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     )
 
     # ── Conversation persistence ──────────────────────────────
+
+    @app.get('/api/memory/activity')
+    def memory_activity():
+        return get_backend()['context'].memory_worker.snapshot()
+
+    @app.post('/api/memory/pause')
+    def pause_memory(body: dict):
+        paused = body.get('paused', True)
+        if not isinstance(paused, bool):
+            return JSONResponse({'error': 'paused must be boolean'}, status_code=400)
+        worker = get_backend()['context'].memory_worker
+        worker.pause(paused)
+        return worker.snapshot()
+
+    @app.get('/api/memory/activity/history')
+    def memory_history():
+        return get_backend()['context'].memory_worker.history()
 
     CHATS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1975,8 +1997,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 status_code=400,
             )
         desc = (body.get("description") or "").strip()
-        if not desc:
-            return JSONResponse({"error": "description required"}, status_code=400)
+        # if not desc:
+        #     return JSONResponse({"error": "description required"}, status_code=400)
         content = body.get("content") or ""
         if not content.strip():
             return JSONResponse({"error": "content required"}, status_code=400)

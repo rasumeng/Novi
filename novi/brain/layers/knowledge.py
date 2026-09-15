@@ -4,16 +4,14 @@ Persistence only: turns extracted claims into KnowledgeItems (ids, provenance
 edges via ``sources``, scenario ownership via ``scenario_id``) and writes them.
 No reasoning, no other layers.
 
-Phase F consolidation: a newly extracted claim that restates an existing
-ATOMIC, non-superseded item corroborates it (advances ``last_seen_at``) instead
-of inserting a sibling row. Provenance of the re-observation is not appended in
-this phase.
+Repeated equivalent claims retain independent conversation sources on one
+canonical item. Replay within a conversation cannot inflate corroboration.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
 
 from ..reasoning import verification
 from ..reasoning.extraction import ExtractionResult
@@ -21,10 +19,6 @@ from ..storage.vector_store import VectorStore
 from ..types import KnowledgeForm, KnowledgeHit, KnowledgeItem, KnowledgeStatus
 
 _SCENARIO_SUMMARY_CONFIDENCE = 0.8
-
-# Corpus scan cap for cross-corpus consolidation per extraction batch.
-_DEDUP_SCAN_LIMIT = 2000
-
 
 class KnowledgeLayer:
     """Domain manager for knowledge items."""
@@ -41,28 +35,34 @@ class KnowledgeLayer:
     ) -> list[str]:
         """Persist extracted claims + scenario summary. Returns written ids.
 
-        Claims that restate an existing ATOMIC, non-superseded item corroborate
-        it (advance ``last_seen_at``) and return that item's id instead of
-        inserting a sibling. Non-duplicates are written as new items.
+        Equivalent claims retain sources and return the canonical id. Opposing
+        or differently attributed claims are distinct. IDs make retries safe.
         """
-        corpus = self.list_objects(limit=_DEDUP_SCAN_LIMIT)
+        corpus = self.list_objects(limit=None)
         items: list[KnowledgeItem] = []
         ids: list[str] = []
         for claim in result.claims:
-            match = verification.find_near_duplicate(corpus, claim.statement)
-            if match is not None and self._store.update_last_seen(
-                match.id, datetime.now()
-            ):
+            actor = getattr(claim, 'speaker', 'user')
+            evidence_source = conversation_id if actor == 'user' else f'{actor}:{conversation_id}'
+            eligible = [i for i in corpus if
+                        ('assistant_observation' in i.tags) == (actor == 'assistant') and
+                        ('tool_observation' in i.tags) == (actor == 'tool')]
+            match = verification.find_near_duplicate(eligible, claim.statement)
+            if match is not None:
+                sources = tuple(dict.fromkeys((*match.sources, evidence_source)))
+                match.sources = sources
+                match.last_seen_at = datetime.now()
+                self._store.update_observation(match.id, sources, match.last_seen_at)
                 ids.append(match.id)
                 continue
             item = KnowledgeItem(
-                id=f"kn-{uuid4().hex[:12]}",
+                id=f"kn-{uuid5(NAMESPACE_URL, evidence_source + ':' + verification.canonical_claim(claim.statement)).hex}",
                 form=KnowledgeForm.ATOMIC,
                 content=claim.statement,
                 confidence=claim.confidence,
                 status=KnowledgeStatus.CANDIDATE,
-                tags=claim.tags,
-                sources=(conversation_id,),
+                tags=claim.tags + ((f'{actor}_observation',) if actor != 'user' else ()),
+                sources=(evidence_source,),
                 scenario_id=scenario_id,
             )
             items.append(item)
@@ -70,7 +70,7 @@ class KnowledgeLayer:
         if result.summary:
             items.append(
                 KnowledgeItem(
-                    id=f"kn-{uuid4().hex[:12]}",
+                    id=f"kn-{uuid5(NAMESPACE_URL, conversation_id + ':summary:' + result.summary).hex}",
                     form=KnowledgeForm.COMPOSITE,
                     content=result.summary,
                     confidence=_SCENARIO_SUMMARY_CONFIDENCE,
@@ -106,7 +106,7 @@ class KnowledgeLayer:
         """All items as flat dicts, for compatibility consumers."""
         return self._store.list_all(limit=limit)
 
-    def list_objects(self, limit: int = 200) -> list[KnowledgeItem]:
+    def list_objects(self, limit: int | None = 200) -> list[KnowledgeItem]:
         """All items as KnowledgeItem objects (reflection / promotion)."""
         return [self._store.item_from_row(r) for r in self._store.list_all(limit=limit)]
 
@@ -119,6 +119,7 @@ class KnowledgeLayer:
         statement: str,
         tags: tuple[str, ...] | list[str] = (),
         source_kind: str = "explicit",
+        item_id: str | None = None,
     ) -> str:
         """Explicit knowledge acquisition (Brain.learn).
 
@@ -126,7 +127,7 @@ class KnowledgeLayer:
         the resolver/retrieval, closing the legacy stale-index gap.
         """
         item = KnowledgeItem(
-            id=f"kn-{uuid4().hex[:12]}",
+            id=item_id or f"kn-{uuid4().hex[:12]}",
             form=KnowledgeForm.ATOMIC,
             content=statement,
             confidence=1.0,

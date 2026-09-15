@@ -56,7 +56,21 @@ export function LandingPage({
   }, [])
 
   useEffect(() => {
-    fetchSystemHealth().then(setHealth)
+    let alive = true
+    let requestId = 0
+    const refreshHealth = async () => {
+      const currentRequest = ++requestId
+      const result = await fetchSystemHealth()
+      if (alive && currentRequest === requestId && result) setHealth(result)
+    }
+    void refreshHealth()
+    window.addEventListener('novi:readiness-changed', refreshHealth)
+    window.addEventListener('focus', refreshHealth)
+    return () => {
+      alive = false
+      window.removeEventListener('novi:readiness-changed', refreshHealth)
+      window.removeEventListener('focus', refreshHealth)
+    }
   }, [])
 
   const recents = useMemo(() =>

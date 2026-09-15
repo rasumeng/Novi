@@ -44,6 +44,13 @@ def tokens(text: str) -> set[str]:
     return {t for t in _WORD.findall((text or "").lower()) if len(t) > 1 and t not in _STOP}
 
 
+def compatible_claims(left: str, right: str) -> bool:
+    """Do not collapse changed polarity or numbers using topical overlap."""
+    neg = r"\b(?:not|no|never|without|cannot)\b|n't\b"
+    return (bool(re.search(neg, left.lower())) == bool(re.search(neg, right.lower()))
+            and re.findall(r'\d+(?:\.\d+)?', left) == re.findall(r'\d+(?:\.\d+)?', right))
+
+
 def corroboration(items: list[KnowledgeItem], index: int) -> int:
     """Number of *other* items that restate the same claim as ``items[index]``.
 
@@ -59,6 +66,8 @@ def corroboration(items: list[KnowledgeItem], index: int) -> int:
     count = 0
     for i, other in enumerate(items):
         if i == index:
+            continue
+        if items[index].evidence or other.evidence or not compatible_claims(items[index].content, other.content):
             continue
         other_tokens = tokens(other.content)
         if not other_tokens:
@@ -76,14 +85,12 @@ def find_near_duplicate(
 ) -> Optional[KnowledgeItem]:
     """Return the existing ATOMIC, non-superseded item that restates ``content``.
 
-    Cross-corpus consolidation helper: a repeated claim corroborates the
-    nearest matching item instead of becoming a sibling row. Mirrors the
-    near-duplicate rule in ``corroboration`` (>= 2 shared terms, overlap ratio
-    >= 0.5). Composite summaries and already-superseded items are never
-    dedup targets — a fresh claim must not collapse into a summary or an
-    archived history row.
+    Equality is deliberately conservative: word order, polarity and values
+    must agree. Composite summaries and superseded items are not targets.
     """
-    base = tokens(content)
+    # Similar words do not establish equivalent claims (negation, values,
+    # actors). Keep paraphrases separate until semantically verified.
+    base = canonical_claim(content)
     if not base:
         return None
     best: Optional[KnowledgeItem] = None
@@ -91,16 +98,22 @@ def find_near_duplicate(
     for item in items:
         if item.form is not KnowledgeForm.ATOMIC:
             continue
+        if item.evidence:
+            continue
         if item.status is KnowledgeStatus.SUPERSEDED:
             continue
-        other = tokens(item.content)
+        if not compatible_claims(item.content, content):
+            continue
+        other = canonical_claim(item.content)
         if not other:
             continue
-        common = len(base & other)
-        if common < 2:
-            continue
-        ratio = common / max(len(base), len(other))
+        ratio = 1.0 if base == other else 0.0
         if ratio >= 0.5 and ratio > best_ratio:
             best = item
             best_ratio = ratio
     return best
+
+
+def canonical_claim(text: str) -> str:
+    """Conservative equality retaining negation, word order and values."""
+    return ' '.join(re.findall(r"\w+(?:[.'-]\w+)*", (text or '').casefold()))

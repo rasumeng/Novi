@@ -89,8 +89,8 @@ def test_vectorstore_rebuilds_on_dimension_change(tmp_path):
 
     new = VectorStore(persist_dir=persist, embed_model=FakeEmbed(dim=32))
 
-    assert new.count() == 0
-    assert new.get("kn-1") is None
+    assert new.count() == 1
+    assert new.get("kn-1") is not None
 
     new.add(_item("kn-2"))
     assert new.get("kn-2") is not None

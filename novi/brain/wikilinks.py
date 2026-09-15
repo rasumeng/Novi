@@ -300,7 +300,7 @@ class WikilinkSynchronizer:
             if not item_id:
                 continue
             report.scanned += 1
-            self._diff_note(index, str(item_id), body, report)
+            self._diff_note(index, str(item_id), body + '\n' + '\n'.join(_as_list(meta.get('related'))), report)
 
         # Orphan sweep: drop `references` edges whose source is no longer any
         # note's id (deleted/churned source note). Provenance edges keep their
@@ -335,7 +335,7 @@ class WikilinkSynchronizer:
             return report
         report.scanned += 1
         index = index or self.build_index()
-        self._diff_note(index, str(item_id), body, report)
+        self._diff_note(index, str(item_id), body + '\n' + '\n'.join(_as_list(meta.get('related'))), report)
         return report
 
     # ── internals ──────────────────────────────────────────────────────────

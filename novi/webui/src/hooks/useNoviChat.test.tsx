@@ -46,6 +46,7 @@ const convA: Conversation = { id: 'A', title: 'Conversation A', updatedAt: '', p
 const convB: Conversation = { id: 'B', title: 'Conversation B', updatedAt: '', pinned: false, messages: [] }
 
 vi.mock('@/services/novi', () => ({
+  API_BASE: '',
   NoviClient: MockNoviClient,
   fetchConversations: vi.fn(async () => [convA, convB]),
   saveConversation: vi.fn(async () => {}),
@@ -80,6 +81,8 @@ function renderChatHook() {
 }
 
 beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ state: 'idle', version: 0,
+    instance_id: 'test', job_id: null, mode: 'shadow', reason: '', note_ids: [] }) })))
   MockNoviClient.instances = []
   resetBootCache()
 })

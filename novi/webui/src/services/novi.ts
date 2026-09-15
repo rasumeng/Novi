@@ -4,6 +4,7 @@
 import { Conversation, Attachment, Project, Skill, McpCatalogEntry, McpStatusResponse, McpServerDetail, DiffData, AgentTaskCreate, AgentConfig, TaskData, BackgroundRunInfo, BackgroundRunLog, ScheduledTaskInfo, TimelineEntry, KnowledgeOverview } from '@/types'
 
 export type ServerEvent =
+  | { type: 'memory_activity'; activity: MemoryActivityState }
   | { type: 'token'; text: string }
   | { type: 'thinking'; text: string; detail?: string; query?: string }
   | { type: 'status'; text: string; detail?: string; query?: string }
@@ -47,6 +48,16 @@ export type ServerEvent =
   | { type: 'error'; text: string }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
+
+export interface MemoryActivityState {
+  state: string
+  version: number
+  instance_id: string
+  job_id: string | null
+  mode: 'shadow' | 'apply'
+  reason: string
+  note_ids: string[]
+}
 
 const WS_URL =
   import.meta.env.VITE_NOVI_WS_URL ??

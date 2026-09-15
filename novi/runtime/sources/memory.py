@@ -39,11 +39,13 @@ class MemoryRetrievalSource:
         self,
         memory_manager: "MemoryManager",
         memory_types: Optional[list[str]] = None,
-        distance_threshold: Optional[float] = 0.5,
+        distance_threshold: Optional[float] = 0.8,
+        conversation_id: Optional[str] = None,
     ):
         self._memory = memory_manager
         self._memory_types = memory_types
         self._distance_threshold = distance_threshold
+        self._conversation_id = conversation_id
 
     def retrieve(
         self,
@@ -102,6 +104,7 @@ class MemoryRetrievalSource:
                     top_k=k,
                     distance_threshold=self._distance_threshold,
                     memory_types=self._memory_types,
+                    conversation_id=self._conversation_id,
                 ),
             )
             return [_recall_item_to_row(item) for item in result.items]

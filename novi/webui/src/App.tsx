@@ -218,6 +218,7 @@ export default function App() {
             timeline={chat.timeline}
             activityOpen={activityOpen}
             onToggleActivity={handleToggleActivity}
+            memoryActivity={chat.memoryActivity}
           />
         )
     }
@@ -239,6 +240,7 @@ export default function App() {
         reconnected={chat.reconnected}
         workingActivityTitle={workingActivityTitle}
         isActiveConversation={activeSection === 'conversations' && chat.generating}
+        memoryActivity={chat.memoryActivity}
         onSelectConversation={handleSelectConversation}
         collapsed={collapsed}
         onToggleSidebar={() => setCollapsed(v => !v)}

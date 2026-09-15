@@ -2,7 +2,7 @@ import { PanelLeft, PanelRight, Search, Settings } from 'lucide-react'
 import { WindowControls } from './WindowControls'
 import { NotificationBell } from '@/components/chat/NotificationBell'
 import { GlobalActivityIndicator } from '@/components/chat/GlobalActivityIndicator'
-import { ConnectionState } from '@/services/novi'
+import { ConnectionState, type MemoryActivityState } from '@/services/novi'
 import { CONNECTION_LABEL } from '@/components/chat/connectionStatus'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   reconnected?: boolean
   workingActivityTitle?: string | null
   isActiveConversation?: boolean
+  memoryActivity?: MemoryActivityState | null
   onSelectConversation?: (id: string) => void
   collapsed?: boolean
   onToggleSidebar?: () => void
@@ -25,6 +26,7 @@ export function TitleBar({
   reconnected,
   workingActivityTitle,
   isActiveConversation,
+  memoryActivity,
   onSelectConversation,
   collapsed = false,
   onToggleSidebar,
@@ -35,6 +37,7 @@ export function TitleBar({
   minimal = false,
 }: Props) {
   const conn = CONNECTION_LABEL[connection]
+  const consolidating = !!memoryActivity && ['proposing', 'verifying', 'applying'].includes(memoryActivity.state)
 
   if (minimal) {
     return (
@@ -69,7 +72,16 @@ export function TitleBar({
         <span className="hidden sm:flex items-center gap-1 px-1.5 text-[10px] text-base-500">
           <span className={`h-1.5 w-1.5 rounded-full ${conn.dot}`} />
         </span>
-        {workingActivityTitle && (
+        {consolidating ? (
+          <div role="status" aria-live="polite" className="flex items-center gap-1.5 rounded-full border border-accent/20 bg-accent/10 px-2 py-0.5 text-[10px] text-accent">
+            <span className="flex gap-0.5" aria-hidden="true">
+              <span className="h-1 w-1 rounded-full bg-accent animate-glow" />
+              <span className="h-1 w-1 rounded-full bg-accent animate-glow" style={{ animationDelay: '0.2s' }} />
+              <span className="h-1 w-1 rounded-full bg-accent animate-glow" style={{ animationDelay: '0.4s' }} />
+            </span>
+            Consolidating
+          </div>
+        ) : workingActivityTitle && (
           <GlobalActivityIndicator
             isActiveConversation={!!isActiveConversation}
             title={workingActivityTitle}

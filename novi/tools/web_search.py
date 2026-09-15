@@ -31,10 +31,10 @@ def web_search(query: str, max_results: int = 5, timelimit: str = None) -> str:
         )
     except SearchProviderError as e:
         # Typed provider failures surface verbatim — no silent fallback.
-        return f"Web search failed ({e.provider}): {e.message}"
+        return f"Error: Web search failed ({e.provider}): {e.message}"
     except Exception as e:
         log.warning("web_search unexpected failure: %s", e, exc_info=True)
-        return "Web search failed with an unexpected error."
+        return "Error: Web search failed with an unexpected error."
 
     if not response.results:
         return f"No results found for '{query}'."
@@ -42,126 +42,33 @@ def web_search(query: str, max_results: int = 5, timelimit: str = None) -> str:
     search_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [f"Search performed: {search_date}"]
     for i, r in enumerate(response.results, 1):
-        lines.append(f"{i}. **{r.title}**\n   {r.snippet}\n   {r.url}")
+        lines.append(f"{i}. **{r.title}**\n   {r.snippet}\n   Published: {r.published_at or 'unknown'}\n   {r.url}")
     return "\n\n".join(lines)
 
 
 @register_tool()
 def fetch_url(url: str, max_length: int = 2000) -> str:
-    """Fetch a URL and return clean text content.
-
-    Args:
-        url: The URL to fetch.
-        max_length: Maximum characters to return (default 2000).
-    """
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-
-        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        if len(text) > max_length:
-            text = text[:max_length] + "\n[truncated]"
-
-        return text
-    except Exception as e:
-        return f"[error] Failed to fetch URL: {e}"
+    """Read a public URL as text."""
+    return web_fetch(url, max_length)
 
 
 @register_tool()
 def web_fetch(url: str, max_length: int = 5000) -> str:
-    """Fetch and read content from a URL. Returns cleaned article text using trafilatura."""
+    """Read a public web page with bounded download size and deadline."""
+    from ..search.reader import read_page
     try:
-        import trafilatura
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded:
-            text = trafilatura.extract(
-                downloaded,
-                include_comments=False,
-                include_tables=True,
-                favor_precision=False,
-                favor_recall=True,
-            )
-            if text and len(text) > 100:
-                if len(text) > max_length:
-                    text = text[:max_length] + "..."
-                return text
-
-        import urllib.request
-        import re
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-
-        text = re.sub(r"<script[^>]*>.*?</script>", "", html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        if len(text) > max_length:
-            text = text[:max_length] + "..."
-
-        return text or "No readable content found."
-    except Exception as e:
-        return f"Error fetching URL: {e}"
+        return read_page(url, max_length=max_length)
+    except Exception as exc:
+        return f"Error: Failed to fetch URL: {exc}"
 
 
 @register_tool()
 def webfetch(url: str, format: str = "markdown", max_length: int = 8000) -> str:
-    """Fetch content from a URL and return in specified format.
-
-    Args:
-        url: The URL to fetch.
-        format: Output format - 'markdown' (default), 'text', or 'html'.
-        max_length: Maximum characters to return (default 8000).
-    """
+    """Read a public URL as text, markdown, or HTML."""
+    from ..search.reader import read_page
     try:
-        import trafilatura
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded and format == "markdown":
-            text = trafilatura.extract(
-                downloaded,
-                include_comments=False,
-                include_tables=True,
-                favor_precision=False,
-                favor_recall=True,
-                output_format="txt",
-            )
-            if text and len(text) > 100:
-                if len(text) > max_length:
-                    text = text[:max_length] + "\n[truncated]"
-                return text
-        elif downloaded and format == "html":
-            if len(downloaded) > max_length:
-                return downloaded[:max_length] + "\n[truncated]"
-            return downloaded
-
-        # Fallback: raw fetch
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-
-        if format == "html":
-            if len(raw) > max_length:
-                return raw[:max_length] + "\n[truncated]"
-            return raw
-
-        # text or markdown fallback: strip HTML
-        text = re.sub(r"<script[^>]*>.*?</script>", "", raw, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        if len(text) > max_length:
-            text = text[:max_length] + "\n[truncated]"
-
-        return text or "No readable content found."
-    except Exception as e:
-        return f"Error fetching URL: {e}"
+        if format not in ("markdown", "text", "html"):
+            return "Error: Unsupported page format"
+        return read_page(url, max_length=max_length, output_format=format)
+    except Exception as exc:
+        return f"Error: Failed to fetch URL: {exc}"

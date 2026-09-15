@@ -200,8 +200,8 @@ def test_repeated_learn_is_idempotent(tmp_path):
 
     files = list(kb.rglob("*.md"))
     assert len(files) == 1
-    # Brain keeps append-only history (two verified items), markdown one mirror
-    assert brain._knowledge_layer.store.count() == 2
+    # One note identity and one current projection; revisions retain history.
+    assert brain._knowledge_layer.store.count() == 1
     meta, _ = _read_frontmatter(files[0])
     assert meta["status"] == KnowledgeStatus.VERIFIED.value
 
@@ -301,16 +301,12 @@ def test_reconcile_edit_does_not_duplicate(tmp_path):
     meta, body = _read_frontmatter(files[0])
     assert body == "The user prefers python 3.12."
     new_id = meta["id"]
-    assert new_id != old_id
+    assert new_id == old_id
 
     by_id = {i.id: i for i in brain._knowledge_layer.list_objects()}
-    assert by_id[old_id].status is KnowledgeStatus.SUPERSEDED
     assert by_id[new_id].content == "The user prefers python 3.12."
-
-    edges = brain._relationship_store.outgoing(new_id)
-    supersedes = [e for e in edges if e.kind is EdgeKind.SUPERSEDES]
-    assert len(supersedes) == 1
-    assert supersedes[0].target_id == old_id
+    revisions = brain._vault.db.execute('SELECT body FROM revisions WHERE id = ?', (old_id,)).fetchall()
+    assert {r[0] for r in revisions} == {'The user prefers python.', 'The user prefers python 3.12.'}
 
 
 def test_reconcile_deletion_keeps_brain_history(tmp_path):
@@ -332,7 +328,7 @@ def test_reconcile_deletion_keeps_brain_history(tmp_path):
     item = brain._knowledge_layer.store.item_from_row(
         next(r for r in rows if r["id"] == item_id)
     )
-    assert item.status is KnowledgeStatus.VERIFIED
+    assert item.status is KnowledgeStatus.SUPERSEDED
     assert item.content == "The user prefers python."
 
 
@@ -352,9 +348,9 @@ def test_reconcile_formatting_only_no_duplicate(tmp_path):
     )
 
     reconcile = brain.reconcile_markdown()
-    assert reconcile.unchanged == 1
+    assert reconcile.edited == 1
     assert reconcile.new == 0
-    assert reconcile.edited == 0
+    assert len(brain._knowledge_layer.list_objects()) == 1
 
     rows = brain._knowledge_layer.store.list_all(limit=100)
     assert len(rows) == 1  # no new knowledge created
@@ -502,7 +498,8 @@ def test_wikilink_references_edges_on_create_only(tmp_path):
     r2 = brain.learn("Python is popular. See [[Python]] and [[Rust|the fast one]].")
     assert r2["markdown"]["created"] is False
     edges2 = brain._relationship_store.outgoing(r2["item_id"], kind=EdgeKind.REFERENCES)
-    assert len(edges2) == 0  # creation-only: no new edges for the new item
+    assert r2['item_id'] == r1['item_id']
+    assert len(edges2) == 2  # same identity retains its links without duplicates
 
 
 # ── correct_memory write-through ──────────────────────────────────────────

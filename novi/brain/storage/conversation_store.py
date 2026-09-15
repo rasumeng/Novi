@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS turns (
     ts              TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_turns_conversation ON turns (conversation_id, seq);
+CREATE TABLE IF NOT EXISTS extraction_progress (
+    conversation_id TEXT PRIMARY KEY,
+    next_seq INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -61,7 +65,7 @@ class ConversationStore:
 
     def append(self, turn: Turn, conversation_id: str) -> None:
         """Persist one raw turn under the Brain-supplied conversation id."""
-        with self._lock:
+        with self._lock, self._conn:
             now = turn.timestamp.isoformat()
             self._conn.execute(
                 """INSERT INTO conversations (id, title, turn_count, started_at, updated_at)
@@ -71,6 +75,9 @@ class ConversationStore:
                        updated_at = excluded.updated_at""",
                 (conversation_id, now, now),
             )
+            if turn.project_id:
+                self._conn.execute('UPDATE conversations SET project_id=COALESCE(project_id,?) WHERE id=?',
+                                   (turn.project_id, conversation_id))
             seq = self._conn.execute(
                 "SELECT COUNT(*) FROM turns WHERE conversation_id = ?",
                 (conversation_id,),
@@ -98,6 +105,37 @@ class ConversationStore:
                 (scenario_id, conversation_id),
             )
             self._conn.commit()
+
+    def pending_extraction(self, conversation_id: str, limit: int = 5) -> tuple[int, tuple[Turn, ...]]:
+        """Read a bounded unprocessed batch. Only acknowledge after persistence."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM turns WHERE conversation_id = ? AND seq >= "
+                "COALESCE((SELECT next_seq FROM extraction_progress WHERE conversation_id = ?), 0) "
+                "ORDER BY seq LIMIT ?", (conversation_id, conversation_id, limit)
+            ).fetchall()
+        return (rows[-1]['seq'] + 1, tuple(self._row_to_turn(r) for r in rows)) if rows else (0, ())
+
+    @property
+    def database_path(self) -> Path:
+        return self._path
+
+    def acknowledge_extraction(self, conversation_id: str, next_seq: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO extraction_progress VALUES (?, ?) ON CONFLICT(conversation_id) "
+                "DO UPDATE SET next_seq = MAX(next_seq, excluded.next_seq)", (conversation_id, next_seq)
+            )
+            self._conn.commit()
+
+    def pending_conversations(self, limit: int = 20) -> tuple[str, ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT t.conversation_id FROM turns t LEFT JOIN extraction_progress p "
+                "ON p.conversation_id = t.conversation_id WHERE t.seq >= COALESCE(p.next_seq, 0) "
+                "GROUP BY t.conversation_id ORDER BY MIN(t.id) LIMIT ?", (limit,)
+            ).fetchall()
+        return tuple(r[0] for r in rows)
 
     def get(self, conversation_id: str) -> Optional[ConversationRecord]:
         with self._lock:

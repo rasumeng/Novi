@@ -166,7 +166,7 @@ class LayeredRetrievalResolver:
         knowledge_hits.extend(scoped)
         gate = "knowledge" if best >= self._sufficiency else "knowledge_expand"
 
-        if best < self._sufficiency:
+        if best < self._sufficiency and scenario_id is not None:
             expanded = self._query_knowledge(
                 query, scenario_id=None, k=k, distance_threshold=threshold
             )
@@ -181,20 +181,25 @@ class LayeredRetrievalResolver:
             knowledge_hits.extend(expanded)
             gate = "knowledge" if best_global >= self._sufficiency else "conversation"
 
+        if gate == "knowledge_expand":
+            gate = "conversation"
         if gate == "conversation":
             graph = self._expand_graph(knowledge_hits, scenario_id)
             if graph:
+                plan = _replace_plan(plan, layers=plan.layers + ('graph',), graph_items=len(graph))
+            if graph and max(i.score for i in graph) >= self._sufficiency:
                 # M4: WikiLink neighbors satisfied the query — conversation
                 # memory stays untouched. Zero discoveries fall through,
                 # preserving pre-M4 behavior exactly.
                 plan = _replace_plan(
                     plan,
-                    layers=plan.layers + ("graph",),
+                    layers=plan.layers,
                     graph_items=len(graph),
                     gate="graph",
                 )
                 items.extend(graph)
             else:
+                items.extend(graph)
                 memory = self._safe_memory(query, k, threshold)
                 plan = _replace_plan(
                     plan,
@@ -301,8 +306,12 @@ def _knowledge_items(hits: list[KnowledgeHit]) -> list[RecallItem]:
             metadata={
                 "kind": "knowledge",
                 "id": hit.item.id,
+                "status": hit.item.status.value,
+                "evidence": hit.item.evidence,
+                "sources": hit.item.sources,
                 "scenario_id": hit.item.scenario_id,
                 "tags": hit.item.tags,
+                "confidence": hit.item.confidence,
             },
         )
         for hit in hits
@@ -335,6 +344,10 @@ def _graph_item(
         metadata={
             "kind": "knowledge",
             "id": hit.item.id,
+            "status": hit.item.status.value,
+            "confidence": hit.item.confidence,
+            "evidence": hit.item.evidence,
+            "sources": hit.item.sources,
             "scenario_id": hit.item.scenario_id,
             "tags": hit.item.tags,
             "origin": "wikilink",

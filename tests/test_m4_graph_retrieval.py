@@ -149,11 +149,11 @@ def test_insufficient_semantic_discovers_outgoing_reference():
     assert neighbor[0].metadata["via"] == "reference"
     assert neighbor[0].metadata["hops"] == 1
     # plan observability
-    assert res.metrics["gate"] == "graph"
-    assert res.metrics["layers"][-1] == "graph"
+    assert res.metrics["gate"] == "conversation"
+    assert 'graph' in res.metrics['layers']
     assert res.metrics["plan"].graph_items == 1
-    # conversation fallback must be skipped when the graph satisfies the gate
-    assert "conversation" not in res.metrics["layers"]
+    # Mere connectivity does not establish sufficient evidence.
+    assert "conversation" in res.metrics["layers"]
 
 
 def test_insufficient_semantic_discovers_incoming_backlink():
@@ -412,7 +412,7 @@ def test_expansion_runs_only_after_global_stage_failed():
     graph = FakeGraph({"kn-a": {"references": ("kn-b",), "backlinks": ()}})
     make_resolver(backend, graph).recall("q")
     # scoped + global semantic stages ran before any graph read
-    assert len(backend.knowledge_calls) == 2
+    assert len(backend.knowledge_calls) == 1  # unscoped query is already global
     assert graph.calls == ["kn-a"]
 
 
@@ -428,7 +428,8 @@ def test_cross_scenario_neighbor_documented_semantics():
     res = make_resolver(backend, graph).recall(
         "q", QueryContext(scenario_id="scn-1")
     )
-    assert res.metrics["gate"] == "graph", "cross-scenario traversal preserved"
+    assert res.metrics['plan'].graph_items == 1, 'cross-scenario traversal preserved'
+    assert res.metrics['gate'] == 'conversation'
     neighbor = [i for i in res.items if i.metadata.get("origin") == "wikilink"][0]
     assert neighbor.metadata["scenario_id"] == "scn-2"
     assert neighbor.metadata["scenario_affinity"] == "cross"
@@ -567,7 +568,7 @@ def test_brain_recall_end_to_end_discovers_linked_neighbor(tmp_path):
         QueryContext(top_k=1, distance_threshold=None),
     )
     plan = res.metrics["plan"]
-    assert plan.gate == "graph", "semantic gate failed twice; graph satisfied"
+    assert plan.gate == 'conversation', 'weak linked evidence still allows fallback'
     assert plan.graph_items == 1
     neighbors = [i for i in res.items if i.metadata.get("origin") == "wikilink"]
     assert len(neighbors) == 1
@@ -831,7 +832,7 @@ def test_recall_never_expands_into_superseded_target(tmp_path):
         QueryContext(top_k=1, distance_threshold=None),
     )
     plan = res.metrics["plan"]
-    assert plan.gate == "graph"
+    assert plan.gate == 'conversation'
     expanded_ids = [
         i.metadata["id"] for i in res.items if i.metadata.get("origin") == "wikilink"
     ]

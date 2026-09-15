@@ -151,3 +151,9 @@ def test_migrate_workloads_dropped_without_carryover():
     out = migrate(dict(src))
     assert out["llm"]["primary_model"] == "keep:model"
     assert "workloads" not in out["llm"]
+
+
+def test_migrate_pre_beta_memory_recall_cutoff():
+    out = migrate({"runtime": {"memory_distance_threshold": 0.5}})
+    assert out["runtime"]["memory_distance_threshold"] == 0.8
+    assert migrate(out)["runtime"]["memory_distance_threshold"] == 0.8

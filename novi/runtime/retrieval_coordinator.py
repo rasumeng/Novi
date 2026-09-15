@@ -66,6 +66,7 @@ class RetrievalCoordinator:
         self._search_cache: dict[str, str] = {}
         self._seen_queries: list[str] = []
         self.guidance_injected: bool = False
+        self.network_session = None
 
     # ── Classification helpers ────────────────────────────────────────────
 
@@ -135,6 +136,10 @@ class RetrievalCoordinator:
         """
         if name not in _WEB_TOOLS:
             return None
+        if self.network_session is not None:
+            # Actual requests (including nested pipeline fetches) are metered
+            # at the network boundary, not again at the tool envelope.
+            return None
 
         if self.is_search_tool(name):
             query = args.get("query", "") if isinstance(args, dict) else str(args)
@@ -196,6 +201,10 @@ class RetrievalCoordinator:
     def record(self, name: str, args: dict, result: str):
         """Record a completed web tool call for budget/cache tracking."""
         if name not in _WEB_TOOLS:
+            return
+        if self.network_session is not None:
+            self.budget.searches_used = self.network_session.searches
+            self.budget.fetches_used = self.network_session.fetches
             return
 
         if self.is_search_tool(name):

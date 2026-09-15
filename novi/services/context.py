@@ -62,6 +62,7 @@ class NoviContext:
         self._continuation: object | None = None
         self._recovered: bool = False
         self._workspace_service: object | None = None
+        self._memory_worker = None
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -81,6 +82,8 @@ class NoviContext:
         self._cfg = get_configuration().snapshot()
         if self._model_service is not None:
             self._model_service.update_configuration(self._cfg)
+        if self._memory_worker is not None and event.path in ('memory.enabled', 'memory.automatic_updates'):
+            self._memory_worker.configuration_changed()
 
     # ── provider wiring (Phase B: ModelService replaces ModelManager) ───
 
@@ -176,7 +179,6 @@ class NoviContext:
         """
         from ..brain.layers.knowledge import KnowledgeLayer
         from ..brain.layers.scenarios import ScenarioLayer
-        from ..brain.reasoning.extraction import KnowledgeExtractor, Summarizer
         from ..brain.storage.conversation_store import ConversationStore
         from ..brain.storage.markdown_store import MarkdownStore
         from ..brain.storage.relationship_store import RelationshipStore
@@ -188,6 +190,7 @@ class NoviContext:
         if self._brain is None:
             from ..brain import Brain, set_brain
 
+            self.init_knowledge_index()
             persist_dir = app_home() / "brain"
             knowledge_store = VectorStore(
                 persist_dir=persist_dir, embed_model=self.embedding_service
@@ -206,14 +209,37 @@ class NoviContext:
                 markdown_store=markdown_store,
                 conversation_store=ConversationStore(persist_dir=persist_dir),
                 event_bus=self._brain_event_bus,
-                extractor=KnowledgeExtractor(summarizer=Summarizer(llm=self.simple_llm.invoke)),
+                # Periodic main-model work consumes the durable queue. Do not
+                # also run heuristic extraction on the same source batches.
+                extractor=None,
                 knowledge_layer=KnowledgeLayer(knowledge_store),
                 scenario_layer=ScenarioLayer(scenario_store),
                 relationship_store=RelationshipStore(persist_dir=persist_dir),
                 tiered_resolver=True,
             )
             set_brain(self._brain)
+            from ..brain.curation.jobs import MemoryJobs
+            from ..brain.curation.worker import MemoryWorker
+            from ..brain.curation.resources import has_headroom
+            self._memory_worker = MemoryWorker(
+                self._brain, MemoryJobs(persist_dir / 'conversations.sqlite'),
+                self.model_service, lambda: self.config,
+                headroom=has_headroom,
+            )
+            self._brain_event_bus.on('conversation.observed', lambda event: self._memory_worker.wake.set())
+            self._memory_worker.start()
         return self._brain
+
+    @property
+    def memory_worker(self):
+        _ = self.brain
+        return self._memory_worker
+
+    def close(self):
+        if self._memory_worker is not None:
+            self._memory_worker.close()
+        if self._model_service is not None:
+            self._model_service.inference.close()
 
     @property
     def brain_event_bus(self):
@@ -412,12 +438,16 @@ class NoviContext:
         if not self._knowledge_inited:
             knowledge_cfg = self.config.get("workspace", {}).get(
                 "knowledge", "~/.novi/knowledge")
-            init_knowledge_index(
+            index = init_knowledge_index(
                 knowledge_dir=str(Path(knowledge_cfg).expanduser().resolve()),
                 persist_dir=str(app_home() / "knowledge_index"),
                 reranker=self.reranker_service,
             )
             self._knowledge_inited = True
+            if self._brain is not None:
+                self._brain._knowledge_index = index
+                if self._brain._vault is not None:
+                    self._brain._vault.index = index
 
     def create_runtime(self, **overrides) -> object:
         from ..runtime.runtime import NoviRuntime

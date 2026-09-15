@@ -49,10 +49,8 @@ def _analyze_image(image_path: str, prompt: str = "Describe this image in detail
                 "model": model,
                 "messages": [{
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    ],
+                    "content": prompt,
+                    "images": [b64],
                 }],
                 "stream": False,
             },

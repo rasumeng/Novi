@@ -18,7 +18,7 @@ export function UserMessage({ message }: { message: ChatMessage }) {
       data-testid="user-message"
     >
       <div
-        className="rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[75%] overflow-hidden bg-white/40 text-white selection:bg-white/40 selection:text-white break-words"
+        className="rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[75%] overflow-hidden bg-accent/20 text-white selection:bg-white/40 selection:text-white break-words"
       >
         <p className="whitespace-pre-wrap break-words leading-relaxed overflow-wrap-anywhere">
           {message.content}

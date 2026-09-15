@@ -1,7 +1,7 @@
 // Conversation.tsx
 import { useEffect, useRef, useState } from 'react'
 import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
-import { ConnectionState } from '@/services/novi'
+import { ConnectionState, type MemoryActivityState } from '@/services/novi'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { UserMessage } from './UserMessage'
 import { AssistantResponse, AssistantWorkingIndicator } from './AssistantResponse'
@@ -51,6 +51,7 @@ interface Props {
   timeline?: TimelineEntry[]
   activityOpen?: boolean
   onToggleActivity?: () => void
+  memoryActivity?: MemoryActivityState | null
 }
 
 export function Conversation({
@@ -82,6 +83,7 @@ export function Conversation({
   timeline,
   activityOpen: controlledActivityOpen,
   onToggleActivity: controlledToggle,
+  memoryActivity,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
@@ -225,6 +227,7 @@ export function Conversation({
         agentState={agentState}
         progress={progress}
         activeProject={activeProject}
+        memoryActivity={memoryActivity ?? null}
       />
     </div>
   )

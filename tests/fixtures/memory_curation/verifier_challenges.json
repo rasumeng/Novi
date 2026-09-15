@@ -1,0 +1,26 @@
+[
+  {
+    "id": "verify-actor", "split": "development",
+    "packet": {"turns": [{"id":"t1","actor":"assistant","text":"The user probably prefers tea."}], "notes":[]},
+    "proposal": {"outcome":"propose","reason":"Preference inferred from conversation.","operations":[{"kind":"remember","target":"","actor":"assistant","scope":"general","markdown":"The user prefers tea.","relation":"none","evidence":[{"turn_id":"t1","actor":"assistant","start":0,"end":30,"quote":"The user probably prefers tea."}]}]},
+    "rubric": {"human_reviewed":false,"expected":"reject or revise; speculation by assistant is not a user preference"}
+  },
+  {
+    "id": "verify-cause", "split": "development",
+    "packet": {"turns": [{"id":"t1","actor":"user","text":"Novi crashed after I changed the theme. I do not know why."}], "notes":[]},
+    "proposal": {"outcome":"propose","reason":"Crash followed theme change.","operations":[{"kind":"remember","target":"","actor":"user","scope":"Novi","markdown":"Changing the theme caused Novi to crash.","relation":"none","evidence":[{"turn_id":"t1","actor":"user","start":0,"end":58,"quote":"Novi crashed after I changed the theme. I do not know why."}]}]},
+    "rubric": {"human_reviewed":false,"expected":"reject or revise; sequence does not establish cause"}
+  },
+  {
+    "id": "verify-scope", "split": "development",
+    "packet": {"turns": [{"id":"t1","actor":"user","text":"I use Windows at work."}], "notes":[{"id":"n1","markdown":"At home, the user uses Linux."}]},
+    "proposal": {"outcome":"propose","reason":"New operating system.","operations":[{"kind":"correct","target":"n1","actor":"user","scope":"home","markdown":"At home, the user now uses Windows instead of Linux.","relation":"supersedes","evidence":[{"turn_id":"t1","actor":"user","start":0,"end":22,"quote":"I use Windows at work."}]}]},
+    "rubric": {"human_reviewed":false,"expected":"reject or revise; work scope does not supersede home scope"}
+  },
+  {
+    "id": "verify-good", "split": "development",
+    "packet": {"turns": [{"id":"t1","actor":"user","text":"For Novi, I prefer local models."}], "notes":[]},
+    "proposal": {"outcome":"propose","reason":"Explicit project preference.","operations":[{"kind":"remember","target":"","actor":"user","scope":"Novi","markdown":"For Novi, the user prefers local models.","relation":"none","evidence":[{"turn_id":"t1","actor":"user","start":0,"end":32,"quote":"For Novi, I prefer local models."}]}]},
+    "rubric": {"human_reviewed":false,"expected":"approve; faithful scoped preference"}
+  }
+]

@@ -66,6 +66,21 @@ def test_resolved_model_is_immutable_handoff():
     assert resolved.model == "qwen3:8b"  # verbatim
 
 
+def test_memory_snapshot_tracks_next_selection_without_mutating_inflight_config():
+    config = _config("first")
+    config["providers"]["ollama"]["keep_alive"] = "5m"
+    service = ModelService(config, _registry("first", "second"))
+
+    pinned = service.resolve_primary_snapshot()
+    config["llm"]["primary_model"] = "second"
+    config["providers"]["ollama"]["keep_alive"] = "1m"
+    subsequent = service.resolve_primary_snapshot()
+
+    assert (pinned.model, pinned.config["keep_alive"]) == ("first", "5m")
+    assert (subsequent.model, subsequent.config["keep_alive"]) == ("second", "1m")
+    assert service.resolve_primary() == ("ollama", "second")
+
+
 def test_resolved_model_supports_tools_default_true():
     """supports_tools is a descriptive capability that defaults to True and is
     never used for selection/substitution."""

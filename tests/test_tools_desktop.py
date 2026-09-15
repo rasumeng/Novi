@@ -12,6 +12,7 @@
 * The legacy ``task`` subagent tool is removed.
 """
 
+import base64
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -78,8 +79,9 @@ def _fake_caps(supports_vision):
 # ── Selected-model contract ─────────────────────────────────────────────────
 
 
-def test_analyze_image_uses_only_primary_model(tmp_path):
-    """The HTTP call must carry the selected primary model, verbatim."""
+@pytest.mark.parametrize("prompt", [None, "Read the text in this image."])
+def test_analyze_image_uses_only_primary_model(tmp_path, prompt):
+    """Send the selected model and image using Ollama's native chat schema."""
     from novi.tools import desktop
 
     img = tmp_path / "shot.png"
@@ -91,13 +93,20 @@ def test_analyze_image_uses_only_primary_model(tmp_path):
          patch.object(desktop, "requests") as fake_requests:
         fake_requests.post.return_value = FakeResponse(200, {"message": {"content": "a desk"}})
 
-        result = desktop.analyze_image(str(img))
+        result = (desktop.analyze_image(str(img)) if prompt is None
+                  else desktop.analyze_image(str(img), prompt))
 
     assert result == "a desk"
     mc.assert_called_once_with("qwen2.5vl:7b")
     sent = fake_requests.post.call_args.kwargs["json"]
     assert sent["model"] == "qwen2.5vl:7b"
-    assert any(m["type"] == "image_url" for m in sent["messages"][0]["content"])
+    assert fake_requests.post.call_args.args == ("http://localhost:11434/api/chat",)
+    assert sent["stream"] is False
+    assert sent["messages"] == [{
+        "role": "user",
+        "content": prompt if prompt is not None else "Describe this image in detail.",
+        "images": [base64.b64encode(img.read_bytes()).decode("ascii")],
+    }]
 
 
 def test_analyze_image_ignores_legacy_models_vision(tmp_path):

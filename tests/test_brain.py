@@ -594,7 +594,7 @@ def test_learn_with_preference_source_tags_identity():
     ]
 
 
-def test_reflect_with_layers_promotes_corroborated_claims():
+def test_reflect_does_not_treat_overlapping_claims_as_evidence():
     layer = StubKnowledgeForPromotion(
         items=[
             KnowledgeItem(
@@ -633,12 +633,12 @@ def test_reflect_with_layers_promotes_corroborated_claims():
         scenario_layer=StubScenarioForPromotion(),
     )
     report = brain.reflect()
-    assert report.promotions >= 1
-    assert report.promotions + report.corroborated == 4
-    assert len(layer.status_updates) == 4
+    assert report.promotions == 0
+    assert report.corroborated == 0
+    assert layer.status_updates == []
 
 
-def test_reflect_with_layers_writes_supersedes_edge():
+def test_reflect_does_not_supersede_unrelated_preference_by_tag():
     old = KnowledgeItem(
         id="old",
         form=KnowledgeForm.ATOMIC,
@@ -663,11 +663,11 @@ def test_reflect_with_layers_writes_supersedes_edge():
         relationship_store=rels,
     )
     report = brain.reflect()
-    assert report.promotions == 1
-    assert report.superseded == 1
-    assert ("old", KnowledgeStatus.SUPERSEDED) in layer.status_updates
+    assert report.promotions == 0
+    assert report.superseded == 0
+    assert ("old", KnowledgeStatus.SUPERSEDED) not in layer.status_updates
     supersede_edges = [e for e in rels.edges if e.kind.value == "supersedes"]
-    assert len(supersede_edges) == 1
+    assert len(supersede_edges) == 0
 
 
 def test_knowledge_item_defaults():

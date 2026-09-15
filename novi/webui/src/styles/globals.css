@@ -102,3 +102,17 @@ body::before {
 .novi-boot__foot{margin:26px 0 0;color:#777983;font-size:12px;line-height:1.5}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes novi-boot-move{0%{transform:translateX(-100%)}50%{transform:translateX(80%)}100%{transform:translateX(180%)}}
+
+/* Keep sidebar loading feedback visible, including with reduced motion. */
+.novi-sidebar-spinner {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .novi-sidebar-spinner {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
+}

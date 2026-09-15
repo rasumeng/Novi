@@ -25,7 +25,7 @@ fn write_temp(name: &str, html: &str) -> Option<Url> {
 pub fn boot_url() -> Option<Url> {
     let html = format!(
         "<!doctype html><html><head><meta charset='utf-8'><style>{STYLE}</style></head>\
-         <body><main class='boot'><section class='card' aria-live='polite'><div class='brand'><span class='mark'>✦</span>NOVI DESKTOP</div><div class='heading'><span class='spinner'></span><h1>Starting Novi</h1></div><p id='status'>Starting Novi…</p><div class='progress'></div><p class='foot'>Everything is running locally on your device.</p></section></main></body></html>"
+         <body><main class='boot'><section class='card' aria-live='polite'><div class='heading'><h1>Novi</h1></div><p id='status'>One moment I wake up.</p><div class='progress'></div><p class='foot'>Everything is running locally on your device.</p></section></main></body></html>"
     );
     write_temp("novi-desktop-boot.html", &html)
 }

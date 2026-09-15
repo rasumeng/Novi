@@ -197,7 +197,15 @@ def test_shutdown_stop_wired_to_webui_shutdown(monkeypatch):
 
     fake_mcp = StopRecorder()
     fake_tg = StopRecorder()
-    ws._shared_backend = {"mcp": fake_mcp, "telegram": fake_tg}
+    class CloseRecorder:
+        def __init__(self):
+            self.closes = 0
+
+        def close(self):
+            self.closes += 1
+
+    fake_context = CloseRecorder()
+    ws._shared_backend = {"context": fake_context, "mcp": fake_mcp, "telegram": fake_tg}
     try:
         with TestClient(app):
             pass
@@ -205,6 +213,7 @@ def test_shutdown_stop_wired_to_webui_shutdown(monkeypatch):
         ws._shared_backend = None
     assert fake_mcp.stops == 1
     assert fake_tg.stops == 1
+    assert fake_context.closes == 1
 
 
 def test_shutdown_safe_when_backend_never_built(monkeypatch):

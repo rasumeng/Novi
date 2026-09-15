@@ -25,6 +25,7 @@ EXPECTED_CONSUMERS = {
     "mcp.enabled": "novi/runtime/mcp/lifecycle.py + webui_server.py",
     # memory
     "memory.enabled": "novi/webui_server.py list_memory/search_memory gate + runtime.py _remember + retrieval.py memory guards",
+    "memory.automatic_updates": "novi/brain/curation/worker.py admission and live cancellation + webui/src/components/settings/MemorySettings.tsx switch",
     "memory.max_turns_before_summary": "novi/services/context.py:152",
     "memory.max_short_term_pairs": "novi/services/context.py:153",
     # embedding (USER-visible canonical default; Task 4)

@@ -46,6 +46,7 @@ export function useFrameworkSettings() {
         v[s.id] = cur ?? s.default
       }
       setValues(v)
+      window.dispatchEvent(new Event('novi:readiness-changed'))
     } catch {
       showError("Couldn't load settings. Is Novi's backend running?")
     } finally {
@@ -57,6 +58,7 @@ export function useFrameworkSettings() {
     setValues((prev) => applyWithParents(prev, id, value))
     const ok = await setSetting(id, value)
     if (!ok) showError(`Couldn't save ${id} — change wasn't persisted.`)
+    if (ok) window.dispatchEvent(new Event('novi:readiness-changed'))
     return ok
   }, [showError])
 
@@ -70,6 +72,7 @@ export function useFrameworkSettings() {
   const refreshDiscovery = useCallback(async () => {
     const disc = await fetchDiscovery()
     setDiscovery(disc)
+    window.dispatchEvent(new Event('novi:readiness-changed'))
     setDiscoveryError(disc.ollamaError ?? (disc.status === 'error' || disc.status === 'degraded' ? `Ollama not reachable at ${disc.ollamaUrl ?? 'http://localhost:11434'}` : null))
   }, [])
 
@@ -171,6 +174,7 @@ export function useFrameworkSettings() {
   const savePrimaryModel = useCallback(async (model: string) => {
     const res = await savePrimaryModelApi(model)
     if (res.ok) {
+      window.dispatchEvent(new Event('novi:readiness-changed'))
       applySelectionLocal(model)
       void refreshDiscoveryPreserving(model)
     } else {
@@ -183,6 +187,7 @@ export function useFrameworkSettings() {
   const applyRecommended = useCallback(async () => {
     const res = await applyRecommendedModelsApi()
     if (res.ok) {
+      window.dispatchEvent(new Event('novi:readiness-changed'))
       const model = (res as { model?: string }).model
         ?? (res as { selection?: { model?: string } }).selection?.model ?? ''
       if (model) {

@@ -299,7 +299,10 @@ class ToolExecutor:
 
         # Stage 4: Tool execution
         try:
-            value = info.fn(**args)
+            from contextlib import nullcontext
+            session = getattr(coord, 'network_session', None) if coord else None
+            with session.activate() if session and coord.is_web_tool(name) else nullcontext():
+                value = info.fn(**args)
             if isinstance(value, StructuredToolOutput):
                 raw = value.text
                 structured = value.data
@@ -427,6 +430,12 @@ class ToolExecutor:
         if cb:
             return cb(name, args)
         return False
+
+    def authorize_retrieval(self, name: str, args: dict) -> bool:
+        # Explicit denial must also apply in auto mode for network retrieval.
+        if self._perms.resolve(name, args, agent='novi') == 'deny':
+            return False
+        return self._check_permission(name, args, None, None)
 
     def _is_permission_cancelled(self, permission_callback: Callable | None = None) -> bool:
         """Return True if the permission wait was resolved by user cancellation.

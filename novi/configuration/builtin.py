@@ -285,6 +285,16 @@ def register_defaults(reg: ConfigRegistry):
                 visibility=Visibility.USER,
             ),
             Setting(
+                id="memory.automatic_updates",
+                label="Periodic memory updates",
+                description="Use the selected main model during idle time to save reviewed memories. Requires local Ollama; unsupported work remains pending.",
+                category=Category.MEMORY,
+                owner="memory",
+                type=SettingType.BOOL,
+                default=True,
+                visibility=Visibility.USER,
+            ),
+            Setting(
                 id="memory.max_turns_before_summary",
                 label="Turns before summary",
                 category=Category.MEMORY,

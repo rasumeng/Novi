@@ -16,6 +16,7 @@ def migrate(data: dict) -> dict:
     """Migrate a loaded config dict in place (does not write). Idempotent."""
     _migrate_primary_model(data)
     _migrate_runtime_temperature(data)
+    _migrate_memory_recall_threshold(data)
     _drop_legacy_backcompat(data)
     return data
 
@@ -75,3 +76,10 @@ def _migrate_runtime_temperature(cfg: dict):
         runtime.pop("temperatures", None)
         if "temperature" in runtime:
             log.info("migrated runtime.temperatures -> runtime.temperature")
+
+
+def _migrate_memory_recall_threshold(cfg: dict):
+    """Replace the pre-Beta cutoff that discarded qualified real embeddings."""
+    runtime = cfg.get("runtime")
+    if isinstance(runtime, dict) and runtime.get("memory_distance_threshold") == 0.5:
+        runtime["memory_distance_threshold"] = 0.8

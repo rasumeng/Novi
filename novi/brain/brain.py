@@ -16,19 +16,16 @@ The legacy MemoryManager write pipeline is no longer called by observe(); it
 survives only as the brain=None fallback in the runtime and WebUI, removed in
 Phase G.
 
-Architecture Rule #5 (knowledge is append-only):
-    KnowledgeItems are immutable historical observations. Their
-    content/form/created_at never change after creation; confidence advances
-    only through the monotonic promotion monitor. Change is represented as a
-    new observation linked to the old one via a typed edge (supersedes), so
-    the store keeps a full history and never mutates in place. Current state
-    is always derived — the newest verified, non-superseded observation —
-    never a claim of absolute truth.
+Raw observations remain append-only. Curated Markdown notes have stable IDs;
+their current LanceDB projection follows edits while the vault journal retains
+prior revisions. Explicit corrections can create superseding observations.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+from functools import wraps
 from datetime import datetime
 from typing import Any, Optional
 
@@ -72,6 +69,14 @@ def get_brain() -> "Brain | None":
 
 # Soft tags that mark an item as part of the accumulated Identity layer.
 _IDENTITY_TAGS = frozenset({"preference", "goal", "skill", "identity"})
+
+
+def _serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 class Brain:
@@ -137,7 +142,11 @@ class Brain:
         self._extract_every = max(1, extract_every)
         self._tiered_resolver = tiered_resolver
         self._pending_turns: dict[str, list[Turn]] = {}
+        self._lock = threading.RLock()
+        self._vault = None
+        self._maintaining = False
 
+    @_serialized
     def observe(self, turn: Turn) -> None:
         """Capture a completed turn.
 
@@ -155,8 +164,10 @@ class Brain:
                 log.warning("conversation store append failed", exc_info=True)
         if stored:
             self._emit_conversation_observed(conversation_id, turn)
-        self._maybe_extract(conversation_id, turn)
+        if stored or self._conversation_store is None:
+            self._maybe_extract(conversation_id, turn)
 
+    @_serialized
     def recall(self, query: str, context: Optional[QueryContext] = None) -> RecallResult:
         """Retrieve knowledge relevant to a query.
 
@@ -167,6 +178,17 @@ class Brain:
         as Phase A (flat memory query).
         """
         ctx = context or QueryContext()
+        if not self._maintaining:
+            maintenance = self.maintain(max_conversations=1)
+            if maintenance['errors']:
+                log.warning('Brain maintenance incomplete: %s', maintenance['errors'])
+                if any(e.startswith('vault:') for e in maintenance['errors']):
+                    raise RuntimeError('; '.join(maintenance['errors']))
+        if ctx.conversation_id and not ctx.scenario_id and self._conversation_store is not None:
+            conversation = self._conversation_store.get(ctx.conversation_id)
+            if conversation is not None:
+                from dataclasses import replace
+                ctx = replace(ctx, scenario_id=conversation.scenario_id, project_id=conversation.project_id or ctx.project_id)
         resolver = self._resolver or self._default_resolver()
         if resolver is not None:
             return resolver.recall(query, ctx)
@@ -220,6 +242,27 @@ class Brain:
         except Exception:
             return []
 
+    def emit_memory_activity(self, data):
+        if self._event_bus is not None:
+            self._event_bus.emit('memory.activity', **data)
+
+    def memory_packet(self, packet):
+        from .curation.packet import build_packet
+        if self._markdown_store is None or self._knowledge_layer is None:
+            raise RuntimeError('Memory storage is unavailable')
+        self.reconcile_markdown()
+        query = '\n'.join(s['text'] for s in packet['turns'] if s['actor'] == 'user')
+        if len(query) > 16000:
+            raise ValueError('Source batch too large; deferred without advancing progress')
+        hits = self._knowledge_layer.store.query(query, k=8, distance_threshold=None)
+        return build_packet(packet, self._markdown_store, [hit['id'] for hit in hits])
+
+    @_serialized
+    def apply_memory(self, job, result, packet, journal, cancel):
+        from .curation.apply import apply_verified
+        return apply_verified(job, result, packet, self._markdown_store, journal,
+                              self.reconcile_markdown, cancel)
+
     def retrieve_knowledge(self, query: str, k: int = 5) -> list[dict]:
         """Search the file-backed knowledge base (Architecture Rule #6).
 
@@ -229,6 +272,7 @@ class Brain:
         """
         if self._knowledge_index is None:
             return []
+        self.reconcile_markdown()
         return self._knowledge_index.search(query, k=k, rerank=True)
 
     def retrieve_project(self, query: str, k: int = 5) -> str:
@@ -250,6 +294,7 @@ class Brain:
         """Swap the project index (runtime set_config may update it later)."""
         self._project_index = project_index
 
+    @_serialized
     def learn(self, statement: str, source: Optional[str] = None) -> dict:
         """Explicitly acquire knowledge: user asks to remember, write_knowledge.
 
@@ -267,8 +312,16 @@ class Brain:
         if self._knowledge_layer is not None and self._scenario_layer is not None:
             tags = _tags_for_source(source)
             source_kind = _source_kind_for(source)
+            existing_id = None
+            if self._markdown_store is not None:
+                existing = self._markdown_store.find_existing(statement)
+                if existing is not None:
+                    meta, body = self._markdown_store.parse(existing)
+                    if _semantic(body) == _semantic(statement):
+                        existing_id = meta.get('id')
             item_id = self._knowledge_layer.write(
-                statement, tags=tags, source_kind=source_kind
+                statement, tags=tags, source_kind=source_kind,
+                **({'item_id': existing_id} if existing_id else {}),
             )
             markdown = self._sync_markdown(item_id)
             return {"ok": True, "item_id": item_id, "markdown": markdown}
@@ -278,6 +331,32 @@ class Brain:
             "item_id": None,
             "markdown": {"written": False, "reason": "legacy writer"},
         }
+
+    def ingest_evidence(self, claims: list[dict]) -> dict:
+        """Persist bounded, validated external claims via the canonical writer."""
+        from .reasoning.external import build_item
+        if self._knowledge_layer is None:
+            return {"ok": False, "error": "Knowledge layer unavailable", "item_ids": []}
+        ids, mirrors = [], []
+        try:
+            for claim in claims[:5]:
+                item = build_item(claim['statement'], claim['sources'],
+                                  claim.get('volatility', 'changing'),
+                                  independent=claim.get('independent') is True)
+                store = self._knowledge_layer.store
+                existing = store.get(item.id)
+                if existing is None:
+                    store.add(item, source_kind='external')
+                else:
+                    # Same source version: refresh validity only after an actual
+                    # evidence assessment, never merely on recall.
+                    store.update_evidence(item.id, item.evidence, item.status)
+                ids.append(item.id)
+                mirrors.append(self._sync_markdown(item.id))
+            return {"ok": True, "item_ids": ids, "markdown": mirrors}
+        except Exception as exc:
+            log.warning('Evidence retention failed', exc_info=True)
+            return {"ok": False, "error": str(exc), "item_ids": ids, "markdown": mirrors}
 
     def resolve(self, query: str) -> ContextResolution:
         """Resolve the active project + scenario for a query.
@@ -314,6 +393,7 @@ class Brain:
                 log.warning("failed to read active scenarios", exc_info=True)
         return project(items, active_scenario_ids=active_ids)
 
+    @_serialized
     def reflect(
         self,
         *,
@@ -336,7 +416,7 @@ class Brain:
         if self._knowledge_layer is None or self._scenario_layer is None:
             merges = self._memory_manager().consolidate()
             return ReflectionReport(merges=merges)
-        items = self._knowledge_layer.list_objects()
+        items = self._knowledge_layer.list_objects(limit=None)
         pending = reflection.pending_count(items)
         if not reflection.should_reflect(
             pending,
@@ -387,6 +467,7 @@ class Brain:
         ]
         return {"categories": projection, "items": items_view}
 
+    @_serialized
     def correct_memory(
         self,
         item_id: str | None = None,
@@ -443,8 +524,13 @@ class Brain:
                 )
         return {"ok": True, "superseded": item_id, "recorded": recorded}
 
+    @_serialized
     def reconcile_markdown(self) -> ReconcileReport:
-        """Markdown → Brain reconciliation foundation (Architecture B.2).
+        """Project authoritative Markdown into current knowledge and links.
+
+        Production stores use VaultSynchronizer: stable note IDs, revisions,
+        deleted-note retirement and retryable chunk indexing. The legacy
+        implementation below supports injected compatibility stores only.
 
         Detects user-authored Markdown changes and folds them into Brain
         through the *same* learning path as ``Brain.learn`` — there is exactly
@@ -452,7 +538,7 @@ class Brain:
 
         * a note with no Brain identity, or content Brain does not know, is
           learned as new knowledge;
-        * an edit to a known item that changes its *semantic* content is
+        * in the compatibility path, an edit that changes semantic content is
           learned and the previous item is superseded (append-only);
         * formatting-only changes (whitespace, emphasis, link syntax) leave
           the semantic form unchanged and create no knowledge;
@@ -462,6 +548,12 @@ class Brain:
         """
         if self._markdown_store is None or self._knowledge_layer is None:
             return ReconcileReport(skipped=True)
+        vault = self._vault_sync()
+        if vault is not None:
+            report = vault.sync()
+            if report.new or report.edited or report.missing_files:
+                self.sync_wikilinks()
+            return report
         items = self._knowledge_layer.list_objects()
         by_id = {i.id: i for i in items}
         seen_ids: set[str] = set()
@@ -499,6 +591,48 @@ class Brain:
             self.sync_wikilinks()
         except Exception:
             log.warning("wikilink sync after reconcile failed", exc_info=True)
+        return report
+
+    def _vault_sync(self):
+        if self._markdown_store is None or self._knowledge_layer is None:
+            return None
+        if not hasattr(self._knowledge_layer.store, 'persist_dir'):
+            return None
+        if self._vault is None:
+            from .vault import VaultSynchronizer
+            self._vault = VaultSynchronizer(self._markdown_store, self._knowledge_layer, self._knowledge_index,
+                                           relationships=self._relationship_store)
+        return self._vault
+
+    @_serialized
+    def maintain(self, *, max_conversations: int = 20) -> dict:
+        """Reconcile notes and drain bounded durable work, including short chats.
+
+        Retries are safe: knowledge IDs and evidence sources are stable, and
+        the raw-turn watermark advances only after every write succeeds.
+        """
+        report = {'processed': 0, 'errors': []}
+        if self._maintaining:
+            return report
+        self._maintaining = True
+        try:
+            try:
+                self.reconcile_markdown()
+            except Exception as exc:
+                report['errors'].append(f'vault: {exc}')
+                return report
+            store = self._conversation_store
+            if store is not None and hasattr(store, 'pending_conversations') and self._extractor is not None:
+                for cid in store.pending_conversations(limit=max_conversations):
+                    try:
+                        self._extract_pending(cid, partial=True)
+                        report['processed'] += 1
+                    except Exception as exc:
+                        report['errors'].append(f'extraction {cid}: {exc}')
+            if self._knowledge_layer is not None and self._scenario_layer is not None:
+                self.reflect(idle_pending=True)
+        finally:
+            self._maintaining = False
         return report
 
     def sync_wikilinks(self):
@@ -669,8 +803,15 @@ class Brain:
             return {"written": False, "error": str(e)}
         if created:
             self._sync_markdown_wikilinks(rel)
-        self._index_markdown_file(item_id, rel)
-        return {"written": True, "path": rel, "created": created}
+        _, current_body = self._markdown_store.parse(self._markdown_store.knowledge_dir / rel)
+        if _semantic(current_body) != _semantic(item.content):
+            self.reconcile_markdown()
+            return {'written': True, 'path': rel, 'created': False, 'indexed': True}
+        indexed = self._index_markdown_file(item_id, rel)
+        vault = self._vault_sync()
+        if vault is not None and indexed:
+            vault.record(self._markdown_store.knowledge_dir / rel)
+        return {"written": True, "path": rel, "created": created, 'indexed': indexed}
 
     def _sync_status_markdown(self, item_id: str, status: KnowledgeStatus) -> None:
         """Mirror a status transition to the item's Markdown file (best-effort)."""
@@ -678,6 +819,13 @@ class Brain:
             return
         try:
             self._markdown_store.update_status(item_id, status)
+            path = self._markdown_store.find_for_id(item_id)
+            if path is not None:
+                if self._knowledge_index is not None:
+                    self._knowledge_index.index_file(path)
+                vault = self._vault_sync()
+                if vault is not None:
+                    vault.record(path)
         except Exception:
             log.warning(
                 "markdown status sync failed for %s", item_id, exc_info=True
@@ -705,17 +853,19 @@ class Brain:
                 "failed to resolve wikilinks for %s", rel, exc_info=True
             )
 
-    def _index_markdown_file(self, item_id: str, rel: str) -> None:
+    def _index_markdown_file(self, item_id: str, rel: str) -> bool:
         """Re-index the affected Markdown file (mtime-aware index)."""
         if self._knowledge_index is None or self._markdown_store is None:
-            return
+            return True
         index_file = getattr(self._knowledge_index, "index_file", None)
         if index_file is None:
-            return
+            return True
         try:
             index_file(self._markdown_store.knowledge_dir / rel)
+            return True
         except Exception as e:
             log.warning("markdown sync: index failed for %s: %s", rel, e)
+            return False
 
     def _reflect_knowledge(self, items) -> ReflectionReport:
         from .reasoning import reflection
@@ -820,6 +970,12 @@ class Brain:
             or self._scenario_layer is None
         ):
             return
+        if self._conversation_store is not None and hasattr(self._conversation_store, 'pending_extraction'):
+            try:
+                self._extract_pending(conversation_id)
+            except Exception:
+                log.warning('knowledge extraction deferred for retry', exc_info=True)
+            return
         batch = self._pending_turns.get(conversation_id, [])
         batch.append(turn)
         if len(batch) < self._extract_every:
@@ -851,6 +1007,30 @@ class Brain:
         except Exception:
             log.warning("knowledge extraction failed", exc_info=True)
 
+    def _extract_pending(self, conversation_id: str, *, partial: bool = False) -> None:
+        if self._extractor is None or self._knowledge_layer is None or self._scenario_layer is None:
+            return
+        next_seq, turns = self._conversation_store.pending_extraction(conversation_id, limit=self._extract_every)
+        if not turns or (not partial and len(turns) < self._extract_every):
+            return
+        result = self._extractor.extract(turns)
+        conversation = self._conversation_store.get(conversation_id)
+        scenario_id = self._scenario_layer.ensure_for_conversation(conversation, result)
+        self._conversation_store.set_scenario_id(conversation_id, scenario_id)
+        ids = self._knowledge_layer.store_extracted(conversation_id, scenario_id, result)
+        if not self._write_provenance_edges(ids, conversation_id, scenario_id):
+            raise RuntimeError('Provenance write incomplete')
+        for kid in ids:
+            if self._markdown_store is not None:
+                sync = self._sync_markdown(kid)
+                if not sync.get('written') or not sync.get('indexed', True):
+                    raise RuntimeError(sync.get('error', 'Markdown write incomplete'))
+        if self._markdown_store is not None:
+            self._markdown_store.link_episode(ids)
+            self.reconcile_markdown()
+        self._conversation_store.acknowledge_extraction(conversation_id, next_seq)
+        self._emit_knowledge_extracted(tuple(ids), conversation_id, scenario_id, result.summary)
+
     def _sync_extracted_markdown(self, knowledge_ids: list[str]) -> None:
         """Write-through extracted knowledge through the same mirror as learn.
 
@@ -865,7 +1045,7 @@ class Brain:
 
     def _write_provenance_edges(
         self, knowledge_ids: list[str], conversation_id: str, scenario_id: str
-    ) -> None:
+    ) -> bool:
         """Provenance as first-class relationships (Phase D).
 
         Each extracted item links to its source conversation (derived_from)
@@ -873,7 +1053,7 @@ class Brain:
         extraction or persistence.
         """
         if self._relationship_store is None:
-            return
+            return True
         try:
             now = datetime.now()
             relationships = []
@@ -895,8 +1075,10 @@ class Brain:
                     )
                 )
             self._relationship_store.add_many(relationships)
+            return True
         except Exception:
             log.warning("failed to write provenance edges", exc_info=True)
+            return False
 
     def _emit_knowledge_extracted(
         self,

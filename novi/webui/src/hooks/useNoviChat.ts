@@ -7,6 +7,7 @@ import { useNotificationCenter } from '@/hooks/useNotificationCenter'
 import { notifyPolicy } from '@/notifications/policy'
 import { notifyIfUnfocused } from '@/native/tauri'
 import { mergeTimeline } from '@/utils/timeline'
+import { API_BASE, type MemoryActivityState } from '@/services/novi'
 
 export interface PermissionRequest {
   tool: string
@@ -41,6 +42,19 @@ export function useNoviChat() {
   const { push: pushNotification } = useNotificationCenter()
   const clientRef = useRef<NoviClient | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
+  const [memoryActivity, setMemoryActivity] = useState<MemoryActivityState | null>(null)
+  const receiveMemory = useCallback((next: MemoryActivityState) => {
+    setMemoryActivity(prev => prev && prev.instance_id === next.instance_id && prev.version >= next.version ? prev : next)
+  }, [])
+  useEffect(() => {
+    if (connection !== 'open') return
+    const abort = new AbortController()
+    fetch(`${API_BASE}/api/memory/activity`, { signal: abort.signal })
+      .then(response => { if (!response.ok) throw new Error('Memory status unavailable'); return response.json() })
+      .then(receiveMemory)
+      .catch(error => { if (error.name !== 'AbortError') console.warn(error) })
+    return () => abort.abort()
+  }, [connection, receiveMemory])
   const [conversations, setConversations] = useState<Conversation[]>(() => getConversationsCache() ?? [])
   const [conversationsHydrated, setConversationsHydrated] = useState(() => getConversationsCache() !== null)
   const [activeId, setActiveId] = useState(() => '')
@@ -602,6 +616,9 @@ export function useNoviChat() {
         case 'assistant_event':
           pushTimelineEntry(ev.entry)
           break
+        case 'memory_activity':
+          receiveMemory(ev.activity)
+          break
         case 'permission_request': {
           setPermission({ tool: ev.tool, args: ev.args, id: ev.id, timeoutMs: (ev as any).timeoutMs, expiresAt: (ev as any).expiresAt })
           // Notification on pending — honest expiry visible even when user is elsewhere
@@ -1023,6 +1040,7 @@ export function useNoviChat() {
 
   return {
     connection,
+    memoryActivity,
     conversationsHydrated,
     conversations,
     active,

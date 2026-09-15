@@ -117,17 +117,30 @@ def make_plan(
 ) -> list[promotion.PromotionOutcome]:
     """Decide each budgeted candidate → a pure list of outcomes.
 
-    ``find_related`` is the supersession-target selector, injected to avoid
-    coupling to the Brain's private helper. The Brain applies the returned
-    outcomes (status writes + edges) and builds the report.
+    ``find_related`` remains accepted for caller compatibility. Supersession
+    now requires an explicit correction, not overlapping identity tags.
     """
-    chosen = budgeted(items, budget)
     all_items = list(items)
+    # Prioritize actionable evidence so old unconfirmed claims cannot starve
+    # newly corroborated ones behind the fixed maintenance budget.
+    ordered = sorted(all_items, key=lambda item: (
+        -len(set(item.sources)), last_used(item), item.id,
+    ))
+    chosen = [i for i in ordered if i.status in _PROCESSABLE][:budget]
     outcomes: list[promotion.PromotionOutcome] = []
-    for i, item in enumerate(chosen):
-        count = verification.corroboration(chosen, i)
-        confirmed = verification.is_confirm(item.content)
-        existing = find_related(item, all_items) if find_related else None
+    for item in chosen:
+        if item.evidence:
+            # External claims are verified by source support, never repetition
+            # or personal-preference confirmation phrases in page content.
+            continue
+        # Consolidation keeps one claim; distinct sources are its evidence.
+        count = max(0, len(set(item.sources)) - 1)
+        if any(t in item.tags for t in ('assistant_observation', 'tool_observation', 'summary')):
+            count = 0
+        # Extracted text cannot declare itself confirmed. Explicit learning
+        # is verified at its write boundary; supersession requires correction.
+        confirmed = False
+        existing = None
         outcomes.append(
             promotion.decide(item, count, confirmed=confirmed, existing_verified=existing)
         )

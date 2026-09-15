@@ -23,6 +23,7 @@ export function MemorySettings({ framework }: Props) {
   const [memoryError, setMemoryError] = useState<string | null>(null)
   const [memoryStatus, setMemoryStatus] = useState<'ok' | 'disabled' | 'unavailable'>('ok')
   const memoryEnabled = (framework.values['memory.enabled'] as boolean) ?? true
+  const automaticUpdates = (framework.values['memory.automatic_updates'] as boolean) ?? true
   const unwrap = (j: any): { data: any[]; error?: string; status?: string } => {
     if (Array.isArray(j)) return { data: j, status: 'ok' }
     if (j && Array.isArray(j.data)) return { data: j.data, error: j.error, status: j.status }
@@ -139,6 +140,24 @@ export function MemorySettings({ framework }: Props) {
           <span
             className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${memoryEnabled ? 'left-[18px]' : 'left-0.5'}`}
           />
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between p-3 rounded-xl bg-base-800/50 border border-base-700">
+        <div>
+          <p className="text-sm text-base-100">Save memories automatically</p>
+          <p className="text-xs text-base-500">During idle time, the selected main model reviews permitted conversations and saves supported memories.</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-label="Save memories automatically"
+          aria-checked={automaticUpdates}
+          disabled={!memoryEnabled}
+          onClick={() => void framework.set('memory.automatic_updates', !automaticUpdates)}
+          className={`relative w-10 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50 ${automaticUpdates ? 'bg-accent' : 'bg-base-600'}`}
+        >
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${automaticUpdates ? 'left-[18px]' : 'left-0.5'}`} />
         </button>
       </div>
 

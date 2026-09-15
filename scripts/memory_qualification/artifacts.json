@@ -1,0 +1,14 @@
+{
+  "checked_on": "2026-09-11",
+  "approval": "User approved the five listed downloads on 2026-09-11; reuse existing MiniCPM",
+  "storage": "C:/Users/asume/OneDrive/Desktop/Projects/Novi/model_cache/qualification/models",
+  "quantization": "Q4_K_M",
+  "files": [
+    {"repo":"LiquidAI/LFM2.5-230M-GGUF","revision":"cdf97bd8205908758f44aec508d68ac1aef98f5c","file":"LFM2.5-230M-Q4_K_M.gguf","bytes":153406304,"sha256":"7bbd90384d3deffe4c646ec9643b212802d32d4ce417c90a1ec9282100650062","download":true},
+    {"repo":"LiquidAI/LFM2.5-350M-GGUF","revision":"9969000761ce34de907bf20017cbfc3d52d6eaf9","file":"LFM2.5-350M-Q4_K_M.gguf","bytes":229312224,"sha256":"7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4","download":true},
+    {"repo":"openbmb/MiniCPM5-1B-GGUF","revision":"3d55fac80935ae6456986ad2384b5cbcc4d6c948","file":"MiniCPM5-1B-Q4_K_M.gguf","bytes":688065920,"sha256":"81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa","download":false,"reuse":"C:/Users/asume/.ollama/models/blobs/sha256-81b64d05a23b17b34c475f42b3e72fbde62d4b92cc34541f7a8031d0752deafa"},
+    {"repo":"LiquidAI/LFM2.5-1.2B-Instruct-GGUF","revision":"6767265158422fb8a19c62ceb45f16f05363615b","file":"LFM2.5-1.2B-Instruct-Q4_K_M.gguf","bytes":730895168,"sha256":"b1b3de114215d9507409a662a501a631095a479a419584e8a2ded6304b19b4f5","download":true},
+    {"repo":"ibm-granite/granite-4.0-350m-GGUF","revision":"b8208a86a58427e1739265318028eb5895b74bf2","file":"granite-4.0-350m-Q4_K_M.gguf","bytes":236985760,"sha256":"771c588a49607f274a2bba3185733607ebe6f74b996ab90e2d6bee0d98bcec52","download":true},
+    {"repo":"bartowski/Qwen_Qwen3.5-0.8B-GGUF","revision":"f36b1ea49a332ede8fe5f389bbf5b3575ef71f48","file":"Qwen_Qwen3.5-0.8B-Q4_K_M.gguf","bytes":579615840,"sha256":"fb044e93939a70469c905781334f5de1e6c8b608ced6cbc8c9249bd4127d9526","download":true,"provenance":"Third-party quantization of Qwen checkpoint; no vision projector needed for text evaluation"}
+  ]
+}

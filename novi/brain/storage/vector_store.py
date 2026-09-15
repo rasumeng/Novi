@@ -11,6 +11,7 @@ legacy consumers (runtime MemoryRetrievalSource, webui, tools).
 from __future__ import annotations
 
 import logging
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -28,7 +29,7 @@ _TABLE_NAME = "knowledge_items"
 
 # Columns added after initial table creation; _ensure_columns migrates
 # existing tables by adding any absent column with null values.
-_NEW_COLUMNS = {"last_seen_at": "null::string", "importance": "null::string"}
+_NEW_COLUMNS = {"last_seen_at": "null::string", "importance": "null::string", "evidence": "null::string"}
 
 
 class VectorStore:
@@ -62,21 +63,31 @@ class VectorStore:
             return embed_service.encode(text, normalize=True)
 
         self._embedder = embed_service
+        self.persist_dir = Path(persist_dir)
         self._embed = embed
         self._embed_dim = embed_service.dimension
         self._table_name = table_name
         self._vector_index = vector_index
         self._db = lancedb.connect(str(Path(persist_dir) / "lancedb"))
+        self._space_path = self.persist_dir / f'{table_name}.embedding.json'
+        self._space = {'model': embed_service.model_name, 'dimension': self._embed_dim}
+        self._previous_space = json.loads(self._space_path.read_text('utf-8')) if self._space_path.exists() else None
         self._table = self._open_or_create()
+        temporary = self._space_path.with_suffix('.tmp')
+        temporary.write_text(json.dumps(self._space), encoding='utf-8')
+        temporary.replace(self._space_path)
 
     def _open_or_create(self):
         try:
             table = self._db.open_table(self._table_name)
             stored = self._stored_vector_dim(table)
-            if stored is not None and stored != self._embed_dim:
+            if stored is not None and (stored != self._embed_dim or
+                                       (self._previous_space is not None and self._previous_space != self._space)):
                 return self._rebuild_for_dimension(table, stored)
             return self._ensure_columns(table)
         except Exception:
+            if self._table_name in self._db.table_names():
+                raise
             schema = pa.schema(
                 [
                     pa.field("id", pa.string()),
@@ -91,6 +102,7 @@ class VectorStore:
                     pa.field("created_at", pa.string()),
                     pa.field("last_seen_at", pa.string()),
                     pa.field("importance", pa.string()),
+                    pa.field("evidence", pa.string()),
                     pa.field("vector", pa.list_(pa.float32(), self._embed_dim)),
                 ]
             )
@@ -113,6 +125,11 @@ class VectorStore:
         timestamped backup — never silently destroyed. Extracted knowledge is
         derived state; the Brain re-extracts it over time.
         """
+        # Embed before altering the active table. A provider failure must leave
+        # the previous index intact and visible to recovery tooling.
+        rows = table.to_arrow().to_pylist()
+        for row in rows:
+            row['vector'] = self._embed(row['text'])
         try:
             count = table.count_rows()
             if count:
@@ -130,15 +147,14 @@ class VectorStore:
                     self._table_name, stored, self._embed_dim,
                 )
         except Exception:
-            log.warning("dimension migration preflight failed for %s",
-                        self._table_name, exc_info=True)
-        try:
-            self._db.drop_table(self._table_name)
-        except Exception:
-            pass
+            log.warning("dimension migration preflight failed for %s", self._table_name, exc_info=True)
+            raise
+        if rows:
+            return self._ensure_columns(self._db.create_table(self._table_name, data=pa.Table.from_pylist(rows, schema=self._schema(self._embed_dim)), mode='overwrite'))
         return self._db.create_table(
             self._table_name,
             schema=self.__class__._schema(self._embed_dim),
+            mode='overwrite',
         )
 
     @staticmethod
@@ -157,6 +173,7 @@ class VectorStore:
                 pa.field("created_at", pa.string()),
                 pa.field("last_seen_at", pa.string()),
                 pa.field("importance", pa.string()),
+                pa.field("evidence", pa.string()),
                 pa.field("vector", pa.list_(pa.float32(), dim)),
             ]
         )
@@ -206,10 +223,11 @@ class VectorStore:
                     "created_at": item.created_at.isoformat(),
                     "last_seen_at": (item.last_seen_at or item.created_at).isoformat(),
                     "importance": f"{item.importance:.6f}",
+                    "evidence": json.dumps(item.evidence, sort_keys=True),
                     "vector": self._embed(item.content),
                 }
             )
-        self._table.add(rows)
+        self._table.merge_insert('id').when_matched_update_all().when_not_matched_insert_all().execute(rows)
         return ids
 
     # ── reads ──────────────────────────────────────────────────────────
@@ -298,12 +316,26 @@ class VectorStore:
             return []
         return [self._row(r) for r in rows]
 
-    def list_all(self, limit: int = 100) -> list[dict]:
+    def list_all(self, limit: int | None = 100) -> list[dict]:
         try:
-            rows = self._table.search().limit(limit).to_list()
+            columns = [name for name in self._table.schema.names if name != 'vector']
+            if limit is None:
+                rows = []
+                for offset in range(0, self._table.count_rows(), 512):
+                    rows.extend(self._table.search().select(columns).offset(offset).limit(512).to_list())
+            else:
+                rows = self._table.search().select(columns).limit(limit).to_list()
         except Exception:
             return []
         return [self._row(r) for r in rows]
+
+    def ids(self) -> set[str]:
+        return {r['id'] for r in self._table.search().select(['id']).limit(self._table.count_rows()).to_list()}
+
+    def update_observation(self, item_id: str, sources: tuple[str, ...], seen: datetime) -> None:
+        self._table.update(where=f"id = '{_esc(item_id)}'", values={
+            'sources': list(sources), 'last_seen_at': seen.isoformat(),
+        })
 
     def delete(self, item_id: str) -> bool:
         try:
@@ -340,6 +372,10 @@ class VectorStore:
             log.warning("failed to update last_seen for %s", item_id, exc_info=True)
             return False
 
+    def update_evidence(self, item_id: str, evidence: dict, status: KnowledgeStatus) -> None:
+        self._table.update(where=f"id = '{_esc(item_id)}'", values={
+            "evidence": json.dumps(evidence, sort_keys=True), "status": status.value})
+
     def count(self) -> int:
         try:
             return self._table.count_rows()
@@ -369,6 +405,7 @@ class VectorStore:
             "source_kind": r.get("source_kind", ""),
             "last_seen_at": last_seen,
             "importance": r.get("importance", "0.0"),
+            "evidence": _evidence(r.get("evidence")),
             "metadata": {
                 "kind": "knowledge",
                 "form": r.get("form", KnowledgeForm.ATOMIC.value),
@@ -381,6 +418,7 @@ class VectorStore:
                 "created_at": r.get("created_at", ""),
                 "last_seen_at": last_seen,
                 "importance": r.get("importance", "0.0"),
+                "evidence": _evidence(r.get("evidence")),
             },
             "distance": dist,
             "score": 1.0 - dist,
@@ -439,8 +477,19 @@ class VectorStore:
             created_at=datetime.fromisoformat(created) if created else None,
             last_seen_at=datetime.fromisoformat(last_seen) if last_seen else None,
             importance=importance,
+            evidence=_evidence(row.get('evidence') or row.get('metadata', {}).get('evidence')),
         )
 
 
 def _esc(value: str) -> str:
     return str(value).replace("'", "''")
+
+
+def _evidence(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or '{}')
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}

@@ -125,20 +125,27 @@ class WebSearchService:
         time_range: str | None = None,
     ) -> SearchResponse:
         """Blocking wrapper for sync callers (tools, evidence pipeline)."""
+        from .session import current_session
+        session = current_session.get()
+        if session:
+            session.reserve('search', {'query': query, 'time_range': time_range or ''})
+        def run():
+            response = asyncio.run(self.search(query, max_results=max_results, time_range=time_range))
+            if session:
+                session.results.extend(dict(url=r.url, title=r.title, text=r.snippet[:4000],
+                                            published_at=r.published_at or '') for r in response.results[:5])
+            return response
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.search(query, max_results=max_results, time_range=time_range))
+            return run()
 
         # Called from inside a running loop (e.g. async server context):
         # run the coroutine on a dedicated thread so we can block safely.
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(
-                asyncio.run,
-                self.search(query, max_results=max_results, time_range=time_range),
-            ).result()
+            return pool.submit(run).result()
 
     # ── connection testing ───────────────────────────────────────────
 

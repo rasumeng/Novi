@@ -124,7 +124,7 @@ class TestMemoryRetrievalSource:
         store = _FakeMemoryManager([_memory_result()])
         source = MemoryRetrievalSource(store)
         result = source.retrieve("query", BUDGET)
-        assert store.calls == [("query", BUDGET.max_results, 0.5, None)]
+        assert store.calls == [("query", BUDGET.max_results, 0.8, None)]
         assert result.source == "memory"
         assert result.quality == RetrievalQuality.SUFFICIENT
         assert len(result.items) == 1

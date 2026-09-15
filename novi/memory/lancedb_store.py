@@ -155,6 +155,7 @@ class LanceStore:
         texts: list[str],
         metadatas: Optional[list[dict]] = None,
         ids: Optional[list[str]] = None,
+        upsert: bool = False,
     ):
         """Embed and insert texts with metadata.
 
@@ -178,7 +179,10 @@ class LanceStore:
                 "metadata": json.dumps(meta),
                 "vector": vec,
             })
-        self._table.add(data)
+        if upsert:
+            self._table.merge_insert('id').when_matched_update_all().when_not_matched_insert_all().execute(data)
+        else:
+            self._table.add(data)
         self._maybe_create_index()
 
     def _check_embedding_model(self):
@@ -372,7 +376,8 @@ class LanceStore:
 
     def delete(self, id_: str) -> bool:
         try:
-            self._table.delete(f"id = '{id_}'")
+            escaped = str(id_).replace("'", "''")
+            self._table.delete(f"id = '{escaped}'")
             return True
         except Exception:
             return False
@@ -380,7 +385,7 @@ class LanceStore:
     def query_sql(self, sql: str) -> list[dict]:
         """Execute a raw SQL query for structured filtering (e.g. WHERE type = 'preference')."""
         try:
-            return self._table.search().where(sql).to_list()
+            return self._table.search().where(sql).limit(self._table.count_rows()).to_list()
         except Exception as e:
             log.warning("SQL query failed: %s", e)
             return []

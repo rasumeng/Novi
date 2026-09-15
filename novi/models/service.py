@@ -41,6 +41,8 @@ class ModelService:
         self._config = config
         self._registry = registry
         self._runtime = runtime
+        from ..services.inference_coordinator import InferenceCoordinator
+        self.inference = InferenceCoordinator()
 
     def update_configuration(self, config: dict):
         """Swap backing config so resolution reflects current primary model."""
@@ -52,6 +54,15 @@ class ModelService:
         """Resolve primary model to (provider_name, model_name)."""
         provider_name, model_name = self._resolve_spec()[:2]
         return provider_name, model_name
+
+    def resolve_primary_snapshot(self):
+        """Pin provider settings along with identity for a complete memory job."""
+        from copy import deepcopy
+        from ..runtime.models import ResolvedModel
+        provider, model, config = self._resolve_spec()
+        if not model:
+            raise ModelUnavailableError('', [])
+        return ResolvedModel(provider, model, deepcopy(config))
 
     def bind_model(self, model_name: str, tools: list,
                    temperature: float = 0.0):
@@ -75,6 +86,9 @@ class ModelService:
         for m in self._registry.list_all():
             result.setdefault(m.provider, []).append(m)
         return result
+
+    def memory_client(self, resolved, **limits):
+        return self._get_runtime().create_memory_client(resolved, **limits)
 
     def refresh(self):
         """Force re-discovery from all configured providers."""

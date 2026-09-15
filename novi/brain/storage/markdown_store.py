@@ -13,15 +13,16 @@ key and, unless a matching file already exists (by identity or body), a
 deterministic filename. Repeated learn/corroboration of the same claim updates
 one file instead of spawning siblings.
 
-User edits are authoritative for *representation*: when an existing file's body
-has drifted away from its identity, this writer refreshes metadata but never
-clobbers the user's body — reconciliation owns that merge.
+User edits are authoritative: when an existing file's body has drifted away
+from the projected item, this writer leaves it intact for reconciliation.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -195,6 +196,31 @@ class MarkdownStore:
 
     # ── reads ──────────────────────────────────────────────────────────
 
+    def link_episode(self, item_ids: list[str]) -> None:
+        """Link claims to their batch summary in Obsidian's related property.
+
+        Connections represent shared provenance, not inferred factual support.
+        """
+        if len(item_ids) < 2:
+            return
+        summary = self.find_for_id(item_ids[-1])
+        if summary is None:
+            return
+        meta, _ = self.parse(summary)
+        if 'summary' not in _as_list(meta.get('tags')):
+            return
+        target = summary.relative_to(self.knowledge_dir).with_suffix('').as_posix()
+        link = f'[[{target}]]'
+        for kid in dict.fromkeys(item_ids[:-1]):
+            path = self.find_for_id(kid)
+            if path is None or path == summary:
+                continue
+            meta, body = self.parse(path)
+            related = _as_list(meta.get('related'))
+            if link not in related:
+                meta['related'] = [*related, link]
+                self._write_frontmatter(path, meta, body)
+
     def read_item(self, path: str | Path) -> Optional[KnowledgeItem]:
         """Reconstruct a KnowledgeItem from an OKF file, when it has an ``id``.
 
@@ -221,9 +247,10 @@ class MarkdownStore:
             tags=tuple(_as_list(meta.get("tags"))),
             sources=tuple(_as_list(meta.get("sources"))),
             scenario_id=meta.get("scenario_id"),
-            created_at=_dt(meta.get("timestamp")),
+            created_at=_dt(meta.get("timestamp")) or datetime.now(),
             last_seen_at=_dt(meta.get("updated")),
             importance=importance,
+            evidence=meta.get('evidence') if isinstance(meta.get('evidence'), dict) else {},
         )
 
     # ── internals ──────────────────────────────────────────────────────
@@ -235,11 +262,16 @@ class MarkdownStore:
         norm_body = semantic_normalize(body)
         norm_content = semantic_normalize(item.content)
         preserve_body = bool(norm_body) and norm_body != norm_content
+        if preserve_body:
+            # An un-reconciled human edit takes precedence over a delayed
+            # extraction/promotion write. Reconciliation will project it.
+            return
         body_to_write = body if preserve_body else item.content
         created_ts = meta.get("timestamp") or (
             item.created_at.isoformat() if item.created_at else None
         ) or datetime.now().isoformat()
         frontmatter = {
+            **meta,
             "type": item.form.value,
             "title": meta.get("title") or _title_for(item.content),
             "id": meta.get("id") if preserve_body else item.id,
@@ -251,18 +283,40 @@ class MarkdownStore:
             "confidence": round(float(item.confidence), 4),
             "importance": round(float(item.importance), 4),
             "source_kind": source_kind,
-            "sources": sorted(set(_as_list(meta.get("sources"))) | set(item.sources)),
+            "sources": list(dict.fromkeys([*_as_list(meta.get('sources')), *item.sources])),
             "scenario_id": item.scenario_id,
+            "evidence": item.evidence,
         }
         self._write_frontmatter(target, frontmatter, body_to_write)
 
     def _write_frontmatter(self, target: Path, frontmatter: dict, body: str) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", encoding="utf-8") as f:
-            f.write("---\n")
-            yaml.dump(
-                frontmatter, f, default_flow_style=False, sort_keys=False,
-                allow_unicode=True,
-            )
-            f.write("---\n\n")
-            f.write(body)
+        fd, temporary = tempfile.mkstemp(dir=target.parent, suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.write('---\n')
+                yaml.safe_dump(frontmatter, f, sort_keys=False, allow_unicode=True)
+                f.write('---\n\n' + body)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def write_prepared(self, target: Path, text: str) -> None:
+        """Atomically persist journaled UTF-8 bytes without newline conversion."""
+        target = target.resolve()
+        if not target.is_relative_to(self.knowledge_dir):
+            raise ValueError('Prepared note path escapes vault')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(dir=target.parent, suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(text.encode('utf-8'))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)

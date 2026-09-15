@@ -68,6 +68,8 @@ class KnowledgeItem:
     created_at: datetime = field(default_factory=datetime.now)
     last_seen_at: Optional[datetime] = None
     importance: float = 0.0
+    evidence: dict = field(default_factory=dict)
+    """External provenance/validity. Empty for legacy and personal knowledge."""
 
 
 @dataclass
@@ -123,6 +125,7 @@ class Turn:
     timestamp: datetime = field(default_factory=datetime.now)
     tool_outputs: tuple[str, ...] = ()
     conversation_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 @dataclass
@@ -134,6 +137,7 @@ class QueryContext:
     top_k: int = 5
     distance_threshold: Optional[float] = 0.5
     memory_types: tuple[str, ...] = ()
+    conversation_id: Optional[str] = None
 
 
 @dataclass
