@@ -33,6 +33,7 @@ def build_item(statement, sources, volatility='changing', now=None, *, independe
                         ('url', 'title', 'excerpt', 'published_at')})
     if not records or not statement.strip():
         raise ValueError('A claim requires source evidence')
+    records.sort(key=lambda s: (s['url'], s['excerpt']))
     domains = {urlsplit(s['url']).hostname.lower().removeprefix('www.') for s in records}
     verified = independent and len(domains) >= 2
     volatility = volatility if volatility in ('stable', 'changing', 'live') else 'changing'
@@ -42,7 +43,7 @@ def build_item(statement, sources, volatility='changing', now=None, *, independe
                     retrieved_at=now.isoformat(),
                     recheck_after=(now + timedelta(days=interval)).isoformat() if interval is not None else None)
     # Source content versions, not observation count, establish identity.
-    identity = json.dumps([re.sub(r'\s+', ' ', statement.strip()).casefold(), records], sort_keys=True)
+    identity = re.sub(r'\s+', ' ', statement.strip()).casefold()
     return KnowledgeItem(
         id='web-' + sha256(identity.encode()).hexdigest()[:24],
         form=KnowledgeForm.ATOMIC, content=statement.strip()[:1500],
@@ -71,3 +72,16 @@ def reusable(item, now=None, freshness='stable'):
         return True
     except (TypeError, ValueError):
         return False
+
+
+def conflicts(left, right):
+    """Conservative conflict hint for the same wording with changed polarity/value.
+
+    Broader semantic disagreements remain a synthesis judgment; lexical
+    similarity alone never overwrites a claim.
+    """
+    from .verification import compatible_claims
+    def skeleton(text):
+        text = text.casefold().replace("n't", ' not')
+        return re.findall(r'\b[a-z]+\b', re.sub(r'\b(?:not|no|never|without)\b', '', text))
+    return skeleton(left) == skeleton(right) and not compatible_claims(left, right)

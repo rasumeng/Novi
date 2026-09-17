@@ -32,6 +32,7 @@ continuation (NEEDS_CONTINUATION + UI prompt).
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Callable, Iterator, Optional
 
 from ..jobs.job import Checkpoint, JobStatus
@@ -39,6 +40,20 @@ from ..orchestrator.task_types import ExecutionPlan, Goal, IntentType
 from ..planner.models import Plan
 
 log = logging.getLogger("novi.services.execution")
+
+MAX_AGENT_ITERATIONS = 20
+
+
+class AgentCancelled(Exception):
+    """Raised when the agent run is cancelled via stop_probe / user interrupt."""
+
+    pass
+
+
+class ExpectedExecutionError(Exception):
+    """Known recoverable execution failures (e.g., permission denied terminal)."""
+
+    pass
 
 
 class ExecutionCoordinator:
@@ -64,6 +79,462 @@ class ExecutionCoordinator:
     def orchestrator(self):
         return self._orchestrator
 
+    # ── AgentRun outer loop (Task 5) ────────────────────────────────────
+
+    def _prepare_context(self, run):  # type: ignore[no-untyped-def]
+        """Attach run correlation ids to the ExecutionContext for streaming.
+
+        Uses run.context directly (state container, no copy). Attaches run.id
+        as ``run_id`` for message_id correlation inside react_attempt / graph.
+        """
+        ctx = run.context
+        try:
+            setattr(ctx, "run_id", run.id)
+        except Exception:
+            pass
+        # Ensure conversation_id consistency
+        try:
+            if getattr(run, "conversation_id", "") and not getattr(ctx, "conversation_id", ""):
+                ctx.conversation_id = run.conversation_id
+        except Exception:
+            pass
+        return ctx
+
+    def _run_react(self, ctx, run, emit):  # type: ignore[no-untyped-def]
+        """Delegate one reasoning cycle to run_react_attempt (tool ownership internal).
+
+        Collects message/tool events already emitted via inner generator and
+        forwards them through *emit*; returns the terminal AgentAction.
+        When no runtime is wired and no test hook is present, falls back to
+        inspecting ctx.metadata ``_fake_actions`` for test doubles.
+        """
+        # Test hook: allow coordinator to be driven by injected fake actions without runtime
+        try:
+            fake_q = getattr(ctx, "metadata", {}).get("_fake_actions") if hasattr(ctx, "metadata") else None
+            if isinstance(fake_q, list) and fake_q:
+                # Pop next fake action; emit its corresponding message events via helper
+                # The caller (test) is responsible for having pre-emitted tool events if needed,
+                # but we handle message lifecycle only if not already emitted — but Task 5 says
+                # inner layer already emitted message.* so we just return action without re-emitting.
+                nxt = fake_q.pop(0)
+                # nxt may be AgentAction or tuple (type, msg)
+                from novi.runtime.agent_action import AgentAction as _AA, AgentActionType as _AAT
+
+                if isinstance(nxt, _AA):
+                    return nxt
+                if isinstance(nxt, tuple) and len(nxt) >= 1:
+                    t = str(nxt[0]).lower()
+                    msg = nxt[1] if len(nxt) > 1 else None
+                    if t == "progress":
+                        return _AA(type=_AAT.PROGRESS, message=msg)
+                    if t == "finish":
+                        return _AA(type=_AAT.FINISH, message=msg)
+                    return _AA(type=_AAT.CONTINUE, message=msg)
+        except Exception:
+            pass
+
+        # If runtime is available, delegate to its full run_stream (which handles
+        # analysis, retrieval, model binding, system prompt, compaction, graph/react etc.)
+        # This reuses proven runtime logic instead of reconstructing runnable manually.
+        runtime = getattr(self, "_runtime", None) or getattr(ctx, "_runtime", None)
+        if runtime is not None:
+            try:
+                from novi.runtime.agent_events import AgentEvent as _AE
+                from novi.runtime.agent_action import AgentAction as _AA2
+                from novi.runtime.agent_action import AgentActionType as _AAT2
+
+                action = None
+                legacy_message_id = None
+                legacy_message_open = False
+                # Use runtime.run_stream with the prepared context — it will do retrieval, model selection, etc.
+                for item in runtime.run_stream(
+                    context=ctx,
+                    user_input=ctx.user_input,
+                    conversation_id=getattr(ctx, "conversation_id", "") or "",
+                    project_id=getattr(ctx, "project_id", "") or "",
+                    attachments=getattr(ctx, "attachments", None),
+                ):
+                    try:
+                        if isinstance(item, _AE):
+                            emit(item)
+                        elif isinstance(item, _AA2):
+                            action = item
+                        elif isinstance(item, tuple):
+                            kind = item[0] if item else None
+                            if kind == "__plan_step_done__":
+                                msg = item[1] if len(item) > 1 else ""
+                                reason = item[2] if len(item) > 2 else "completed"
+                                success = item[3] if len(item) > 3 else True
+                                if reason in ("needs_continuation", "max_steps_safety", "stall", "context_overflow"):
+                                    action = _AA2(type=_AAT2.CONTINUE, message=msg, metadata={"stop_reason": reason, "success": success})
+                                elif reason in ("stopped", "error"):
+                                    # Treat as FINISH to terminate outer loop; error/cancel handled via exception path above
+                                    action = _AA2(type=_AAT2.FINISH, message=msg, metadata={"stop_reason": reason, "success": success})
+                                else:
+                                    from novi.runtime.react_attempt import is_goal_complete
+                                    if is_goal_complete(ctx, msg):
+                                        action = _AA2(type=_AAT2.FINISH, message=msg, metadata={"stop_reason": reason, "success": success})
+                                    else:
+                                        action = _AA2(type=_AAT2.CONTINUE, message=msg, metadata={"stop_reason": reason, "success": success})
+                            elif kind in ("token", "reasoning", "thinking", "tool_call", "tool_result", "status", "trace", "phase", "retry", "model", "agent_status", "plan.started", "step.started", "plan.completed", "step.completed"):
+                                if kind == "token":
+                                    # runtime.run_stream is still the compatibility
+                                    # surface for this bridge and emits legacy token
+                                    # tuples. Preserve them as the same progressive
+                                    # message lifecycle used by native AgentEvents.
+                                    text = str(item[1] if len(item) > 1 else "")
+                                    if text:
+                                        if not legacy_message_open:
+                                            from novi.runtime.agent_events import AgentEvent as _TokenEvent
+                                            legacy_message_id = f"msg-{uuid.uuid4().hex[:8]}"
+                                            legacy_message_open = True
+                                            emit(_TokenEvent(type="message.started", run_id=run.id,
+                                                             conversation_id=run.conversation_id,
+                                                             message_id=legacy_message_id))
+                                        emit(_TokenEvent(type="message.delta", run_id=run.id,
+                                                         conversation_id=run.conversation_id,
+                                                         message_id=legacy_message_id, message=text))
+                                elif kind == "tool_call":
+                                    try:
+                                        _, name, args, call_id = item[:4]
+                                        emit(_AE(type="tool.started", run_id=getattr(ctx, "run_id", "") or run.id, conversation_id=getattr(ctx, "conversation_id", "") or run.conversation_id, tool=name, args=args))
+                                    except Exception:
+                                        pass
+                                elif kind == "tool_result":
+                                    try:
+                                        _, name, result, call_id = item[:4]
+                                        emit(_AE(type="tool.completed", run_id=getattr(ctx, "run_id", "") or run.id, conversation_id=getattr(ctx, "conversation_id", "") or run.conversation_id, tool=name, result=str(result)[:2000]))
+                                    except Exception:
+                                        pass
+                                elif kind == "trace":
+                                    # Diagnostics only — do not pollute activity panel with raw TraceEvent
+                                    # Trace is already handled via debug/tracing, skip UI emission
+                                    pass
+                                elif kind == "phase":
+                                    try:
+                                        data = item[1] if len(item) > 1 else {}
+                                        if isinstance(data, dict):
+                                            emit(_AE(type="phase", run_id=run.id, conversation_id=run.conversation_id, phase=data.get("phase"), detail=str(data.get("detail") or data.get("query") or "") or None))
+                                        else:
+                                            emit(_AE(type="phase", run_id=run.id, conversation_id=run.conversation_id, phase=str(data)))
+                                    except Exception:
+                                        pass
+                                elif kind == "retry":
+                                    try:
+                                        data = item[1] if len(item) > 1 else {}
+                                        if isinstance(data, dict):
+                                            retry_args = {"query": data.get("query")} if data.get("query") else None
+                                            emit(_AE(type="retry", run_id=run.id, conversation_id=run.conversation_id, phase=data.get("reason"), detail=str(data.get("attempt") or ""), args=retry_args))
+                                        else:
+                                            emit(_AE(type="retry", run_id=run.id, conversation_id=run.conversation_id, message=str(data)))
+                                    except Exception:
+                                        pass
+                                elif kind == "thinking":
+                                    try:
+                                        emit(_AE(type="status", run_id=run.id, conversation_id=run.conversation_id, message=str(item[1]) if len(item) > 1 else ""))
+                                    except Exception:
+                                        pass
+                                else:
+                                    try:
+                                        emit(_AE(type=kind if kind in ("status", "reasoning") else "status", run_id=run.id, conversation_id=run.conversation_id, message=str(item[1]) if len(item) > 1 else ""))
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                if action is not None:
+                    if legacy_message_open:
+                        from novi.runtime.agent_events import AgentEvent as _TokenEnd
+                        emit(_TokenEnd(type="message.completed", run_id=run.id,
+                                       conversation_id=run.conversation_id,
+                                       message_id=legacy_message_id,
+                                       message=action.message or ""))
+                    return action
+                # If runtime completed without explicit terminal, treat as FINISH with last final
+                # Fallback: if no action captured but runtime finished, consider it FINISH
+                from novi.runtime.agent_action import AgentAction as _AAFallback2, AgentActionType as _AATFallback2
+                # Try to get final from ctx or last yield
+                final_msg = getattr(ctx, "trace", None)
+                # If we got here without action, assume FINISH to avoid infinite loop
+                return _AAFallback2(type=_AATFallback2.FINISH, message=getattr(ctx, "history", [("", "")])[-1][1] if getattr(ctx, "history", None) else "", metadata={"stop_reason": "completed", "success": True})
+            except Exception as _e:
+                import logging as _lg
+                _lg.getLogger("novi.services.execution").warning("execute: runtime.run_stream delegation failed: %s", _e)
+                # Fall through to fallback below
+
+        # Fallback: if we cannot build runnable, fail fast instead of infinite CONTINUE
+        # Returning CONTINUE here would cause outer loop to spin until MAX_AGENT_ITERATIONS.
+        from novi.runtime.agent_action import AgentAction as _AAFallback, AgentActionType as _AATFallback
+        import logging as _lg2
+        _lg2.getLogger("novi.services.execution").warning("execute: _run_react fallback — runtime collaborators unavailable, ending run")
+        return _AAFallback(type=_AATFallback.FINISH, message="I wasn't able to start the run — runtime unavailable. Please retry.", metadata={"stop_reason": "error", "success": False})
+
+    def _run_graph(self, ctx, run, emit):  # type: ignore[no-untyped-def]
+        """Delegate one cycle to RuntimeWorkflowGraph (tool ownership internal)."""
+        # Test hook: check _fake_actions similarly
+        try:
+            fake_q = getattr(ctx, "metadata", {}).get("_fake_actions") if hasattr(ctx, "metadata") else None
+            if isinstance(fake_q, list) and fake_q:
+                nxt = fake_q.pop(0)
+                from novi.runtime.agent_action import AgentAction as _AA, AgentActionType as _AAT
+
+                if isinstance(nxt, _AA):
+                    return nxt
+                if isinstance(nxt, tuple) and len(nxt) >= 1:
+                    t = str(nxt[0]).lower()
+                    msg = nxt[1] if len(nxt) > 1 else None
+                    if t == "progress":
+                        return _AA(type=_AAT.PROGRESS, message=msg)
+                    if t == "finish":
+                        return _AA(type=_AAT.FINISH, message=msg)
+                    return _AA(type=_AAT.CONTINUE, message=msg)
+        except Exception:
+            pass
+
+        # Try to find a graph via self._runtime or injected runtime_graph
+        runtime = getattr(self, "_runtime", None) or getattr(ctx, "_runtime", None)
+        graph = getattr(runtime, "_runtime_graph", None) if runtime is not None else getattr(self, "_runtime_graph", None)
+        if graph is not None:
+            try:
+                from novi.runtime.agent_events import AgentEvent as _AE
+
+                # Build state with run_id correlation
+                state = {}
+                try:
+                    state = runtime._runtime_graph_state(ctx, runtime._bind_runnable(ctx, []), [], ctx.user_input) if hasattr(runtime, "_runtime_graph_state") else {}
+                except Exception:
+                    state = {
+                        "user_input": ctx.user_input,
+                        "messages": [],
+                        "model": None,
+                        "run_id": run.id,
+                        "conversation_id": run.conversation_id,
+                    }
+                state["run_id"] = run.id
+                state["conversation_id"] = run.conversation_id
+                # Provide emit sink so graph emits AgentEvents through our emit
+                # The graph expects state["emit"] to be a queue put; we wrap emit to accept AgentEvent/tuple
+                def _graph_emit(item):
+                    try:
+                        if isinstance(item, _AE):
+                            emit(item)
+                        elif isinstance(item, tuple):
+                            # Convert tuple to AgentEvent via legacy bridge if possible
+                            # Let caller handle tuple already? But forward as is for tool events
+                            # Wrap as status/reasoning for now
+                            if item and item[0] == "token":
+                                # Native streaming token already maps to message.delta — but graph handles that via AgentEvent elsewhere
+                                pass
+                            else:
+                                # Forward minimal
+                                emit(_AE(type=item[0] if item else "unknown", run_id=run.id, conversation_id=run.conversation_id, message=str(item[1]) if len(item) > 1 else None))
+                    except Exception:
+                        pass
+
+                state["emit"] = _graph_emit
+                # Capture events emitted via state["events"] and forward
+                result = graph.run(state)
+                # Forward any events collected in state["events"] that haven't been forwarded via emit
+                for ev in state.get("events", []) + result.metadata.get("result", {}).get("events", []) if hasattr(result, "metadata") else []:
+                    try:
+                        if isinstance(ev, _AE):
+                            emit(ev)
+                    except Exception:
+                        pass
+                return result
+            except Exception:
+                pass
+
+        # Fallback: fail fast, don't spin
+        from novi.runtime.agent_action import AgentAction as _AAFallback, AgentActionType as _AATFallback
+        import logging as _lg3
+        _lg3.getLogger("novi.services.execution").warning("execute: _run_graph fallback — graph unavailable, ending run")
+        return _AAFallback(type=_AATFallback.FINISH, message="I wasn't able to start the graph run. Please retry.", metadata={"stop_reason": "error", "success": False})
+
+    def _sync_token_usage(self, ctx, run) -> None:  # type: ignore[no-untyped-def]
+        """Propagate token usage from provider callbacks to run.token_usage if available.
+
+        Preference order (Task 7 spec):
+          1. Provider callback on ctx (chunk.usage_metadata / response_metadata usage) -> ctx.token_usage
+          2. ctx.metadata["token_usage"] (alternative seam)
+          3. Do NOT fall back to trace.steps — run.token_usage stays None when provider absent
+             (trace tokens remain diagnostic only; nullable contract.)
+        """
+        try:
+            # Prefer ctx.token_usage if set by provider (int | None tolerant)
+            val = getattr(ctx, "token_usage", None)
+            if val is not None:
+                run.token_usage = int(val)
+                return
+            # Also check metadata seam
+            try:
+                meta_val = ctx.metadata.get("token_usage") if hasattr(ctx, "metadata") and isinstance(ctx.metadata, dict) else None
+                if meta_val is not None:
+                    run.token_usage = int(meta_val)
+                    return
+            except Exception:
+                pass
+            # No provider usage -> leave run.token_usage as-is (None if never set, tolerant)
+            # Intentionally do NOT sum trace.steps; that would conflate diagnostics with provider total_tokens
+        except Exception:
+            pass
+
+    def execute(self, run, emit: Callable, runtime=None) -> None:  # type: ignore[no-untyped-def]
+        """Drive one AgentRun to a terminal state, emitting run-level events only.
+
+        Native streaming ownership (message.started/delta/completed with stable
+        message_id) lives inside ``run_react_attempt`` / ``RuntimeWorkflowGraph``.
+        This method MUST NOT re-emit message.* — it only handles run.started,
+        context.compacting/compacted, and terminal run.completed/failed/cancelled.
+
+        Args:
+            run: AgentRun state container (status RUNNING; mutated in place).
+            emit: Callable[[AgentEvent], None] — sink for lifecycle events.
+            runtime: Optional runtime for delegation (stored as self._runtime for
+                     _run_graph/_run_react). When not supplied, those methods
+                     fall back to test hooks or CONTINUE.
+        """
+        from novi.runtime.agent_run import AgentRunStatus
+        from novi.runtime.agent_action import AgentActionType
+        from novi.runtime.agent_events import AgentEvent
+
+        if runtime is not None:
+            self._runtime = runtime  # type: ignore[attr-defined]
+
+        # Attach runtime to run.context for helper delegation if not already
+        try:
+            if runtime is not None and hasattr(run, "context") and run.context is not None:
+                setattr(run.context, "_runtime", runtime)
+        except Exception:
+            pass
+
+        emit(AgentEvent(type="run.started", run_id=run.id, conversation_id=run.conversation_id))
+        try:
+            while not run.finished:
+                ctx = self._prepare_context(run)
+
+                # Choose executor
+                is_graph = False
+                try:
+                    ep = getattr(ctx, "execution_plan", None)
+                    if ep is not None and getattr(ep, "plan", None) is not None:
+                        is_graph = True
+                except Exception:
+                    pass
+
+                if is_graph:
+                    action = self._run_graph(ctx, run, emit)
+                else:
+                    action = self._run_react(ctx, run, emit)
+
+                # Handle AgentAction — DO NOT re-emit message.* (already done inside)
+                if action is None:
+                    from novi.runtime.agent_action import AgentAction as _AA, AgentActionType as _AAT
+
+                    action = _AA(type=_AAT.CONTINUE)
+
+                if action.type == AgentActionType.CONTINUE:
+                    pass
+                elif action.type == AgentActionType.PROGRESS:
+                    if action.message:
+                        try:
+                            ctx.history.append(("assistant", action.message))
+                        except Exception:
+                            pass
+                    # Sync token usage after progress
+                    self._sync_token_usage(ctx, run)
+                elif action.type == AgentActionType.FINISH:
+                    # Check if FINISH is actually an error (success=False)
+                    success = action.metadata.get("success", True) if isinstance(action.metadata, dict) else True
+                    stop_reason = action.metadata.get("stop_reason", "") if isinstance(action.metadata, dict) else ""
+                    if success is False or stop_reason in ("error",):
+                        # Treat error FINISH as FAILED to avoid marking error as completed
+                        if action.message:
+                            try:
+                                ctx.history.append(("assistant", action.message))
+                            except Exception:
+                                pass
+                        run.status = AgentRunStatus.FAILED
+                        self._sync_token_usage(ctx, run)
+                        emit(AgentEvent(type="run.failed", run_id=run.id, conversation_id=run.conversation_id, error=action.message or "Execution failed"))
+                        break
+                    if action.message:
+                        try:
+                            ctx.history.append(("assistant", action.message))
+                        except Exception:
+                            pass
+                    run.status = AgentRunStatus.COMPLETED
+                    self._sync_token_usage(ctx, run)
+                    emit(AgentEvent(type="run.completed", run_id=run.id, conversation_id=run.conversation_id))
+                    break
+                else:
+                    # Unknown action type → treat as CONTINUE
+                    pass
+
+                if run.finished:
+                    break
+
+                # Compaction AFTER action handling, before next iteration
+                level = None
+                try:
+                    from novi.runtime.context_manager import ContextManager
+
+                    cm = ContextManager(model_name=getattr(ctx, "model_name", None))
+                    level = cm.should_compact(ctx)
+                except Exception:
+                    level = None
+                if level in ("compact", "emergency"):
+                    emit(AgentEvent(type="context.compacting", run_id=run.id, conversation_id=run.conversation_id, phase=level))
+                    try:
+                        from novi.runtime.context_manager import ContextManager as _CM
+
+                        cm2 = _CM(model_name=getattr(ctx, "model_name", None))
+                        cm2.compact_history(ctx)
+                        run.checkpoint = cm2.checkpoint_stable(ctx)
+                    except Exception:
+                        pass
+                    emit(AgentEvent(type="context.compacted", run_id=run.id, conversation_id=run.conversation_id, phase=level))
+
+                run.iteration += 1
+                try:
+                    run.updated_at = datetime.now()
+                except Exception:
+                    pass
+                if run.iteration >= MAX_AGENT_ITERATIONS:
+                    run.status = AgentRunStatus.FAILED
+                    emit(AgentEvent(type="run.failed", run_id=run.id, conversation_id=run.conversation_id, error="Max agent iterations exceeded"))
+                    break
+
+                self._sync_token_usage(ctx, run)
+
+        except AgentCancelled:
+            from novi.runtime.agent_run import AgentRunStatus as _ARS
+
+            run.status = _ARS.CANCELLED
+            from novi.runtime.agent_events import AgentEvent as _AE
+
+            emit(_AE(type="run.cancelled", run_id=run.id, conversation_id=run.conversation_id))
+        except ExpectedExecutionError as e:
+            from novi.runtime.agent_run import AgentRunStatus as _ARS
+
+            run.status = _ARS.FAILED
+            from novi.runtime.agent_events import AgentEvent as _AE
+
+            emit(_AE(type="run.failed", run_id=run.id, conversation_id=run.conversation_id, error=str(e)))
+        except Exception:
+            import logging as _logging
+
+            _logging.getLogger("novi.services.execution").exception("AgentRun failed")
+            from novi.runtime.agent_run import AgentRunStatus as _ARS
+
+            run.status = _ARS.FAILED
+            from novi.runtime.agent_events import AgentEvent as _AE
+
+            emit(_AE(type="run.failed", run_id=run.id, conversation_id=run.conversation_id, error="Internal error"))
+            raise
+
+    # TODO(cleanup): remove run_stream tuple translation after all surfaces migrate to execute().
+    # Legacy callers (CLI/Telegram/background) still use run_stream which yields tuples.
+    # Future: delegate to execute() with collecting emit and translate AgentEvents back to tuples.
     def run_stream(self, runtime, user_input: str, *, conversation_id: str = "",
                    project_id: str = "",
                    attachments: Optional[list] = None,

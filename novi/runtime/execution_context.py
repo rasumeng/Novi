@@ -154,6 +154,10 @@ class ExecutionContext:
     has_images: bool = False
     model_supports_tools: bool = True
 
+    # ── Token accounting (provider supplied, nullable) ──────────────────
+    token_usage: Optional[int] = None
+    """Total tokens for this run if provider supplied usage callback, else None."""
+
     # ── Metadata (extensible) ────────────────────────────────────────────
     metadata: dict[str, Any] = field(default_factory=dict)
 

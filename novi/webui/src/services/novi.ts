@@ -2,8 +2,10 @@
 // Reconnects automatically; events are fanned out to a single handler.
 
 import { Conversation, Attachment, Project, Skill, McpCatalogEntry, McpStatusResponse, McpServerDetail, DiffData, AgentTaskCreate, AgentConfig, TaskData, BackgroundRunInfo, BackgroundRunLog, ScheduledTaskInfo, TimelineEntry, KnowledgeOverview } from '@/types'
+import type { RunWireEvent } from '@/state/runReducer'
 
 export type ServerEvent =
+  | RunWireEvent
   | { type: 'memory_activity'; activity: MemoryActivityState }
   | { type: 'token'; text: string }
   | { type: 'thinking'; text: string; detail?: string; query?: string }
@@ -44,8 +46,15 @@ export type ServerEvent =
   | { type: 'progress'; current: number; total: number; label: string }
   | { type: 'agent_state'; current_goal: string; status: string; tools_used: number; error?: string }
   | { type: 'assistant_event'; entry: TimelineEntry }
-  | { type: 'done' }
-  | { type: 'error'; text: string }
+  | { type: 'done'; runId?: string }
+  | { type: 'error'; text: string; runId?: string }
+  | { type: 'cancelled'; runId?: string }
+  // Task 6: AgentRun progressive message lifecycle (compat: handle both legacy token/done and new message_start/message_end)
+  // TODO(cleanup): remove legacy token-only handling after frontend requires message_start/message_end
+  | { type: 'message_start'; messageId: string; runId: string }
+  | { type: 'message_end'; messageId: string }
+  | { type: 'tool.started'; tool: string; args?: Record<string, unknown>; result?: string }
+  | { type: 'tool.completed'; tool: string; args?: Record<string, unknown>; result?: string }
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
 
@@ -71,6 +80,8 @@ export class NoviClient {
   private ws: WebSocket | null = null
   private retryMs = 1000
   private closedByUser = false
+  private activeRunId: string | null = null
+  private lastRunSequence = 0
 
   onEvent: (ev: ServerEvent) => void = () => {}
   onConnectionChange: (state: ConnectionState) => void = () => {}
@@ -82,10 +93,25 @@ export class NoviClient {
     this.ws.onopen = () => {
       this.retryMs = 1000
       this.onConnectionChange('open')
+      if (this.activeRunId) {
+        this.ws?.send(JSON.stringify({
+          type: 'run_subscribe',
+          run_id: this.activeRunId,
+          after_sequence: this.lastRunSequence,
+        }))
+      }
     }
     this.ws.onmessage = (e) => {
       try {
-        this.onEvent(JSON.parse(e.data) as ServerEvent)
+        const event = JSON.parse(e.data) as ServerEvent & {
+          runId?: string
+          sequence?: number
+        }
+        if (event.runId && typeof event.sequence === 'number') {
+          this.activeRunId = event.runId
+          this.lastRunSequence = Math.max(this.lastRunSequence, event.sequence)
+        }
+        this.onEvent(event)
       } catch {
         /* ignore malformed frames */
       }
@@ -113,6 +139,8 @@ export class NoviClient {
   }
 
   sendChat(content: string, conversationId?: string, attachments?: Attachment[], projectId?: string, deepResearch?: boolean) {
+    this.activeRunId = null
+    this.lastRunSequence = 0
     const payload: Record<string, unknown> = { type: 'chat', content, conversation_id: conversationId }
     if (attachments?.length) {
       payload.attachments = attachments.map(a => ({ id: a.id, type: a.type, name: a.name, mime: a.mime, size: a.size }))
@@ -123,6 +151,9 @@ export class NoviClient {
   }
   stop() {
     return this.send({ type: 'stop' })
+  }
+  subscribeRun(runId: string, afterSequence: number) {
+    return this.send({ type: 'run_subscribe', run_id: runId, after_sequence: afterSequence })
   }
   answerPermission(allowed: boolean, requestId?: string) {
     return this.send({ type: 'permission_response', allowed, id: requestId })

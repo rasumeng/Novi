@@ -92,57 +92,33 @@ def _format_continuation_candidates(candidates: list) -> str:
     return "\n".join(lines)
 
 
-def _render_run(coordinator, runtime, text: str, conversation_id: str) -> str:
-    """Drive one CLI turn through the ExecutionCoordinator.
-
-    CLI rendering stays CLI-owned: tool/trace items are ignored, the assistant
-    answer is assembled from token chunks exactly like the legacy
-    ``runtime.run()``. Coordinator control messages (continuation candidates /
-    errors) are rendered as text.
-    """
-    parts = []
-    for item in coordinator.run_stream(runtime, text,
-                                       conversation_id=conversation_id):
-        if not item:
-            continue
-        kind = item[0]
-        if kind == "control":
-            payload = item[1]
-            ctype = payload.get("type")
-            if ctype == "error":
-                return payload.get("text", "Error")
-            if ctype == "continuation_candidates":
-                return _format_continuation_candidates(
-                    payload.get("candidates", []))
-        elif kind == "token":
-            parts.append(str(item[1]))
-    return "".join(parts).strip()
-
-
 class CliSessionAdapter:
-    """A CLI session's composition root (mirrors the WebUI ``Session``).
-
-    Owns a session-scoped runtime + ExecutionCoordinator against a stable
-    conversation identity ``cli:<session_id>``. One logical session never
-    creates a second Task/Job pipeline; Task/Plan/Job/History all flow through
-    the same coordinator seam as WebUI chat.
-    """
+    """CLI adapter over the canonical RunService event protocol."""
 
     def __init__(self, ctx, *, project_index=None, auto: bool = False,
                  session_id: str = ""):
-        from .services.execution import build_application_execution
+        from .services.run_composition import build_run_service
 
         self.session_id = session_id or uuid.uuid4().hex[:8]
         self.conversation_id = f"cli:{self.session_id}"
-        self.runtime, self.coordinator, _ = build_application_execution(
-            ctx, project_index=project_index, auto=auto)
+        self.ctx = ctx
+        self.project_index = project_index
+        self.auto = auto
+        # The current terminal surface has no permission-response control.
+        # Required approval therefore becomes an honest blocked run; --auto
+        # remains the explicit bypass requested by the user.
+        self.service = build_run_service(ctx, headless=not auto, auto=auto)
 
     def run(self, text: str) -> str:
-        return _render_run(self.coordinator, self.runtime, text,
-                           self.conversation_id)
+        from .services.run_render import execute_text, render_public_text
+        workspace = str(getattr(self.project_index, "root", "") or "")
+        _, state, events = execute_text(self.service, self.ctx, text,
+            self.conversation_id, workspace=workspace)
+        return render_public_text(state, events)
 
     def reset(self):
-        self.runtime.reset()
+        self.session_id = uuid.uuid4().hex[:8]
+        self.conversation_id = f"cli:{self.session_id}"
 
 
 def interactive_session(ctx, initial_query: str | None = None):

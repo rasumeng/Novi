@@ -106,6 +106,11 @@ class ContextManager:
         if available else extractive (goal+completed+errors). Stores
         stable_state in ctx.metadata and ctx.summary. Truncates history only,
         never discards StableState. Preserves project_id isolation.
+
+        Ephemeral status (context.compacting text, "Still working", etc.)
+        must NOT enter ExecutionContext.history or checkpoint; only PROGRESS
+        and FINISH assistant messages do. This method never appends ephemeral
+        status — see ExecutionCoordinator.execute for history contract.
         """
         # Canonical base — preserves project_id/conversation_id/plan/errors/budget_breakdown isolation
         stable = StableState.from_context(ctx)

@@ -2,10 +2,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
 import { ConnectionState, type MemoryActivityState } from '@/services/novi'
+import type { RunProjection } from '@/state/runReducer'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { UserMessage } from './UserMessage'
 import { AssistantResponse, AssistantWorkingIndicator } from './AssistantResponse'
-import { AssistantArtifacts } from './AssistantArtifacts'
 import { ThinkingTrace } from './ThinkingTrace'
 import { InlinePlanApproval } from './InlinePlanApproval'
 import { PermissionPrompt } from '@/components/common/PermissionPrompt'
@@ -20,6 +20,9 @@ interface PermissionRequest {
   id: string
   timeoutMs?: number
   expiresAt?: string
+  effects?: string[]
+  digest?: string
+  proposedDiff?: unknown
 }
 
 interface Props {
@@ -52,6 +55,7 @@ interface Props {
   activityOpen?: boolean
   onToggleActivity?: () => void
   memoryActivity?: MemoryActivityState | null
+  runProjection?: RunProjection | null
 }
 
 export function Conversation({
@@ -84,6 +88,7 @@ export function Conversation({
   activityOpen: controlledActivityOpen,
   onToggleActivity: controlledToggle,
   memoryActivity,
+  runProjection,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
@@ -164,48 +169,42 @@ export function Conversation({
           </div>
         ) : (
           <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-            {conversation.messages.map((m, i, arr) => {
-              const isLast = i === arr.length - 1
-              const isStreamingAssistant = m.role === 'assistant' && m.streaming
-              // Pending generation: no assistant token yet, show working state below last user message
-              const showPending = m.role === 'user' && (i === arr.length - 1 || i === arr.length - 2) && generating && !hasStreamingAnswer
-
+            {conversation.messages.map((m) => {
               return (
                 <div key={m.id} className="min-w-0">
                   {m.role === 'user' ? (
                     <UserMessage message={m} />
                   ) : (
-                    <AssistantResponse message={m}>
-                      {isLast && isStreamingAssistant && (plan || permission) && (
-                        <AssistantArtifacts
-                          plan={plan}
-                          permission={permission}
-                          onApprovePlan={onApprovePlan}
-                          onRejectPlan={onRejectPlan}
-                          onAnswerPermission={(allowed, id) => onAnswerPermission(allowed, id)}
-                          onCancel={onStop}
-                        />
-                      )}
-                    </AssistantResponse>
-                  )}
-                  {showPending && (
-                    <div className="mt-3 space-y-3">
-                      {thinking ? (
-                        <ThinkingTrace text={liveThought} />
-                      ) : (
-                        <AssistantWorkingIndicator />
-                      )}
-                      {plan && (
-                        <InlinePlanApproval plan={plan} onApprove={onApprovePlan} onReject={onRejectPlan} />
-                      )}
-                      {permission && (
-                        <PermissionPrompt request={permission} onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)} onCancel={onStop} />
-                      )}
-                    </div>
+                    <AssistantResponse message={m} />
                   )}
                 </div>
               )
             })}
+            {generating && (
+              <div className="space-y-3" aria-live="polite">
+                {!hasStreamingAnswer && (
+                  thinking ? <ThinkingTrace text={liveThought} /> : <AssistantWorkingIndicator />
+                )}
+                {plan && (
+                  <InlinePlanApproval plan={plan} onApprove={onApprovePlan} onReject={onRejectPlan} />
+                )}
+                {permission && (
+                  <PermissionPrompt request={permission}
+                    onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)}
+                    onCancel={onStop} />
+                )}
+              </div>
+            )}
+            {runProjection && ['blocked', 'failed', 'cancelled', 'interrupted'].includes(runProjection.status) && (
+              <div role="status" className={`rounded-lg border px-3 py-2 text-[12px] ${
+                runProjection.status === 'cancelled'
+                  ? 'border-base-700 bg-base-850/60 text-base-300'
+                  : 'border-red-500/25 bg-red-500/5 text-red-300'
+              }`}>
+                <span className="font-medium capitalize">{runProjection.status.replace('_', ' ')}</span>
+                {runProjection.error && <span className="text-base-400"> — {runProjection.error}</span>}
+              </div>
+            )}
           </div>
         )}
       </div>

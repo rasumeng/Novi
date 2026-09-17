@@ -66,6 +66,7 @@ from .runtime.tool_risk import get_tool_risk, risk_to_label
 from .timeline import TimelineService, build_knowledge_overview
 from .webui import WebUIBackend
 from .paths import home as app_home
+from .skills.catalog import SkillCatalog, SkillValidationError
 
 DIST_DIR = Path(__file__).parent / "webui" / "dist"
 CHATS_DIR = app_home() / "chats"
@@ -210,28 +211,22 @@ def _start_background_run(goal: str, cfg: dict | None = None) -> str:
             def on_event(item):
                 if not item:
                     return
-                kind = item[0]
-                if kind == "tool_call":
-                    _, name, args, call_id = item[:4]
+                kind = item.type.value
+                payload = item.payload
+                if kind == "tool.requested":
                     _emit("background_run_log", log_type="tool_call",
-                          tool=name, args=args, call_id=call_id)
-                elif kind == "tool_result":
-                    _, name, result, call_id = item[:4]
+                          tool=payload.get("name"), args=payload.get("arguments"),
+                          call_id=payload.get("call_id"))
+                elif kind == "tool.completed":
                     _emit("background_run_log", log_type="tool_result",
-                          tool=name, result=result, call_id=call_id)
-                elif kind == "agent_status":
-                    status, goal_text = item[1], item[2]
-                    step_text = item[3] if len(item) > 3 else None
-                    _emit("background_run_update", status=status,
-                          goal=goal_text, step=step_text)
-                elif kind == "thinking":
+                          tool=payload.get("name"), result=payload.get("output") or payload.get("error"),
+                          call_id=payload.get("call_id"))
+                elif kind == "message.completed":
                     _emit("background_run_update", status="running",
-                          goal=goal, step=item[1])
-                elif kind == "control":
-                    payload = item[1]
-                    if payload.get("type") == "error":
-                        _emit("background_run_update", status="error",
-                              goal=goal, error=payload.get("text", ""))
+                          goal=goal, step=payload.get("content", ""))
+                elif kind in {"run.failed", "run.blocked"}:
+                    _emit("background_run_update", status="error",
+                          goal=goal, error=payload.get("reason", ""))
 
             result = run_background(ctx, goal, conversation_id=f"bg:{run_id}",
                                     on_event=on_event,
@@ -476,7 +471,8 @@ def seed_default_skills():
 class Session:
     """One WebSocket connection = one runtime + one run at a time."""
 
-    def __init__(self, cfg: dict | None = None, loop: asyncio.AbstractEventLoop = None):
+    def __init__(self, cfg: dict | None = None, loop: asyncio.AbstractEventLoop = None,
+                 ctx=None):
         self.runtime, self.orchestrator, self.job_manager, self.event_bus = build_runtime(cfg)
         with _active_sessions_lock:
             _active_sessions.add(self)
@@ -497,6 +493,9 @@ class Session:
         self.current_job_id = ""
         self.current_task_id = ""
         self.agent_config: dict = {}
+        # Task 6: AgentRun per-session state for WebSocket bridge
+        self.current_run = None  # type: ignore[assignment]
+        self._ctx = ctx or get_backend().get("context")
 
         self.task_store = getattr(self.orchestrator, "task_store", None)
         self.continuation = getattr(self.runtime, "_continuation_service", None)
@@ -506,27 +505,11 @@ class Session:
         # completion) and ``plan.started`` never creates a second Job.
         self.job_lifecycle = getattr(self.runtime, "_job_lifecycle", None)
 
-        # Milestone 5 Phase 5E-1: Session.start_run delegates to the shared
-        # ExecutionCoordinator (single ownership of Task/Plan/Job/Runtime).
-        # This process wires the job the coordinator creates.
-        from .services.execution import ExecutionCoordinator
-
-        self.coordinator = ExecutionCoordinator(
-            orchestrator=self.orchestrator,
-            job_manager=self.job_manager,
-            task_store=self.task_store,
-            continuation=self.continuation,
-            job_lifecycle=self.job_lifecycle,
-        )
-
         # Bridge EventBus→WebSocket: forward runtime events
         self.event_bus.on_any(self._on_bus_event)
 
-        # M5.2: wire the WebUI permission prompt into the production execution
-        # path. ``ToolExecutor._check_permission`` calls this callback when the
-        # permission resolver returns "ask", so an interactive Allow/Deny in
-        # the browser is a real user decision instead of a silent deny.
-        self.runtime.tool_executor.set_permission_callback(self._ask_permission)
+        from .services.run_transport import RunSocketBridge
+        self.run_bridge = RunSocketBridge(self._ctx.run_service, self._emit)
 
     def _on_bus_event(self, event):
         """Forward EventBus events as WebSocket messages.
@@ -574,6 +557,9 @@ class Session:
             return self._perm_allowed
 
     def answer_permission(self, allowed: bool, request_id: str | None = None):
+        if request_id:
+            self.run_bridge.respond_permission(request_id, bool(allowed))
+            return
         # Correlate the response with the in-flight request. A stale response
         # (user answered a previous prompt, or a new request already started)
         # is dropped instead of resolving a future permission gate.
@@ -597,7 +583,11 @@ class Session:
 
     @property
     def busy(self) -> bool:
-        return self._worker is not None and self._worker.is_alive()
+        return self.run_bridge.busy
+
+    def detach(self):
+        """Disconnect this socket without cancelling process-owned work."""
+        self.run_bridge.detach()
 
     def _resolve_attachments(self, attachments_meta: list[dict]) -> list[dict]:
         resolved = []
@@ -611,45 +601,93 @@ class Session:
             resolved.append(entry)
         return resolved
 
+    def _map_agent_event_to_ws(self, event) -> dict | None:  # type: ignore[no-untyped-def]
+        """Task 6: translate AgentEvent → WebSocket protocol.
+
+        Only ``run.completed`` maps to ``done`` — never ``message.completed``.
+        TODO(cleanup): frontend currently handles both legacy ``token``/``done`` and
+        new ``message_start``/``message_end``/``done`` for one release. Remove
+        legacy handling after frontend requires ``message_start``/``message_end``.
+        """
+        t = getattr(event, "type", None)
+        if t == "message.started":
+            return {"type": "message_start", "messageId": getattr(event, "message_id", None), "runId": getattr(event, "run_id", None)}
+        elif t == "message.delta":
+            return {"type": "token", "text": getattr(event, "message", None), "messageId": getattr(event, "message_id", None)}
+        elif t == "message.completed":
+            return {"type": "message_end", "messageId": getattr(event, "message_id", None)}
+        elif t == "run.completed":
+            return {"type": "done", "runId": getattr(event, "run_id", None)}
+        elif t == "run.failed":
+            return {"type": "error", "text": getattr(event, "error", None), "runId": getattr(event, "run_id", None)}
+        elif t == "run.cancelled":
+            return {"type": "cancelled", "runId": getattr(event, "run_id", None)}
+        elif t in ("tool.started", "tool.completed"):
+            # Preserve original tool event semantics; include tool/args/result when present
+            out: dict = {"type": t}
+            if getattr(event, "tool", None) is not None:
+                out["tool"] = event.tool
+            if getattr(event, "args", None) is not None:
+                out["args"] = event.args
+            if getattr(event, "result", None) is not None:
+                out["result"] = event.result
+            # Provide compat aliases for legacy frontend (tool_call / tool_result) if needed
+            # TODO(cleanup): remove legacy aliases after frontend migrates to tool.started/completed
+            return out
+        elif t in ("context.compacting", "context.compacted"):
+            return {"type": "status", "text": "Compacting context..."}
+        elif t == "status":
+            return {"type": "status", "text": getattr(event, "message", None)}
+        elif t == "reasoning":
+            return {"type": "reasoning", "text": getattr(event, "message", None)}
+        elif t == "phase":
+            out = {"type": "phase", "phase": getattr(event, "phase", None)}
+            d = getattr(event, "detail", None)
+            if d:
+                out["detail"] = d
+            return out
+        elif t == "retry":
+            out = {"type": "retry"}
+            if getattr(event, "phase", None):
+                out["reason"] = event.phase
+            if getattr(event, "detail", None):
+                try:
+                    out["attempt"] = int(event.detail)
+                except Exception:
+                    out["attempt"] = event.detail
+            # Preserve query if stored in args
+            if getattr(event, "args", None) and isinstance(event.args, dict) and "query" in event.args:
+                out["query"] = event.args["query"]
+            return out
+        elif t == "trace":
+            # Trace is diagnostics — frontend ignores type "trace" (no handler), so hide it
+            return None
+        return None
+
     def start_run(self, user_input: str, attachments_meta: list[dict] | None = None,
                   project_context: str | None = None,
                   project_id: str | None = None,
                   deep_research: bool = False):
-        self.stop_flag.clear()
-        resolved_atts = self._resolve_attachments(attachments_meta) if attachments_meta else None
-        self.runtime.set_config(project_context=project_context or "")
+        """Prepare a typed run and let the process-owned service execute it."""
+        from .runtime.run_contracts import RunRequest
+        from .services.run_composition import primary_model_snapshot
 
-        def work():
-            try:
-                for item in self.coordinator.run_stream(
-                    runtime=self.runtime,
-                    user_input=user_input,
-                    conversation_id=self.current_conv_id,
-                    project_id=project_id or "",
-                    attachments=resolved_atts,
-                    stop_check=self.stop_flag.is_set,
-                    force_intent="research" if deep_research else None,
-                ):
-                    if item and item[0] == "control":
-                        payload = item[1]
-                        self._emit(payload)
-                    else:
-                        self._forward_item(item)
-                self.current_job_id = self.coordinator.job_id or self.current_job_id
-                self.current_task_id = self.coordinator.task_id or self.current_task_id
-                if self.coordinator.mode == "ambiguous":
-                    self._emit({"type": "continuation_candidates",
-                                "candidates": self.coordinator.candidates})
-            except Exception as e:
-                self._emit({"type": "error", "text": str(e)})
-                job_id = self.coordinator.job_id or getattr(self, "current_job_id", None)
-                if job_id:
-                    self.job_manager.complete(job_id, error=str(e))
-            finally:
-                self._emit({"type": "done"})
+        resolved = self._resolve_attachments(attachments_meta or [])
+        request = RunRequest(
+            conversation_id=self.current_conv_id,
+            user_message_id=f"msg-{uuid.uuid4().hex}",
+            user_text=user_input or "Please inspect the attached files.",
+            project_id=project_id or "",
+            workspace=project_context or "",
+            attachments=tuple(resolved),
+            research_selected=deep_research,
+            model=primary_model_snapshot(self._ctx),
+        )
+        self.current_run = self.run_bridge.start(request)
+        return self.current_run
 
-        self._worker = threading.Thread(target=work, daemon=True)
-        self._worker.start()
+    def replay_run(self, run_id: str, after_sequence: int = 0):
+        self.run_bridge.replay(run_id, after_sequence)
 
     def _forward_item(self, item: tuple):
         """Stream a runtime event tuple to the WebSocket."""
@@ -692,6 +730,9 @@ class Session:
             self._emit({"type": kind, "text": text, "detail": detail, "query": query})
 
     def stop(self):
+        if self.run_bridge.run_id:
+            self.run_bridge.cancel()
+            return
         self.stop_flag.set()
         # Fail closed: any in-flight permission request resolves as cancelled
         # (distinct from deny/timeout) and a late response can no longer match
@@ -1947,71 +1988,21 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @app.get("/api/skills")
     def get_skills():
-        if not SKILLS_DIR.exists():
-            return []
-        skills = []
-        for folder in sorted(SKILLS_DIR.iterdir()):
-            if not folder.is_dir():
-                continue
-            skill_file = folder / "SKILL.md"
-            if not skill_file.exists():
-                continue
-            try:
-                content = skill_file.read_text("utf-8")
-            except Exception:
-                continue
-            name = folder.name
-            description = ""
-            if content.startswith("---"):
-                import yaml
-                end = content.find("\n---", 3)
-                if end != -1:
-                    try:
-                        fm = yaml.safe_load(content[3:end])
-                    except Exception:
-                        continue
-                    if isinstance(fm, dict):
-                        description = (fm.get("description", "") or "").strip()
-                        # A frontmatter name override must also be valid, else
-                        # the skill could show here as dead while the loader
-                        # activates it under another name (or vice versa).
-                        fm_name = (fm.get("name", "") or "").strip()
-                        if fm_name and not _SKILL_NAME_RE.match(fm_name):
-                            continue
-            # Invalid skills (missing frontmatter description, bad name) are
-            # never listed or activated — no silent auto-activate.
-            if not description:
-                continue
-            if not _SKILL_NAME_RE.match(name):
-                continue
-            skills.append({"name": name, "description": description})
-        return skills
+        catalog = SkillCatalog(SKILLS_DIR)
+        return [record.catalog_entry() for record in catalog.list()]
 
     @app.post("/api/skills")
     def create_skill(body: dict):
         from fastapi.responses import JSONResponse
-        name = (body.get("name") or "").strip()
-        if not _SKILL_NAME_RE.match(name):
-            return JSONResponse(
-                {"error": "invalid name: use 2-66 chars of lowercase letters, digits, '-' or '_'"},
-                status_code=400,
-            )
-        desc = (body.get("description") or "").strip()
-        # if not desc:
-        #     return JSONResponse({"error": "description required"}, status_code=400)
-        content = body.get("content") or ""
-        if not content.strip():
-            return JSONResponse({"error": "content required"}, status_code=400)
         try:
-            skill_dir = _safe_child(SKILLS_DIR, name)
-        except ValueError:
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"error": "invalid name"}, status_code=400)
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        safe_desc = desc.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
-        frontmatter = f"---\nname: {name}\ndescription: \"{safe_desc}\"\n---\n\n"
-        (skill_dir / "SKILL.md").write_text(frontmatter + content, "utf-8")
-        return {"name": name, "description": desc}
+            record = SkillCatalog(SKILLS_DIR).create(
+                str(body.get("name") or "").strip(),
+                str(body.get("description") or "").strip(),
+                str(body.get("content") or ""),
+            )
+        except SkillValidationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return record.catalog_entry()
 
     @app.post("/api/skills/upload")
     async def upload_skill(file: UploadFile = File(...)):
@@ -2021,53 +2012,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             text = content.decode("utf-8")
         except (UnicodeDecodeError, ValueError):
             return JSONResponse({"error": "file is not valid UTF-8 text"}, status_code=400)
-        name = Path(file.filename or "skill.md").stem.strip()
-        if not _SKILL_NAME_RE.match(name):
-            return JSONResponse(
-                {"error": "invalid name: use 2-66 chars of lowercase letters, digits, '-' or '_'"},
-                status_code=400,
-            )
-        # Same frontmatter description/content checks as create_skill —
-        # validate everything BEFORE any disk write.
-        description = ""
-        if text.startswith("---"):
-            import yaml
-            end = text.find("\n---", 3)
-            if end != -1:
-                try:
-                    fm = yaml.safe_load(text[3:end])
-                except Exception:
-                    return JSONResponse({"error": "invalid frontmatter YAML"}, status_code=400)
-                if isinstance(fm, dict):
-                    description = (fm.get("description", "") or "").strip()
-                    fm_name = (fm.get("name", "") or "").strip()
-                    if fm_name and not _SKILL_NAME_RE.match(fm_name):
-                        return JSONResponse(
-                            {"error": "invalid name in frontmatter: use 2-66 chars of lowercase letters, digits, '-' or '_'"},
-                            status_code=400,
-                        )
-        if not description:
-            return JSONResponse({"error": "description required in frontmatter"}, status_code=400)
-        if not text.strip():
-            return JSONResponse({"error": "content required"}, status_code=400)
         try:
-            skill_dir = _safe_child(SKILLS_DIR, name)
-        except ValueError:
-            return JSONResponse({"error": "invalid name"}, status_code=400)
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(text, "utf-8")
-        return {"name": name, "description": description}
+            record = SkillCatalog(SKILLS_DIR).install_text(
+                Path(file.filename or "skill.md").stem.strip(), text)
+        except SkillValidationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return record.catalog_entry()
 
     @app.delete("/api/skills/{skill_name}")
     def delete_skill(skill_name: str):
-        import shutil
         try:
-            target = _safe_child(SKILLS_DIR, skill_name)
-        except ValueError:
+            SkillCatalog(SKILLS_DIR).delete(skill_name)
+        except SkillValidationError as exc:
             from fastapi.responses import JSONResponse
-            return JSONResponse({"error": "invalid name"}, status_code=400)
-        if target.exists() and target.is_dir():
-            shutil.rmtree(target)
+            return JSONResponse({"error": str(exc)}, status_code=404)
         return {"ok": True}
 
     # ── MCP Status ──────────────────────────────────────────────
@@ -2388,7 +2346,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         await ws.accept()
         loop = asyncio.get_running_loop()
         conn_id = _register_sender(loop, ws)
-        session = Session(loop=loop)
+        session = Session(loop=loop, ctx=get_backend().get("context"))
 
         async def pump_events():
             while True:
@@ -2547,6 +2505,10 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                             }))
                 elif mtype == "stop":
                     session.stop()
+                elif mtype == "run_subscribe":
+                    run_id = str(msg.get("run_id") or "")
+                    if run_id:
+                        session.replay_run(run_id, int(msg.get("after_sequence") or 0))
                 elif mtype == "permission_response":
                     session.answer_permission(msg.get("allowed", False), msg.get("id"))
                 elif mtype == "plan_response":
@@ -2702,8 +2664,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                         session.runtime.reset()
                         await ws.send_text(json.dumps({"type": "status", "text": "New chat"}))
         except WebSocketDisconnect:
-            session.stop()
+            session.detach()
         finally:
+            session.detach()
             with _active_sessions_lock:
                 _active_sessions.discard(session)
             pump.cancel()

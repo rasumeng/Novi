@@ -138,7 +138,7 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
           <input
             value={writeDesc}
             onChange={(e) => setWriteDesc(e.target.value)}
-            placeholder="Short description (optional)"
+            placeholder="Short description"
             className="w-full bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/40"
           />
           <textarea
@@ -157,7 +157,7 @@ export function SkillsSection({ skills, onRefresh, onCreateSkill, onClose }: Pro
             </button>
             <button
               onClick={handleWriteSubmit}
-              disabled={saving || !writeName.trim()}
+              disabled={saving || !writeName.trim() || !writeDesc.trim() || !writeContent.trim()}
               className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 disabled:opacity-50 transition-colors"
             >
               {saving ? 'Saving...' : 'Save skill'}

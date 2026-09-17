@@ -332,9 +332,10 @@ class Brain:
             "markdown": {"written": False, "reason": "legacy writer"},
         }
 
+    @_serialized
     def ingest_evidence(self, claims: list[dict]) -> dict:
         """Persist bounded, validated external claims via the canonical writer."""
-        from .reasoning.external import build_item
+        from .reasoning.external import build_item, conflicts
         if self._knowledge_layer is None:
             return {"ok": False, "error": "Knowledge layer unavailable", "item_ids": []}
         ids, mirrors = [], []
@@ -344,6 +345,16 @@ class Brain:
                                   claim.get('volatility', 'changing'),
                                   independent=claim.get('independent') is True)
                 store = self._knowledge_layer.store
+                for row in store.query(item.content, k=5, source_kind='external'):
+                    other = store.item_from_row(row)
+                    if other.id != item.id and conflicts(item.content, other.content):
+                        item.evidence['conflicted'] = True
+                        other.evidence['conflicted'] = True
+                        store.update_evidence(other.id, other.evidence, other.status)
+                        mirrors.append(self._sync_markdown(other.id))
+                        if self._relationship_store is not None:
+                            self._relationship_store.add(Relationship(
+                                source_id=item.id, target_id=other.id, kind=EdgeKind.CONFLICTS_WITH))
                 existing = store.get(item.id)
                 if existing is None:
                     store.add(item, source_kind='external')
@@ -353,7 +364,10 @@ class Brain:
                     store.update_evidence(item.id, item.evidence, item.status)
                 ids.append(item.id)
                 mirrors.append(self._sync_markdown(item.id))
-            return {"ok": True, "item_ids": ids, "markdown": mirrors}
+            failed = [m for m in mirrors if m.get('error') or
+                      (self._markdown_store is not None and not m.get('written'))]
+            return {"ok": not failed, "item_ids": ids, "markdown": mirrors,
+                    **({"error": "Knowledge stored but Markdown synchronization failed"} if failed else {})}
         except Exception as exc:
             log.warning('Evidence retention failed', exc_info=True)
             return {"ok": False, "error": str(exc), "item_ids": ids, "markdown": mirrors}

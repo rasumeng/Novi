@@ -1,19 +1,12 @@
 """Background run service — one coordinated execution off the request path.
 
-Milestone 5 Phase 5E-2D: replaces the old WebUI background path that submitted
-Jobs against fake ``schedule-<run_id>`` task ids and then called
-``runtime.run_stream(goal)`` directly. A background run is now an
-``ExecutionCoordinator`` run with a fresh runtime:
+Replaces the old WebUI background path that submitted Jobs against fake
+``schedule-<run_id>`` task ids and then called the generic runtime directly.
+A background run now uses the same durable RunService protocol as foreground:
 
     Background request
         ↓
-    Task
-        ↓
-    Plan
-        ↓
-    Job
-        ↓
-    Runtime
+    RunRequest → RunService → ordered RunEvents
 
 No Job may exist whose ``task_id`` does not resolve to a TaskStore Task — the
 coordinator creates the Job against the Task its orchestrator just planned, so
@@ -28,6 +21,8 @@ from __future__ import annotations
 
 import logging
 from typing import Callable, Optional
+
+from novi.runtime.run_contracts import RunEvent
 
 log = logging.getLogger("novi.services.background")
 
@@ -44,14 +39,14 @@ class BackgroundRunResult:
 
 
 def run_background(ctx, goal: str, *, conversation_id: str = "",
-                   on_event: Optional[Callable[[tuple], None]] = None,
+                   on_event: Optional[Callable[[RunEvent], None]] = None,
                    stop_check: Optional[Callable[[], bool]] = None,
                    attachments: Optional[list] = None,
                    metadata: Optional[dict] = None) -> BackgroundRunResult:
-    """Execute one goal through the coordinator using a fresh runtime.
+    """Execute one goal through the canonical headless RunService.
 
-    ``on_event`` receives every streamed item (duck-typed tuples) so the
-    caller can surface tool/log progress without owning any lifecycle logic.
+    ``on_event`` receives each persisted :class:`RunEvent` so callers surface
+    progress without owning lifecycle logic or interpreting positional tuples.
     ``stop_check`` mirrors the WebUI stop flag: when it flips mid-stream the
     coordinator stops generation and finalises the Job.
 
@@ -60,33 +55,30 @@ def run_background(ctx, goal: str, *, conversation_id: str = "",
     ``{"source": "background", "run_id": ...}``). The coordinator stays the
     only owner of Job creation — the caller only tags.
 
-    Returns a :class:`BackgroundRunResult` with the coordinator-populated
-    Task/Job ids so the caller can link queue-schedules to real Tasks.
+    Returns a :class:`BackgroundRunResult` with run-linked Task/Job ids when
+    the request preparation layer assigned them.
     """
-    from .execution import build_application_execution
+    from .run_composition import build_run_service
+    from .run_render import execute_text, render_public_text
 
-    runtime, coordinator, _ = build_application_execution(ctx)
-    parts = []
+    service = build_run_service(ctx, headless=True)
+    try:
+        run_id, state, events = execute_text(service, ctx, goal,
+            conversation_id or f"background:{id(service)}", attachments=attachments or ())
+        for item in events:
+            if on_event is not None:
+                try:
+                    on_event(item)
+                except Exception as e:
+                    log.warning("background on_event failed: %s", e)
+        if stop_check is not None and stop_check() and not state.finished:
+            state = service.cancel(run_id)
 
-    for item in coordinator.run_stream(
-        runtime,
-        user_input=goal,
-        conversation_id=conversation_id or "",
-        attachments=attachments,
-        stop_check=stop_check,
-        metadata=metadata,
-    ):
-        if on_event is not None:
-            try:
-                on_event(item)
-            except Exception as e:
-                log.warning("background on_event failed: %s", e)
-        if item and item[0] == "token":
-            parts.append(str(item[1]))
-
-    return BackgroundRunResult(
-        answer="".join(parts).strip(),
-        task_id=coordinator.task_id or "",
-        job_id=coordinator.job_id or "",
-        mode=coordinator.mode or "",
-    )
+        return BackgroundRunResult(
+            answer=render_public_text(state, events),
+            task_id=state.task_id or "",
+            job_id=state.job_id or "",
+            mode="run_service",
+        )
+    finally:
+        service.close()

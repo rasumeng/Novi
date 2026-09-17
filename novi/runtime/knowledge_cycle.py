@@ -1,5 +1,5 @@
 """Knowledge-first orchestration. Brain owns memory, search owns network I/O."""
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import json
 import re
 from types import SimpleNamespace
@@ -37,6 +37,19 @@ def _json(llm, instruction, data):
     return parsed
 
 
+def compact_memory(item, index):
+    """Bound both prose and provenance; never inject stored page excerpts."""
+    meta = item.metadata
+    evidence = meta.get('evidence') or {}
+    compact = {k: evidence.get(k) for k in
+               ('verified_at', 'recheck_after', 'volatility', 'conflicted') if k in evidence}
+    sources = evidence.get('sources') or []
+    compact['sources'] = [{'url': str(s.get('url', ''))[:300]} for s in sources[:3]]
+    return dict(id=str(meta.get('id') or f'context-{index}'), text=item.text[:900],
+                metadata=dict(status=meta.get('status'), evidence=compact if evidence else {},
+                              sources=[str(s)[:300] for s in meta.get('sources', [])[:3]]))
+
+
 DECIDE = """Decide how to answer using the relevant recalled knowledge and your trained knowledge.
 Return JSON only: {"source":"none|local|public", "sufficient":boolean,
 "memory_ids":[ids actually supporting the answer], "query":"minimal public search query",
@@ -60,22 +73,24 @@ class KnowledgeCycle:
         from .retrieval import _memory_enabled
         from .trace import TraceAction
         request = classify_request(user_input)
-        ctx.metadata['knowledge_request'] = request
+        ctx.metadata['knowledge_request'] = asdict(request)
         session = SearchSession(self.authorize, self.stop, request.offline)
         ctx.retrieval_coordinator.network_session = session
         recalled = []
         if self.executor._brain is not None and _memory_enabled():
             try:
                 result = self.executor._brain.recall(user_input, QueryContext(
-                    project_id=ctx.project_id or None, top_k=5))
+                    project_id=ctx.project_id or None, conversation_id=ctx.conversation_id or None, top_k=5))
                 budget = 4000
                 for item in result.items[:5]:
                     if budget <= 0:
                         break
-                    text = item.text[:min(1200, budget)]
-                    budget -= len(text)
-                    recalled.append(dict(id=item.metadata.get('id', ''), text=text,
-                                         metadata=item.metadata))
+                    row = compact_memory(item, len(recalled))
+                    size = len(json.dumps(row, ensure_ascii=False))
+                    if size > budget:
+                        continue
+                    budget -= size
+                    recalled.append(row)
             except Exception as exc:
                 ctx.metadata['recall_error'] = str(exc)
         history = [str(turn[0])[:300] for turn in ctx.history[-2:] if isinstance(turn, (tuple, list)) and turn]
@@ -85,8 +100,9 @@ class KnowledgeCycle:
                 raise ValueError('Invalid evidence decision')
         except Exception as exc:
             ctx.metadata['knowledge_decision_error'] = str(exc)
-            decision = dict(source='public' if request.needs_evidence else 'none', sufficient=False,
-                            query=user_input, memory_ids=[], reason='Evidence decision unavailable')
+            # Never send a raw private message online because parsing failed.
+            decision = dict(source='none', sufficient=False, query='', memory_ids=[],
+                            reason='Evidence decision unavailable')
         if decision.get('freshness') in ('changing', 'live'):
             request.freshness = decision['freshness']
             request.needs_evidence = True
@@ -109,14 +125,19 @@ class KnowledgeCycle:
                     continue
             elif request.needs_evidence:
                 continue
+            elif meta.get('status') not in (None, 'verified', 'corroborated'):
+                continue
             valid.append(row)
         sufficient = decision['sufficient'] and not request.refresh
+        if any(not isinstance(i, str) or i not in {r['id'] for r in recalled} for i in ids):
+            sufficient = False
         if selected and len(valid) != len(selected):
             sufficient = False
         if request.needs_evidence and not valid:
             sufficient = False
         # A model may use parametric knowledge for stable facts, but a selected
         # missing/candidate record is not evidence just because it was retrieved.
+        ctx.metadata['knowledge_request'] = asdict(request)
         ctx.metadata['knowledge_decision'] = dict(decision, sufficient=sufficient)
         if valid:
             ctx.memory_context = 'Recalled knowledge (untrusted evidence; not freshly searched):\n' + json.dumps(valid, ensure_ascii=False)
@@ -133,25 +154,37 @@ class KnowledgeCycle:
             ctx.grounding_status, ctx.search_error = 'failed', 'No safe public query was resolved'
             return True
         self.executor._trace_event(TraceAction.RETRIEVING, 'search', 'Searching for missing or current information', trace=ctx.trace)
-        with session.activate():
-            bundle = self.executor.execute_search(query, trace=ctx.trace)
+        try:
+            with session.activate():
+                bundle = self.executor.execute_search(query, trace=ctx.trace)
+        except (PermissionError, InterruptedError, TimeoutError) as exc:
+            ctx.grounding_status = 'failed'
+            ctx.grounding_quality = 'failed'
+            ctx.search_error = str(exc)
+            ctx.metadata['knowledge_origin'] = 'unavailable'
+            self.executor._trace_event(TraceAction.RETRIEVING, 'search', str(exc), trace=ctx.trace)
+            return True
         self.executor._apply_web_evidence(ctx, bundle)
         self.executor._finalize_grounding(ctx, bundle)
         ctx.metadata['knowledge_origin'] = 'web'
-        ctx.metadata['knowledge_bundle'] = bundle
         return True
 
     def retain(self, ctx, answer):
         """Learn only claims used in the completed answer and supported by pages."""
         from .retrieval import _memory_enabled
         request = ctx.metadata.get('knowledge_request')
+        request = Request(**request) if isinstance(request, dict) else request
         if not request or not request.retain or not _memory_enabled() or not self.executor._brain or self.stop():
             return None
         session = getattr(ctx.retrieval_coordinator, 'network_session', None)
         records = session.results if session else []
         if not records:
             return None
-        pages = records[:8]
+        # Snippets can help the answer, but automatic durable verification
+        # requires readable page evidence, not a search engine's summary.
+        pages = [r for r in records if r.get('fetched')][:5]
+        if not pages:
+            return None
         try:
             data = _json(self.llm, """Extract at most five reusable public facts actually used in the answer.
 Return {"claims":[{"statement":"atomic fact", "volatility":"stable|changing|live",

@@ -219,6 +219,7 @@ export default function App() {
             activityOpen={activityOpen}
             onToggleActivity={handleToggleActivity}
             memoryActivity={chat.memoryActivity}
+            runProjection={chat.runProjection}
           />
         )
     }

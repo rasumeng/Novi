@@ -33,7 +33,7 @@ describe('SkillsSection handleWriteSubmit (Task 6)', () => {
     fireEvent.change(screen.getByPlaceholderText('Skill name'), {
       target: { value: 'bad name!' },
     })
-    fireEvent.change(screen.getByPlaceholderText('Short description (optional)'), {
+    fireEvent.change(screen.getByPlaceholderText('Short description'), {
       target: { value: 'desc' },
     })
     fireEvent.change(screen.getByPlaceholderText('Skill instructions in Markdown...'), {

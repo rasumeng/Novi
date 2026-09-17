@@ -42,7 +42,11 @@ def read_page(url, max_length=8000, timeout=15, output_format='text'):
         connection = http.client.HTTPConnection(parsed.hostname, port, timeout=remaining)
         sock = socket.create_connection((address, port), timeout=remaining)
         if parsed.scheme == 'https':
-            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=parsed.hostname)
+            try:
+                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=parsed.hostname)
+            except BaseException:
+                sock.close()
+                raise
         connection.sock = sock
         try:
             target = parsed.path or '/'
@@ -88,7 +92,8 @@ def read_page(url, max_length=8000, timeout=15, output_format='text'):
             record = next((r for r in session.results if r['url'] == url), None)
             if record is not None:
                 record['text'] = text[:4000]
+                record['fetched'] = True
             else:
-                session.results.append(dict(url=url, text=text[:4000], title='', published_at=''))
+                session.results.append(dict(url=url, text=text[:4000], title='', published_at='', fetched=True))
         return text
     raise ValueError('Too many redirects')

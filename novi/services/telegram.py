@@ -1,4 +1,4 @@
-"""Telegram service wiring — message → conversation_id → ExecutionCoordinator.
+"""Telegram service wiring over the canonical RunService protocol.
 
 Milestone 5 Phase 5E-2B.
 
@@ -7,9 +7,9 @@ owns the execution hand-off:
 
     telegram:<chat_id>  (stable per chat)
         ↓
-    build_application_execution(ctx)  (fresh runtime + ExecutionCoordinator)
+    process-owned run contracts and a fresh headless RunService adapter
         ↓
-    run_stream  →  Task / Plan / Job / ExecutionHistory
+    typed RunEvent journal → plain Telegram response
 
 Each message gets a fresh runtime (chat isolation: no cross-chat history
 leakage). Task/Job lifecycle is owned by the coordinator; the async loop never
@@ -48,27 +48,17 @@ def build_telegram_handler(ctx) -> Callable:
 
 
 def _handle_sync(ctx, chat_id: str, text: str) -> str:
-    """Coordinator run for one Telegram message (worker thread)."""
-    from .execution import build_application_execution
+    """Headless run for one Telegram message (worker thread)."""
+    from .run_composition import build_run_service
+    from .run_render import execute_text, render_public_text
 
     conversation_id = f"telegram:{chat_id}"
-    runtime, coordinator, _ = build_application_execution(ctx)
-    parts = []
-    for item in coordinator.run_stream(runtime, text,
-                                       conversation_id=conversation_id):
-        if not item:
-            continue
-        kind = item[0]
-        if kind == "control":
-            payload = item[1]
-            ctype = payload.get("type")
-            if ctype == "error":
-                return payload.get("text", "Error")
-            if ctype == "continuation_candidates":
-                return _format_candidates(payload.get("candidates", []))
-        elif kind == "token":
-            parts.append(str(item[1]))
-    return "".join(parts).strip()
+    service = build_run_service(ctx, headless=True)
+    try:
+        _, state, events = execute_text(service, ctx, text, conversation_id)
+        return render_public_text(state, events)
+    finally:
+        service.close()
 
 
 def _format_candidates(candidates: list) -> str:

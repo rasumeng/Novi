@@ -17,6 +17,9 @@ export interface PermissionRequest {
   id?: string
   timeoutMs?: number
   expiresAt?: string
+  effects?: string[]
+  digest?: string
+  proposedDiff?: unknown
 }
 
 interface Props {
@@ -126,6 +129,12 @@ export function PermissionPrompt({ request, onAnswer, onCancel, variant = 'inlin
         This action can change your files or system. Review it before allowing.
       </p>
 
+      {!!request.effects?.length && (
+        <p className="text-[11px] text-base-400 mt-2">
+          Scope: <span className="text-base-200">{request.effects.join(', ')}</span>
+        </p>
+      )}
+
       {request.tool && (
         <div className="mt-3 rounded-lg bg-base-850 border border-base-800 px-2.5 py-1.5">
           <p className="text-[10px] font-mono text-accent mb-1">{request.tool}</p>
@@ -133,6 +142,17 @@ export function PermissionPrompt({ request, onAnswer, onCancel, variant = 'inlin
             {JSON.stringify(request.args, null, 2)}
           </pre>
         </div>
+      )}
+
+      {request.proposedDiff != null && (
+        <details className="mt-2 rounded-lg border border-base-800 bg-base-900/60 px-2.5 py-2">
+          <summary className="cursor-pointer text-[11px] text-base-300">Preview proposed changes</summary>
+          <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-[10px] text-base-400">
+            {typeof request.proposedDiff === 'string'
+              ? request.proposedDiff
+              : JSON.stringify(request.proposedDiff, null, 2)}
+          </pre>
+        </details>
       )}
 
       {remainingSec !== null && !expired && (

@@ -133,7 +133,7 @@ class WebSearchService:
             response = asyncio.run(self.search(query, max_results=max_results, time_range=time_range))
             if session:
                 session.results.extend(dict(url=r.url, title=r.title, text=r.snippet[:4000],
-                                            published_at=r.published_at or '') for r in response.results[:5])
+                                            fetched=False, published_at=r.published_at or '') for r in response.results[:5])
             return response
         try:
             asyncio.get_running_loop()
@@ -145,7 +145,8 @@ class WebSearchService:
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(run).result()
+            from contextvars import copy_context
+            return pool.submit(copy_context().run, run).result()
 
     # ── connection testing ───────────────────────────────────────────
 

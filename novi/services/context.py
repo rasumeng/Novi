@@ -63,6 +63,7 @@ class NoviContext:
         self._recovered: bool = False
         self._workspace_service: object | None = None
         self._memory_worker = None
+        self._run_service = None
 
     # ── config ──────────────────────────────────────────────────────────
 
@@ -108,6 +109,14 @@ class NoviContext:
             svc.refresh()
             self._model_service = svc
         return self._model_service
+
+    @property
+    def run_service(self):
+        """Process-owned foreground RunService; transports only subscribe."""
+        if self._run_service is None:
+            from .run_composition import build_run_service
+            self._run_service = build_run_service(self)
+        return self._run_service
 
     @property
     def embedding_service(self):

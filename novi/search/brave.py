@@ -74,7 +74,8 @@ class BraveSearchProvider:
 
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT) as resp:
+            from .session import request_timeout
+            with urllib.request.urlopen(request, timeout=request_timeout(_REQUEST_TIMEOUT)) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
             detail = ""

@@ -82,6 +82,8 @@ def _search_multi(query: str, config: SearchConfig) -> tuple[list[SearchResult],
             max_results=config.max_results,
             time_range=config.timelimit,
         )
+    except (PermissionError, InterruptedError, TimeoutError):
+        raise
     except SearchProviderError as e:
         log.warning("web search failed via %s: %s", e.provider, e.message)
         return [], e.message
@@ -122,6 +124,8 @@ def fetch_pages(results: list[SearchResult], max_fetch: int = 3, timeout: int = 
     for result in results[:max_fetch]:
         try:
             result.full_text = _fetch_with_fallback(result.url, timeout)
+        except (PermissionError, InterruptedError, TimeoutError):
+            raise
         except Exception as exc:
             log.warning("Page read failed for %s: %s", result.url, exc)
     return results

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { platform } from '@tauri-apps/plugin-os'
+import { isTauri } from '@tauri-apps/api/core'
 
 import {
   CloseIcon,
@@ -13,6 +14,10 @@ import {
 } from './WindowIcons'
 
 export function WindowControls() {
+  return isTauri() ? <NativeWindowControls /> : null
+}
+
+function NativeWindowControls() {
   const appWindow = getCurrentWindow()
 
   const [isMac, setIsMac] = useState(false)

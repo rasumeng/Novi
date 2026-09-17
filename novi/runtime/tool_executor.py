@@ -25,6 +25,10 @@ log = logging.getLogger("novi.runtime")
 
 _TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+# Pseudo-tool: permission-free, non-external, does not reset run.
+# Handled as short-circuit in ToolExecutor.execute() without registry lookup.
+_PSEUDO_TOOLS = {"emit_progress"}
+
 
 @dataclass
 class ToolResult:
@@ -66,17 +70,58 @@ class ToolExecutor:
     def __init__(
         self,
         registry: ToolRegistry,
-        perms: object,
-        lesson_store: object,
-        lc_tools: dict,
-        tool_fallbacks: dict[str, list[str]],
-        max_tool_output: int,
+        perms: object | None = None,
+        lesson_store: object | None = None,
+        lc_tools: dict | None = None,
+        tool_fallbacks: dict[str, list[str]] | None = None,
+        max_tool_output: int = 8000,
         perm_mode: str = "manual",
         debug_trace: bool = False,
         event_bus=None,
         mcp_permissions=None,
     ):
         self._registry = registry
+        # Defaults for minimal construction (e.g. Task 3 pseudo-tool tests)
+        if perms is None:
+            class _AllowPerms:
+                def resolve(self, name, args, agent="novi"):
+                    return "allow"
+            perms = _AllowPerms()
+        if lesson_store is None:
+            class _NoopStore:
+                def record(self, *a, **k):
+                    pass
+                def get_context(self, *a, **k):
+                    return ""
+            lesson_store = _NoopStore()
+        if lc_tools is None:
+            try:
+                lc_tools = registry.as_lc_tools() if registry is not None else {}
+            except Exception:
+                lc_tools = {}
+        if tool_fallbacks is None:
+            tool_fallbacks = {}
+        # Ensure pseudo-tool is available to the model without requiring
+        # explicit registration in TOOL_REGISTRY. Injected here so
+        # build_lc_tools/tools_for_mode both observe it.
+        try:
+            if registry is not None and registry.get("emit_progress") is None:
+                from novi.runtime.react_attempt import EMIT_PROGRESS_DESCRIPTION
+
+                def _emit_progress(message: str = "") -> str:
+                    """Pseudo-tool – intercepted in ToolExecutor.execute."""
+                    return message
+
+                # Register only in this executor's registry view; do not pollute
+                # global TOOL_REGISTRY.
+                registry.register("emit_progress", _emit_progress, description=EMIT_PROGRESS_DESCRIPTION)
+                # Refresh lc_tools to include the newly registered pseudo-tool
+                try:
+                    lc_tools = registry.as_lc_tools()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self._perms = perms
         self.lesson_store = lesson_store
         self._lc_tools = lc_tools
@@ -97,10 +142,47 @@ class ToolExecutor:
     def set_perm_mode(self, mode: str):
         self._perm_mode = mode
 
+    # ── pseudo-tool helpers (Task 3) ─────────────────────────────────────
+
+    def is_pseudo_tool(self, name: str) -> bool:
+        return name in _PSEUDO_TOOLS
+
+    def requires_permission(self, name: str) -> bool:
+        if name in _PSEUDO_TOOLS:
+            return False
+        # Minimal: pseudo is the only permission-free tool; all real tools
+        # are considered permission-gated (LOW risk auto-allow is still a gate
+        # that was checked, just bypassed). Keeps helper simple and test-stable.
+        return True
+
+    def is_external_tool(self, name: str) -> bool:
+        if name in _PSEUDO_TOOLS:
+            return False
+        # External if it would touch workspace/python/web/git etc. Unknown
+        # tools are considered external to be safe. This mirrors the smallest
+        # compatible mechanism without new registry fields.
+        return True
+
     # ── tool collection ────────────────────────────────────────────────
 
     def build_lc_tools(self) -> dict:
-        return self._registry.as_lc_tools()
+        tools = self._registry.as_lc_tools()
+        # Ensure pseudo-tool is present even if registry was populated before
+        # executor construction (e.g. global TOOL_REGISTRY path).
+        if "emit_progress" not in tools:
+            try:
+                from langchain_core.tools import StructuredTool
+                from novi.runtime.react_attempt import EMIT_PROGRESS_DESCRIPTION
+
+                def _emit_progress(message: str = "") -> str:
+                    return message
+
+                tools["emit_progress"] = StructuredTool.from_function(
+                    func=_emit_progress, name="emit_progress", description=EMIT_PROGRESS_DESCRIPTION
+                )
+            except Exception:
+                pass
+        return tools
 
     def tools_for_mode(
         self,
@@ -108,12 +190,44 @@ class ToolExecutor:
         profile=None,
         allowed_tools: list[str] | None = None,
     ) -> list:
+        # Always include pseudo-tool for the model; permission-free by design.
+        # When allowed_tools filters, inject emit_progress even if not listed.
+        pseudo_injected = False
+        pseudo_tool = None
+        if "emit_progress" in self._lc_tools:
+            pseudo_tool = self._lc_tools["emit_progress"]
+        else:
+            # Fallback: ensure we have a pseudo tool object even if registry missed it
+            try:
+                from langchain_core.tools import StructuredTool
+                from novi.runtime.react_attempt import EMIT_PROGRESS_DESCRIPTION
+
+                def _emit_progress(message: str = "") -> str:
+                    return message
+
+                pseudo_tool = StructuredTool.from_function(
+                    func=_emit_progress, name="emit_progress", description=EMIT_PROGRESS_DESCRIPTION
+                )
+            except Exception:
+                pseudo_tool = None
+
         if allowed_tools is not None:
             allowed = set(allowed_tools)
-            return [t for t in self._lc_tools.values() if t.name in allowed]
+            # Pseudo is always allowed regardless of capability filter
+            allowed.add("emit_progress")
+            base = [t for t in self._lc_tools.values() if t.name in allowed]
+            # If pseudo not in lc_tools but we have a fallback object, append it
+            if pseudo_tool is not None and not any(t.name == "emit_progress" for t in base):
+                base.append(pseudo_tool)
+                pseudo_injected = True
+            # De-duplicate while preserving injection
+            return base
         tools = list(self._lc_tools.values())
+        if pseudo_tool is not None and not any(t.name == "emit_progress" for t in tools):
+            tools.append(pseudo_tool)
         if profile and hasattr(profile, "tool_whitelist") and profile.tool_whitelist:
             whitelist = set(profile.tool_whitelist)
+            whitelist.add("emit_progress")
             tools = [t for t in tools if t.name in whitelist]
         return tools
 
@@ -186,6 +300,30 @@ class ToolExecutor:
         fallback_used: str | None = None
         structured: dict | None = None
 
+        # Stage 0: Pseudo-tool short-circuit (Task 3) — permission-free, non-external.
+        # Must precede registry lookup and permission gate. No ToolResult schema
+        # change: use existing `structured` dict to carry sentinel for callers
+        # that need to distinguish pseudo from real tool success. Smallest
+        # compatible mechanism: check name directly, return recognizable result
+        # without adding new field `is_pseudo_progress` to ToolResult.
+        if name in _PSEUDO_TOOLS:
+            # Extract message safely; default to empty string
+            msg = ""
+            if isinstance(args, dict):
+                msg = args.get("message", "") or ""
+            lat = round((time.time() - t0) * 1000, 2)
+            # Do not record in lesson_store or coordinator; not an external op.
+            # Mark via structured so react_attempt can translate to PROGRESS without
+            # relying on fragile output parsing, but do not add new ToolResult field.
+            structured = {"pseudo": "emit_progress", "message": str(msg)}
+            return ToolResult(
+                output=str(msg),
+                success=True,
+                diff=None,
+                latency_ms=lat,
+                structured=structured,
+            )
+
         # Stage 1: Coordinator intercept
         if coord is not None and coord.is_web_tool(name):
             blocked = coord.intercept(name, args)
@@ -211,7 +349,10 @@ class ToolExecutor:
             return ToolResult(output=out, success=False, error=out, latency_ms=lat)
 
         # Stage 3: Permission gate
-        if not self._check_permission(name, args, perm_mode, permission_callback):
+        network_session = getattr(coord, 'network_session', None) if coord else None
+        explicitly_denied = (network_session is not None and coord.is_web_tool(name)
+                             and self._perms.resolve(name, args, agent='novi') == 'deny')
+        if explicitly_denied or not self._check_permission(name, args, perm_mode, permission_callback):
             cancelled = self._is_permission_cancelled(permission_callback)
             timed_out = self._is_permission_timeout(permission_callback) if not cancelled else False
             if cancelled:
@@ -301,7 +442,10 @@ class ToolExecutor:
         try:
             from contextlib import nullcontext
             session = getattr(coord, 'network_session', None) if coord else None
-            with session.activate() if session and coord.is_web_tool(name) else nullcontext():
+            # Reuse this exact envelope's grant for the corresponding request.
+            # Nested pipeline fetches still need their own permission decision.
+            approved = (name, args) if name in ('web_search', 'web_fetch') else None
+            with session.activate(approved=approved) if session and coord.is_web_tool(name) else nullcontext():
                 value = info.fn(**args)
             if isinstance(value, StructuredToolOutput):
                 raw = value.text

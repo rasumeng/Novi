@@ -153,10 +153,26 @@ Show real execution events: recalling knowledge, searching, reading, retaining s
 - Disabled memory and “do not remember” prevent new durable knowledge ingestion under the existing retention policy; general public facts do not become personal identity attributes.
 - Exercise real model/tool behavior separately from mocked provider and routing tests.
 
-## Audit validation and limitations
+## Original audit validation and limitations (before implementation)
 
 Read the current routing, capabilities, retrieval/recovery, provider, fetching, prompt, and tool-result code. Existing unrelated working-tree changes were preserved. No application code or configuration was changed, no provider was contacted, and the example's original runtime trace was unavailable.
 
 Revision: inspected the knowledge architecture contract, Brain evolution notes, `Brain.learn`, KnowledgeLayer extraction/write behavior, typed knowledge records, layered recall, and corroboration/deduplication helpers. This revision adds the user-requested knowledge-first learning cycle and replaces the previous non-retention proposal. References to Tencent influence describe the repository's documented design lineage, not a fresh audit of an external implementation.
 
 Attempted targeted pytest suites: `test_router.py`, `test_retrieval_recovery.py`, `test_web_search.py`, `test_search_honest_state.py`, and `test_retrieval_coordinator.py`. They did not start: the repository virtual environment points to a missing Python 3.12 executable; the Windows Python launcher reports no installed Pythons. No tests are claimed to pass. Runtime behavior, active provider configuration, and model latency remain unverified.
+
+## Implementation verification — 2026-09-15
+
+Implemented the knowledge-first cycle against the updated Brain interfaces: bounded recall, model sufficiency assessment, public query resolution, online fallback, evidence ingestion, and persisted reuse. Source excerpts stay out of recall prompts. Unknown memory IDs cannot establish sufficiency. Retention requires fetched page passages and respects memory-disabled, cancellation, and do-not-remember intent. Candidate claims are distinct from reusable verified knowledge; verification requires the model's independence assessment plus two distinct source hosts. Obvious contradictory claims are flagged and excluded from reuse.
+
+Automatic lookup, research lookup, and web tools share request budgets and permissions. The deadline starts at the first authorized request; search approvals do not authorize nested page fetches, and denial stops further session requests. Reader URL validation, redirect checks, bounded downloads, and request timeouts remain centralized. Existing unrelated AgentRun changes were preserved.
+
+Validation with bundled Python and the existing application dependencies:
+
+- 132 focused tests passed across online learning, provider search, pipeline, honest states, retrieval recovery, and coordination. Includes real LanceDB/Markdown persistence, reopened-store recall with no second network call, conflict handling, compact memory payloads, and permission boundaries. Provider/model boundaries in the persistence test use fixtures.
+- Broader Brain/storage/runtime suites: 212 passed, four runtime workflow graph tests failed on duplicate tokens/event buffering expectations. These failures overlap the existing AgentRun edits; they remain unresolved and the whole repository is not claimed green.
+- The configured Gemma4:e2b resolved the pronoun follow-up to the correct public query and marked freshness as changing. One decision took 34.66 seconds; this is a single smoke test, not a latency benchmark.
+- Live SearXNG lookup failed with connection refused at localhost:8080. End-to-end live search and answer generation remain unverified until the provider is available.
+- `git diff --check` passed (line-ending conversion warnings only).
+
+Remaining plan items: strict final-answer citation validation, richer semantic conflict/supersession handling, configurable claim-specific freshness windows (currently stable/no expiry, changing/one day, live/no reuse), and a larger real-model quality/latency evaluation. Exact excerpt matching validates provenance, while semantic entailment and source independence still rely on the model. This implementation completes the core lookup/learn/reuse path, not every evaluation and refinement proposed above.

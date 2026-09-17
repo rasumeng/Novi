@@ -179,6 +179,14 @@ class RetrievalCoordinator:
         graph is metered by this coordinator (the single budget authority).
         Returns True when the search may run.
         """
+        if self.network_session is not None:
+            try:
+                self.network_session.check()
+            except (PermissionError, InterruptedError, TimeoutError):
+                return False
+            return self.network_session.searches < 2 and not any(
+                kind == 'search' and dict(args).get('query') == query
+                for kind, args in self.network_session.requests)
         if not self.budget.search_remaining:
             return False
         return self._find_duplicate(query) is None
@@ -190,6 +198,10 @@ class RetrievalCoordinator:
         name/args envelope. Always increments ``searches_used``; only caches
         non-empty results so duplicate detection has material to work with.
         """
+        if self.network_session is not None:
+            self.budget.searches_used = self.network_session.searches
+            self.budget.fetches_used = self.network_session.fetches
+            return
         self.budget.searches_used += 1
         normalized = self._normalize_query(query)
         self._seen_queries.append(normalized)

@@ -26,6 +26,7 @@ class MockNoviClient {
     return true
   }
   stop() { return true }
+  subscribeRun() { return true }
   answerPermission() { return true }
   answerPlan() { return true }
   reset() { return true }
@@ -158,24 +159,40 @@ describe('generation ownership', () => {
     expect(findConv(result.current.chat.conversations, 'B')?.messages).toEqual([])
   })
 
-  it('does not leave the UI stuck generating forever if stop() never gets a done event', async () => {
+  it('keeps the run active until an authoritative cancellation event arrives', async () => {
     const { result } = renderChatHook()
-    // Let the initial data fetch resolve on real timers before switching to fake ones.
     await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
 
-    vi.useFakeTimers()
-    try {
-      act(() => result.current.chat.setActiveId('A'))
-      act(() => result.current.chat.sendMessage('hello'))
-      expect(result.current.chat.generating).toBe(true)
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('hello'))
+    expect(result.current.chat.generating).toBe(true)
 
-      act(() => result.current.chat.stop())
-      act(() => vi.advanceTimersByTime(9000))
+    act(() => result.current.chat.stop())
+    expect(result.current.chat.generating).toBe(true)
 
-      expect(result.current.chat.generating).toBe(false)
-    } finally {
-      vi.useRealTimers()
-    }
+    act(() => MockNoviClient.latest().emit({ type: 'cancelled' }))
+    expect(result.current.chat.generating).toBe(false)
+  })
+
+  it('reconstructs progressive messages from canonical replay events', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+    act(() => result.current.chat.setActiveId('A'))
+    const client = MockNoviClient.latest()
+
+    act(() => {
+      client.emit({ type: 'run_state', runId: 'r1', conversationId: 'A', sequence: 1, status: 'running' })
+      client.emit({ type: 'message_start', runId: 'r1', conversationId: 'A', sequence: 2, messageId: 'm1' })
+      client.emit({ type: 'token', runId: 'r1', conversationId: 'A', sequence: 3, messageId: 'm1', text: 'First ' })
+      client.emit({ type: 'token', runId: 'r1', conversationId: 'A', sequence: 4, messageId: 'm1', text: 'message' })
+      client.emit({ type: 'message_end', runId: 'r1', conversationId: 'A', sequence: 5, messageId: 'm1' })
+      client.emit({ type: 'done', runId: 'r1', conversationId: 'A', sequence: 6 })
+    })
+
+    const assistant = findConv(result.current.chat.conversations, 'A')?.messages.find(message => message.id === 'm1')
+    expect(assistant?.content).toBe('First message')
+    expect(assistant?.streaming).toBe(false)
+    expect(result.current.chat.generating).toBe(false)
   })
 })
 
