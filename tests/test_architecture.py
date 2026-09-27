@@ -102,6 +102,8 @@ def _iter_frontend_files():
         return
     for path in src.rglob("*"):
         if path.is_file() and path.suffix in (".ts", ".tsx"):
+            if ".test." in path.name:
+                continue
             yield path
 
 
@@ -351,7 +353,7 @@ def test_runtime_does_not_touch_storage_internals():
         "vector_store", "relationship_store",
     ]
     allowed_prefixes = ("novi/brain/", "novi/workspace/")
-    allowed_files = {"novi/services/context.py"}
+    allowed_files = {"novi/services/context.py", "novi/services/run_store.py"}
     violations = []
     for pyfile in _iter_py_files(NOVI_SRC):
         rel = pyfile.relative_to(PROJECT_ROOT).as_posix()
@@ -1004,25 +1006,13 @@ def test_no_retired_store_project_context_method():
         )
 
 
-def test_composition_roots_default_langgraph_engine():
-    """Cutover pin: both production composition roots default
-    runtime.workflow_engine to "langgraph".
-
-    Prevents a silent regression to the legacy default; the explicit
-    "legacy" escape hatch (constructor arg or config override) stays legal.
-    """
+def test_composition_roots_use_run_service():
+    """Production composition roots use the canonical RunService."""
     roots = [
         NOVI_SRC / "webui_server.py",
         NOVI_SRC / "services" / "context.py",
     ]
     for path in roots:
         text = path.read_text("utf-8", errors="replace")
-        found = any(
-            'workflow_engine' in line and '"langgraph"' in line
-            and not _is_comment(line)
-            for line in text.splitlines()
-        )
-        assert found, (
-            f"{path.relative_to(PROJECT_ROOT)}: composition root no longer "
-            "defaults workflow_engine to langgraph"
-        )
+        assert "run_service" in text or "build_run_service" in text, (
+            f"{path.relative_to(PROJECT_ROOT)} does not compose RunService")

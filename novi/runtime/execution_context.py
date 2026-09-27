@@ -1,6 +1,6 @@
 """ExecutionContext — unified runtime state for one execution run.
 
-Replaces the many loosely-passed parameters in run_stream() with a single
+Replaces the many loosely-passed parameters in the retired runtime stream with a single
 structured object. Every execution decision reads from and writes to this
 context, making the full state visible and serializable at any point.
 
@@ -14,10 +14,10 @@ Usage:
     ctx = ExecutionContext.from_input("fix auth.py")
 
     # Pass to runtime
-    for kind, text in runtime.run_stream(context=ctx):
+    # Provider input is now assembled by AgentLoop/ContextBuilder.
         ...
 
-Backward compat: run_stream() still accepts old parameters. When old params
+Legacy callers are not supported; RunRequest carries the explicit input.
 are used, an ExecutionContext is built internally. New code should prefer
 the context= parameter.
 """
@@ -38,7 +38,6 @@ from ..orchestrator.task_types import (
 from .retrieval_policy import RetrievalPlan
 from .retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
 from .retrieval import RetrievalRecoveryState
-from .trace import ExecutionTrace
 from .evidence import RetrievalQuality
 
 if TYPE_CHECKING:
@@ -142,9 +141,6 @@ class ExecutionContext:
 
     # ── Planning ─────────────────────────────────────────────────────────
     plan_context: str = ""
-
-    # ── Observability ────────────────────────────────────────────────────
-    trace: Optional[ExecutionTrace] = None
 
     # ── Overrides (debug/convenience) ────────────────────────────────────
     force_model: str = ""

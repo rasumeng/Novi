@@ -42,9 +42,13 @@ def _app_client(monkeypatch=None):
 
 
 def test_daemon_down_empty_returns_error_field(monkeypatch):
-    monkeypatch.setattr("novi.configuration.discovery.query_ollama_tags", lambda url, timeout=5.0: [])
-    # Ensure no stale cache
-    _CACHE.clear()
+    def unavailable(self):
+        self.last_reachable = False
+        self.last_error = f"Ollama not reachable at {self.ollama_url}"
+        self.last_models_stale = False
+        return []
+
+    monkeypatch.setattr(ModelDiscovery, "installed", unavailable)
     client = _app_client()
     r = client.get("/api/models/discovery")
     assert r.status_code == 200

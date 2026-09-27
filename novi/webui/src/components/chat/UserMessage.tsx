@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { FileText } from 'lucide-react'
 import { ChatMessage } from '@/types'
+import { MessageContent } from './MessageContent'
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
@@ -20,9 +21,7 @@ export function UserMessage({ message }: { message: ChatMessage }) {
       <div
         className="rounded-2xl px-4 py-3 text-[15px] leading-relaxed max-w-[75%] overflow-hidden bg-accent/20 text-white selection:bg-white/40 selection:text-white break-words"
       >
-        <p className="whitespace-pre-wrap break-words leading-relaxed overflow-wrap-anywhere">
-          {message.content}
-        </p>
+        <MessageContent content={message.content} />
         {message.attachments?.map(att => (
           <div key={att.id} className="mt-2 first:mt-0">
             {att.type === 'image' ? (

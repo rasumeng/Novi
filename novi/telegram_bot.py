@@ -1,4 +1,4 @@
-"""Telegram surface adapter — routes messages through the ExecutionCoordinator.
+"""Telegram surface adapter — routes messages through the RunService.
 
 Milestone 5 Phase 5E-2B.
 

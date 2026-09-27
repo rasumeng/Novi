@@ -31,6 +31,7 @@ def _item(
     status=KnowledgeStatus.CANDIDATE,
     importance=0.0,
     last_seen=None,
+    sources=(),
 ):
     return KnowledgeItem(
         id=id,
@@ -41,6 +42,7 @@ def _item(
         tags=tuple(tags),
         last_seen_at=last_seen,
         importance=importance,
+        sources=tuple(sources),
     )
 
 
@@ -118,7 +120,7 @@ def _brain(layer, rels=None, bus=None):
 
 def test_acceptance_repeated_observations_verify_without_duplicates():
     # 4 near-identical claims corroborate → one winner verified, no siblings.
-    a = _item("a", "the user prefers python for builds")
+    a = _item("a", "the user prefers python for builds", sources=("c1", "c2", "c3", "c4"))
     b = _item("b", "user prefers python builds")
     c = _item("c", "prefers python builds")
     d = _item("d", "user really prefers python build tooling")
@@ -127,7 +129,7 @@ def test_acceptance_repeated_observations_verify_without_duplicates():
     assert report.promotions >= 1
     verified = [i for i in layer.items if i.status == KnowledgeStatus.VERIFIED]
     assert len(verified) >= 1
-    assert len([u for u in layer.status_updates]) >= 3
+    assert layer.status_updates == [("a", KnowledgeStatus.VERIFIED)]
 
 
 def test_acceptance_contradiction_preserves_both_histories():
@@ -135,14 +137,14 @@ def test_acceptance_contradiction_preserves_both_histories():
     new = _item("new", "I prefer python now", ("preference",))
     layer = StubKnowledgeLayer([old, new])
     rels = StubRelationshipStore()
-    report = _brain(layer, rels=rels).reflect()
-    assert report.superseded == 1
-    assert report.conflicts == 1
+    result = _brain(layer, rels=rels).correct_memory(
+        item_id="old", statement="I prefer python now", tags=("preference",))
+    assert result["ok"]
+    assert old.status == KnowledgeStatus.SUPERSEDED
     kinds = {e.kind for e in rels.edges}
     assert EdgeKind.SUPERSEDES in kinds
-    assert EdgeKind.CONFLICTS_WITH in kinds
     # both histories preserved: old demoted but still present
-    assert {i.id for i in layer.items} == {"old", "new"}
+    assert {i.id for i in layer.items} >= {"old", "new", result["recorded"]}
 
 
 def test_acceptance_old_unconfirmed_decays_out_of_projection():
@@ -260,7 +262,7 @@ def test_correct_memory_requires_item_id():
 def test_synthetic_user_profile_evolves_correctly():
     """A tiny profile: repeated observations verify; a contradiction supersedes
     with history; stable preference stays top-ranked."""
-    pre1 = _item("p1", "the user prefers python for tooling", ("preference",), last_seen=_dt(1))
+    pre1 = _item("p1", "the user prefers python for tooling", ("preference",), last_seen=_dt(1), sources=("c1", "c2", "c3", "c4"))
     pre2 = _item("p2", "user prefers python tooling", ("preference",), last_seen=_dt(2))
     pre3 = _item("p3", "prefers python tooling", ("preference",), last_seen=_dt(3))
     pre4 = _item("p4", "user prefers python build tooling", ("preference",), last_seen=_dt(4))

@@ -13,7 +13,7 @@ interface WireBase {
 }
 
 export type RunWireEvent = WireBase & {
-  type: 'run_state' | 'message_start' | 'token' | 'message_end' |
+  type: 'run_state' | 'message_start' | 'token' | 'reasoning' | 'message_end' | 'thinking' |
     'tool_call' | 'tool.started' | 'tool_result' | 'permission_request' |
     'permission_resolved' | 'status' | 'done' | 'error' | 'cancelled'
   status?: string
@@ -34,6 +34,7 @@ export type RunWireEvent = WireBase & {
 export interface ProjectedMessage {
   id: string
   content: string
+  thought: string
   status: MessageStatus
 }
 
@@ -44,6 +45,7 @@ export interface ProjectedTool {
   result: string
   status: ToolStatus
   diff?: unknown
+  afterMessageId?: string | null
 }
 
 export interface ProjectedPermission {
@@ -111,6 +113,14 @@ export function reduceRunEvent(state: RunProjection, event: RunWireEvent): RunPr
         ...next.messages[id], content: next.messages[id].content + String(event.text ?? ''),
       } } }
     }
+    case 'reasoning': {
+      const id = String(event.messageId ?? '')
+      next = startMessage(next, id)
+      if (!id) return next
+      return { ...next, messages: { ...next.messages, [id]: {
+        ...next.messages[id], thought: next.messages[id].thought + String(event.text ?? ''),
+      } } }
+    }
     case 'message_end':
       return settleMessage(next, String(event.messageId ?? ''), 'completed')
     case 'tool_call': {
@@ -121,6 +131,7 @@ export function reduceRunEvent(state: RunProjection, event: RunWireEvent): RunPr
         tools: { ...next.tools, [id]: {
           id, name: String(event.tool ?? ''),
           arguments: objectValue(event.args), result: '', status: 'requested',
+          afterMessageId: next.messageOrder.slice(-1)[0] ?? null,
         } } }
     }
     case 'tool.started': {
@@ -149,6 +160,7 @@ export function reduceRunEvent(state: RunProjection, event: RunWireEvent): RunPr
       if (!next.permission || next.permission.id !== event.id) return next
       return { ...next, status: 'running', permission: { ...next.permission,
         status: permissionStatus(event.decision) } }
+    case 'thinking':
     case 'status':
       return { ...next, statusText: String(event.text ?? '') }
     case 'done':
@@ -165,7 +177,7 @@ export function reduceRunEvent(state: RunProjection, event: RunWireEvent): RunPr
 function startMessage(state: RunProjection, id: string): RunProjection {
   if (!id || state.messages[id]) return state
   return { ...state, messageOrder: [...state.messageOrder, id],
-    messages: { ...state.messages, [id]: { id, content: '', status: 'streaming' } } }
+    messages: { ...state.messages, [id]: { id, content: '', thought: '', status: 'streaming' } } }
 }
 
 function settleMessage(state: RunProjection, id: string, status: MessageStatus): RunProjection {

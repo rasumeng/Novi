@@ -14,16 +14,61 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Any, List
 
 from langchain_core.messages import AIMessage
 
 from .tool_risk import ToolRisk, get_tool_risk
 from .tool_registry import ToolRegistry, tool_category
 
+# Legacy trace system removed - no-op replacements
+# used in tool_executor when trace is provided
+class TraceAction:
+    UNDERSTANDING = "understanding"
+    RETRIEVING = "retrieving"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    RESPONDING = "responding"
+
+class TraceEvent:
+    def __init__(self, action=None, category="", summary=""):
+        self.action = action
+        self.category = category
+        self.summary = summary
+        self.action_str = action.value if hasattr(action, 'value') else str(action)
+
+class DebugTraceEvent:
+    def __init__(self, category="", data=None):
+        self.category = category
+        self.data = data
+
+class StepTrace:
+    def __init__(self, step: int):
+        self.step = step
+        self.tool_calls: List[Any] = []
+        self.model_inference_ms: float = 0.0
+        self.tokens_generated: int = 0
+
+class ToolCallTrace:
+    def __init__(self, name: str, args: dict, result_preview: str, latency_ms: float,
+                 success: bool, error: str | None = None, fallback_used: str | None = None):
+        self.name = name
+        self.args = args
+        self.result_preview = result_preview
+        self.latency_ms = latency_ms
+        self.success = success
+        self.error = error
+        self.fallback_used = fallback_used
+
 log = logging.getLogger("novi.runtime")
 
 _TEXT_TOOLCALL_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+EMIT_PROGRESS_DESCRIPTION = (
+    "Use only when you have discovered meaningful information worth communicating "
+    "before continuing. Do not narrate routine actions or announce every tool call. "
+    "Do not call emit_progress when you are ready to provide the final answer."
+)
 
 # Pseudo-tool: permission-free, non-external, does not reset run.
 # Handled as short-circuit in ToolExecutor.execute() without registry lookup.
@@ -81,12 +126,8 @@ class ToolExecutor:
         mcp_permissions=None,
     ):
         self._registry = registry
-        # Defaults for minimal construction (e.g. Task 3 pseudo-tool tests)
         if perms is None:
-            class _AllowPerms:
-                def resolve(self, name, args, agent="novi"):
-                    return "allow"
-            perms = _AllowPerms()
+            raise ValueError("ToolExecutor requires a permission service (Phase 9: no default allow-all)")
         if lesson_store is None:
             class _NoopStore:
                 def record(self, *a, **k):
@@ -106,8 +147,6 @@ class ToolExecutor:
         # build_lc_tools/tools_for_mode both observe it.
         try:
             if registry is not None and registry.get("emit_progress") is None:
-                from novi.runtime.react_attempt import EMIT_PROGRESS_DESCRIPTION
-
                 def _emit_progress(message: str = "") -> str:
                     """Pseudo-tool – intercepted in ToolExecutor.execute."""
                     return message
@@ -172,8 +211,6 @@ class ToolExecutor:
         if "emit_progress" not in tools:
             try:
                 from langchain_core.tools import StructuredTool
-                from novi.runtime.react_attempt import EMIT_PROGRESS_DESCRIPTION
-
                 def _emit_progress(message: str = "") -> str:
                     return message
 
@@ -200,8 +237,6 @@ class ToolExecutor:
             # Fallback: ensure we have a pseudo tool object even if registry missed it
             try:
                 from langchain_core.tools import StructuredTool
-                from novi.runtime.react_attempt import EMIT_PROGRESS_DESCRIPTION
-
                 def _emit_progress(message: str = "") -> str:
                     return message
 
@@ -364,7 +399,6 @@ class ToolExecutor:
                 # distinct from explicit deny and timeout.
                 if trace is not None:
                     try:
-                        from .trace import DebugTraceEvent, TraceAction, TraceEvent
                         trace.user_events.append(TraceEvent(
                             action=TraceAction.EXECUTING,
                             category="permission_denied",
@@ -389,7 +423,6 @@ class ToolExecutor:
                 # Runtime emits honest trace: permission_denied with reason timeout, distinct from explicit deny.
                 if trace is not None:
                     try:
-                        from .trace import DebugTraceEvent, TraceAction, TraceEvent
                         trace.user_events.append(TraceEvent(
                             action=TraceAction.EXECUTING,
                             category="permission_denied",
@@ -413,7 +446,6 @@ class ToolExecutor:
                 )
                 if trace is not None:
                     try:
-                        from .trace import DebugTraceEvent, TraceAction, TraceEvent
                         trace.user_events.append(TraceEvent(
                             action=TraceAction.EXECUTING,
                             category="permission_denied",
@@ -481,33 +513,9 @@ class ToolExecutor:
             elif isinstance(structured.get("exit_code"), int):
                 success = structured["exit_code"] == 0
 
-        # Stage 7: Fallback chain
-        if not success and name in self._tool_fallbacks:
-            for fb_name in self._tool_fallbacks[name]:
-                fb_info = self._registry.get(fb_name)
-                if fb_info is None:
-                    continue
-                try:
-                    fb_raw = str(fb_info.fn(**args))
-                    fb_result = self._sanitize(fb_raw)
-                    fb_result = self._normalize_result(fb_name, fb_result)
-                    if not fb_result.startswith("Error:"):
-                        self.lesson_store.record(name, args, result)
-                        self.lesson_store.record(fb_name, args, fb_result)
-                        if coord is not None:
-                            coord.record(name, args, fb_result)
-                        fallback_used = fb_name
-                        result = fb_result
-                        success = True
-                        # Skip Stage 8 — already recorded above
-                        diff = self.compute_diff(name, args)
-                        lat = round((time.time() - t0) * 1000, 2)
-                        self.record_tool_call(step_idx or 0, name, args, result, lat,
-                                               True, fallback_used=fb_name, trace=trace)
-                        return ToolResult(output=result, success=True, diff=diff, latency_ms=lat)
-                except Exception:
-                    continue
-
+        # Stage 7: removed — fallback is now an explicit new visible call
+        # (Phase 9: every alternative tool invocation must pass the same PermissionService
+        # gate as a fresh ToolCall, never an implicit fallback inside the dispatcher.)
         # Stage 8: Record
         self.lesson_store.record(name, args, result)
         if coord is not None:
@@ -704,8 +712,7 @@ class ToolExecutor:
     ):
         if trace is None:
             return
-        from .trace import StepTrace, ToolCallTrace
-
+        # Use local shims (legacy trace system removed)
         while len(trace.steps) <= step_idx:
             trace.steps.append(StepTrace(step=len(trace.steps)))
         step = trace.steps[step_idx]

@@ -159,7 +159,9 @@ class ConversationStore:
     def list_conversations(self) -> tuple[ConversationRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM conversations ORDER BY updated_at DESC"
+                """SELECT c.* FROM conversations AS c
+                   ORDER BY (SELECT MAX(t.id) FROM turns AS t
+                             WHERE t.conversation_id = c.id) DESC"""
             ).fetchall()
         return tuple(self._row_to_record(r) for r in rows)
 

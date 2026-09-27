@@ -17,7 +17,10 @@ import pytest
 from novi.brain import Brain, Turn
 from novi.brain.reasoning.extraction import ExtractedClaim, ExtractionResult
 from novi.brain.storage.conversation_store import ConversationStore
-from novi.runtime.runtime import NoviRuntime
+from uuid import uuid4
+from novi.runtime.run_contracts import RunRequest, RunState, RunStatus
+from novi.runtime.transcript import ContentBlock, ContentBlockType, MessageRole, TranscriptMessage
+from novi.services.run_memory import ingest_run
 
 
 class RecordingBus:
@@ -98,81 +101,23 @@ class RecordingBrain:
         self.observed.append(turn)
 
 
-def make_runtime(brain=None):
-    return NoviRuntime(brain=brain)
+def ingest_turn(brain, user, assistant, conversation_id):
+    request = RunRequest(conversation_id=conversation_id,
+        user_message_id=f"user-{uuid4().hex}", user_text=user)
+    state = RunState(id=f"run-{uuid4().hex}", request=request, status=RunStatus.COMPLETED,
+        transcript=(TranscriptMessage(id="answer", role=MessageRole.ASSISTANT,
+            blocks=(ContentBlock(type=ContentBlockType.TEXT, text=assistant),)),))
+    assert ingest_run(state, brain)
 
 
-# ── Unit: runtime → Turn → Brain ────────────────────────────────────────────
-
-
-def test_remember_forwards_conversation_id_to_brain():
+def test_run_ingestion_forwards_conversation_id_to_brain():
     brain = RecordingBrain()
-    rt = make_runtime(brain)
-
-    rt._remember("user says hi", "novi replies", conversation_id="conv-webui-1")
-
+    ingest_turn(brain, "user says hi", "novi replies", "conv-webui-1")
     assert len(brain.observed) == 1
     turn = brain.observed[0]
     assert turn.user == "user says hi"
-    assert turn.assistant == "novi replies"
+    assert "novi replies" in turn.assistant
     assert turn.conversation_id == "conv-webui-1"
-
-
-def test_remember_without_conversation_id_leaves_none():
-    brain = RecordingBrain()
-    rt = make_runtime(brain)
-
-    rt._remember("user says hi", "novi replies")
-
-    assert len(brain.observed) == 1
-    assert brain.observed[0].conversation_id is None
-
-
-def test_remember_error_path_forwards_conversation_id():
-    brain = RecordingBrain()
-    rt = make_runtime(brain)
-
-    rt._remember("user says hi", "an error", conversation_id="conv-webui-err")
-
-    assert brain.observed[-1].conversation_id == "conv-webui-err"
-
-
-# ── Unit: run_stream threads conversation_id onto the context ───────────────
-
-
-def test_run_stream_stores_conversation_id_on_context():
-    from unittest.mock import MagicMock
-
-    from novi.runtime.execution_context import ExecutionContext
-
-    rt = NoviRuntime(model_service=MagicMock())
-    ctx = ExecutionContext(user_input="hi")
-    try:
-        for _ in rt.run_stream(context=ctx, conversation_id="conv-webui-2"):
-            pass
-    except Exception:
-        pass
-
-    assert ctx.conversation_id == "conv-webui-2"
-
-
-def test_run_stream_keeps_context_conversation_id_default():
-    from unittest.mock import MagicMock
-
-    from novi.runtime.execution_context import ExecutionContext
-
-    rt = NoviRuntime(model_service=MagicMock())
-    ctx = ExecutionContext(user_input="hi")
-    try:
-        for _ in rt.run_stream(context=ctx):
-            pass
-    except Exception:
-        pass
-
-    assert ctx.conversation_id == ""
-
-
-# ── Integration: one user conversation == one Brain conversation ────────────
 
 
 def test_multiple_turns_share_brain_conversation_scenario_and_batching(tmp_path):
@@ -191,10 +136,9 @@ def test_multiple_turns_share_brain_conversation_scenario_and_batching(tmp_path)
         scenario_layer=scenario,
         relationship_store=StubRelationshipStore(),
     )
-    rt = make_runtime(brain)
 
     for i in range(10):
-        rt._remember(f"user turn {i}", f"assistant turn {i}", conversation_id="conv-thread-1")
+        ingest_turn(brain, f"user turn {i}", f"assistant turn {i}", conversation_id="conv-thread-1")
 
     # All turns accumulated in the same Brain conversation.
     rec = store.get("conv-thread-1")
@@ -230,10 +174,9 @@ def test_single_conversation_id_creates_exactly_one_brain_conversation(tmp_path)
         knowledge_layer=StubKnowledgeLayer(),
         scenario_layer=StubScenarioLayer(),
     )
-    rt = make_runtime(brain)
 
     for i in range(4):
-        rt._remember(f"u{i}", f"a{i}", conversation_id="conv-single")
+        ingest_turn(brain, f"u{i}", f"a{i}", conversation_id="conv-single")
 
     assert len(store.list_conversations()) == 1
     assert store.get("conv-single").turn_count == 4

@@ -76,6 +76,7 @@ def _item(
     status=KnowledgeStatus.CANDIDATE,
     tags=("preference",),
     form=KnowledgeForm.ATOMIC,
+    sources=(),
 ):
     return KnowledgeItem(
         id=id,
@@ -84,6 +85,7 @@ def _item(
         confidence=0.9,
         status=status,
         tags=tags,
+        sources=tuple(sources),
     )
 
 
@@ -97,9 +99,9 @@ def _brain(layer, rels=None, bus=None):
     )
 
 
-def test_confirmation_promotes_to_verified():
+def test_distinct_conversation_sources_promote_to_verified():
     layer = StubKnowledgeLayer(
-        items=[_item("a", "remember that I prefer python")]
+        items=[_item("a", "I prefer python", sources=("c1", "c2", "c3", "c4"))]
     )
     report = _brain(layer).reflect()
     assert report.promotions == 1
@@ -116,48 +118,28 @@ def test_single_mention_stays_candidate():
     assert layer.status_updates == []
 
 
-def test_contradiction_supersedes_and_writes_both_edges():
+def test_overlapping_tags_do_not_supersede_existing_knowledge():
     old = _item("old", "prefers rust", status=KnowledgeStatus.VERIFIED)
     new = _item("new", "I prefer python now")
     layer = StubKnowledgeLayer(items=[old, new])
     rels = StubRelationshipStore()
     report = _brain(layer, rels=rels).reflect()
-
-    assert report.promotions == 1
-    assert report.superseded == 1
-    assert report.conflicts == 1
-    assert ("old", KnowledgeStatus.SUPERSEDED) in layer.status_updates
-
-    kinds = {e.kind for e in rels.edges}
-    assert EdgeKind.SUPERSEDES in kinds
-    assert EdgeKind.CONFLICTS_WITH in kinds
-    supersedes = [e for e in rels.edges if e.kind == EdgeKind.SUPERSEDES]
-    assert len(supersedes) == 1
-    assert supersedes[0].source_id == "new"
-    assert supersedes[0].target_id == "old"
-    conflicts = [e for e in rels.edges if e.kind == EdgeKind.CONFLICTS_WITH]
-    assert len(conflicts) == 1
-    assert conflicts[0].source_id == "new"
-    assert conflicts[0].target_id == "old"
-    assert old.status == KnowledgeStatus.VERIFIED  # history preserved, demoted separately
+    assert report.promotions == 0
+    assert report.superseded == 0
+    assert layer.status_updates == []
+    assert rels.edges == []
 
 
-def test_user_correction_demotes_old_records_correction():
-    old = _item("old", "uses grpc for services", status=KnowledgeStatus.VERIFIED)
-    correction = _item("new", "remember that I prefer rest api now")
-    layer = StubKnowledgeLayer(items=[old, correction])
-    rels = StubRelationshipStore()
-    report = _brain(layer, rels=rels).reflect()
-
-    assert correction.status != KnowledgeStatus.SUPERSEDED
-    assert report.superseded == 1
-    assert ("new", KnowledgeStatus.VERIFIED) in layer.status_updates
-    assert ("old", KnowledgeStatus.SUPERSEDED) in layer.status_updates
+def test_extracted_confirmation_cannot_verify_itself():
+    layer = StubKnowledgeLayer(items=[_item("new", "remember that I prefer rest api now")])
+    report = _brain(layer).reflect()
+    assert report.promotions == 0
+    assert layer.status_updates == []
 
 
 def test_knowledge_promoted_emitted_after_durable_write():
     layer = StubKnowledgeLayer(
-        items=[_item("a", "remember that I prefer python")]
+        items=[_item("a", "I prefer python", sources=("c1", "c2", "c3", "c4"))]
     )
     bus = RecordingBus()
     report = _brain(layer, bus=bus).reflect()
@@ -174,7 +156,7 @@ def test_knowledge_promoted_emitted_after_durable_write():
 
 def test_knowledge_promoted_not_emitted_when_write_fails():
     layer = StubKnowledgeLayer(
-        items=[_item("a", "remember that I prefer python")],
+        items=[_item("a", "I prefer python", sources=("c1", "c2", "c3", "c4"))],
         fail_status=True,
     )
     bus = RecordingBus()

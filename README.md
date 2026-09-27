@@ -87,35 +87,25 @@ Developed a complete AI application stack:
 # Architecture
 
 ```
-                         User Input
-                              |
-                              v
-                    Orchestrator Analysis
-                              |
-        +---------------------+----------------------+
-        |                     |                      |
-        v                     v                      v
- Intent Detection     Evidence Detection     Complexity Analysis
-        |                     |                      |
-        +---------------------+----------------------+
-                              |
-                              v
-                    Grounding & Retrieval Policy
-                              |
-                              v
-                       Execution Plan
-                              |
-                              v
-                       Novi Runtime
-                              |
-        +---------------------+----------------------+
-        |                     |                      |
-        v                     v                      v
- Retrieval System       Tool Execution        Agent Loop
-        |                     |                      |
-        v                     v                      v
- Evidence Bundle       Tool Results          Final Response
+  UI (WebUI / CLI / Telegram / background) --> RunService
+  RunService --> SQLite run + event journal (RunStore)
+  RunService --> AgentLoop (single owner)
+  AgentLoop --> ContextBuilder (actual provider transcript)
+  ContextBuilder --> Model (selected model adapter)
+  Model --> AgentLoop
+  AgentLoop --> ToolDispatcher + PermissionService
+  Gate --> Pending approval (owned by run) --> UI
+  UI --> Gate --> Tools (local / MCP / retrieval)
+  Tools --> AgentLoop
+  RunService --> One ordered RunEvent contract --> UI
+  Store --> Memory (finalized evidence via run_memory → Brain)
 ```
+
+Run states: `queued → running ↔ awaiting_permission` → `completed | blocked | failed | cancelled | interrupted` (one terminal, persisted reason).
+
+Canonical events: `run.started`, `run.state_changed`, `message.started`, `message.delta`, `message.completed`, `tool.requested`, `tool.started`, `tool.completed`, `permission.requested`, `permission.resolved`, `context.compacting`, `context.compacted`, `run.completed`, `run.blocked`, `run.failed`, `run.cancelled`, `run.interrupted`.
+
+The durable journal uses these event names. `run_transport.py` projects them to WebSocket messages such as `run_state`, `token`, and `done`, preserving run ID, conversation ID, and sequence for frontend replay. A final provider response without tool calls completes a run; no `finish_task` tool or request-kind classifier is required.
 
 ---
 
@@ -137,12 +127,12 @@ Features:
 
 Key components:
 
-* `NoviRuntime`
-* `RetrievalCoordinator`
-* `EvidenceCollector`
-* `ExecutionTrace`
-* `EventBus`
-* `PermissionResolver`
+* `RunService` — durable run lifecycle and event delivery
+* `AgentLoop` — provider turns and tool execution
+* `RunStore` — SQLite run and event journal
+* `LangChainTurnProvider` — provider stream normalization
+* `AuthorizedToolDispatcher` and `PermissionService` — tool authorization
+* `run_memory` — finalized run evidence ingestion
 
 ---
 

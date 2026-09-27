@@ -172,8 +172,6 @@ def test_failed_memory_ids_do_not_count_as_sufficient(monkeypatch):
     llm = SimpleNamespace(invoke=lambda *a: json.dumps(dict(source='public', sufficient=True,
                           memory_ids=['invented'], query='Atlas founded', freshness='stable')))
     ctx = ExecutionContext(user_input='When was Atlas founded?')
-    from novi.runtime.trace import ExecutionTrace
-    ctx.trace = ExecutionTrace(user_input=ctx.user_input)
     ctx.retrieval_coordinator = RetrievalCoordinator()
     KnowledgeCycle(ex, llm, lambda *a: True).prepare(ctx, ctx.user_input)
     assert not ctx.metadata['knowledge_decision']['sufficient']
@@ -203,7 +201,6 @@ def test_first_lookup_learns_then_restart_answers_locally(tmp_path, monkeypatch)
     from novi.runtime.knowledge_cycle import KnowledgeCycle
     from novi.runtime.retrieval import RetrievalExecutor
     from novi.runtime.execution_context import ExecutionContext
-    from novi.runtime.trace import ExecutionTrace
     from novi.search.service import WebSearchService
     from novi.search.models import SearchResponse, SearchResult
     from novi.search.session import current_session
@@ -246,7 +243,6 @@ def test_first_lookup_learns_then_restart_answers_locally(tmp_path, monkeypatch)
         monkeypatch.setattr(ex, '_is_search_configured', lambda: True)
         ex.knowledge_cycle = KnowledgeCycle(ex, Judge(), lambda *a: True)
         ctx = ExecutionContext(user_input='When was Atlas Observatory founded?')
-        ctx.trace = ExecutionTrace(user_input=ctx.user_input)
         return ex, ctx
 
     ex, first = components()

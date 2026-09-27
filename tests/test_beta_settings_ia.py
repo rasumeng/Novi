@@ -3,7 +3,7 @@
 Locks the beta IA settled by Tasks 1-9:
 - agent namespace persists in the registry (agent.*, agents.*) but no
   agent UI contract: no USER-visible setting under Category.AGENT.
-- user-facing settings categories == {general, models, memory, skills,
+- user-facing settings categories == {general, models, memory,
   connectors, permissions} (developer/advanced/hidden excluded).
 - embedding default stays canonical (nomic-embed-text:v1.5).
 - jobs stays out of the workspace NAV_ORDER.
@@ -28,9 +28,9 @@ def test_beta_settings_categories():
     }
     assert "agent" not in cats  # Agent hidden from user-facing nav
     # Registry-backed sections: General is a discovery-driven overview and
-    # Skills is /api/skills-driven, so neither owns registry settings.
-    # The full six-destination IA is locked by test_beta_sections_match_expected_ia
-    # (frontend SECTIONS) plus the SettingsModal six-destination test.
+    # Skills is temporarily hidden and owns no registry settings.
+    # The five destinations are covered by test_beta_sections_match_expected_ia
+    # (frontend SECTIONS) and the SettingsModal navigation tests.
     assert {"models", "memory", "connectors", "permissions"} <= cats
 
 
@@ -70,5 +70,5 @@ def test_beta_sections_match_expected_ia():
         encoding="utf-8"
     )
     ids = set(re.findall(r"id:\s*'([^']+)'", text))
-    assert ids == {"general", "models", "memory", "skills", "connectors", "permissions"}
+    assert ids == {"general", "models", "memory", "connectors", "permissions"}
     assert "agent" not in ids

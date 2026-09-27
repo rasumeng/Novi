@@ -7,12 +7,10 @@ from unittest.mock import MagicMock, patch
 from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
 from novi.runtime.execution_context import ExecutionContext
 from novi.runtime.retrieval import NOT_CONFIGURED_MSG, RetrievalExecutor
-from novi.runtime.trace import ExecutionTrace
 
 
-def _ctx_with_trace(**kwargs):
+def _ctx(**kwargs):
     ctx = ExecutionContext(user_input=kwargs.pop("user_input", "latest news"), **kwargs)
-    ctx.trace = ExecutionTrace(user_input=ctx.user_input)
     # Minimal analysis for grounding_search path: needs_grounding True
     from novi.orchestrator.task_types import GroundingDecision, EvidenceAnalysis, TaskAnalysis, IntentType, ComplexityScore, ExecutionStrategy
     if ctx.analysis is None and kwargs.get("needs_grounding", True):
@@ -68,22 +66,19 @@ class TestClassifyGroundingStatus:
 
 
 class TestFinalizeGrounding:
-    def test_finalize_sets_ctx_and_trace(self):
+    def test_finalize_sets_context(self):
         ex = RetrievalExecutor()
-        ctx = _ctx_with_trace(user_input="hello")
+        ctx = _ctx(user_input="hello")
         b = _bundle(error=NOT_CONFIGURED_MSG, quality=RetrievalQuality.FAILED)
         status = ex._finalize_grounding(ctx, b)
         assert status == "not_configured"
         assert ctx.grounding_status == "not_configured"
         assert ctx.grounding_error == NOT_CONFIGURED_MSG
         assert ctx.search_error == NOT_CONFIGURED_MSG
-        assert ctx.trace.grounding_status == "not_configured"
-        assert ctx.trace.grounding_error == NOT_CONFIGURED_MSG
-        assert ctx.trace.grounding_searched is True
 
     def test_finalize_failed(self):
         ex = RetrievalExecutor()
-        ctx = _ctx_with_trace()
+        ctx = _ctx()
         b = _bundle(error="Web search failed with an unexpected error.", quality=RetrievalQuality.FAILED)
         status = ex._finalize_grounding(ctx, b)
         assert status == "failed"
@@ -91,16 +86,15 @@ class TestFinalizeGrounding:
 
     def test_finalize_no_results(self):
         ex = RetrievalExecutor()
-        ctx = _ctx_with_trace()
+        ctx = _ctx()
         b = _bundle(quality=RetrievalQuality.EMPTY)
         status = ex._finalize_grounding(ctx, b)
         assert status == "no_results"
         assert ctx.grounding_status == "no_results"
-        assert ctx.trace.grounding_searched is True
 
     def test_finalize_grounded(self):
         ex = RetrievalExecutor()
-        ctx = _ctx_with_trace()
+        ctx = _ctx()
         b = _bundle(results=[types.SimpleNamespace()], source_count=1, quality=RetrievalQuality.SUFFICIENT)
         b.merged_text = "evidence text"
         b.results = [MagicMock()]
@@ -144,7 +138,7 @@ class TestExecuteSearchHonest:
 class TestRetrievalEmitsHonestStatus:
     def _run_grounding_search(self, ex, bundle):
         # helper to run _execute_grounding_search and collect yields
-        ctx = _ctx_with_trace(user_input="latest AI news")
+        ctx = _ctx(user_input="latest AI news")
         with patch.object(ex, "execute_search", return_value=bundle):
             # also patch _apply_web_evidence to set grounding_text from bundle
             def fake_apply(ctx_, b_):
@@ -190,49 +184,6 @@ class TestRetrievalEmitsHonestStatus:
         status_texts = [e[1] for e in events if e[0] == "status"]
         assert not any(NOT_CONFIGURED_MSG in t for t in status_texts)
         assert not any("Search failed" in t for t in status_texts)
-
-
-class TestRuntimeSystemPromptHonest:
-    def test_not_configured_prompt_contains_search_disabled(self):
-        from novi.runtime.runtime import NoviRuntime
-        rt = NoviRuntime()
-        prompt = rt._system_prompt("hello", grounding="", grounding_error=NOT_CONFIGURED_MSG, grounding_status="not_configured", search_error=NOT_CONFIGURED_MSG)
-        assert "[Search disabled]" in prompt
-        assert "Search not configured" in prompt
-        assert "Brave API key" in prompt or "SearXNG" in prompt
-        # must not contain fake grounding marker as primary source with empty grounding
-        # grounding section should be the disabled message, not "Search results"
-        assert "Search results (use as primary source" not in prompt
-
-    def test_no_fake_grounding_when_disabled(self):
-        from novi.runtime.runtime import NoviRuntime
-        rt = NoviRuntime()
-        prompt = rt._system_prompt("hello", grounding="", grounding_status="not_configured")
-        assert "[Search disabled]" in prompt
-        assert "Search results" not in prompt
-
-    def test_failed_prompt_surfaced(self):
-        from novi.runtime.runtime import NoviRuntime
-        rt = NoviRuntime()
-        prompt = rt._system_prompt("hello", grounding="", grounding_error="Web search failed: 500", grounding_status="failed", search_error="Web search failed: 500")
-        assert "Search failed" in prompt
-        assert "500" in prompt
-        assert "Do NOT pretend" in prompt
-
-    def test_no_results_prompt(self):
-        from novi.runtime.runtime import NoviRuntime
-        rt = NoviRuntime()
-        prompt = rt._system_prompt("hello", grounding="", grounding_status="no_results")
-        assert "no results" in prompt.lower()
-        assert "[Search disabled]" not in prompt
-
-    def test_grounded_prompt_contains_results(self):
-        from novi.runtime.runtime import NoviRuntime
-        rt = NoviRuntime()
-        prompt = rt._system_prompt("hello", grounding="evidence text here", grounding_status="grounded")
-        assert "Search results" in prompt
-        assert "evidence text here" in prompt
-        assert "[Search disabled]" not in prompt
 
 
 class TestWebSearchServiceHonest:

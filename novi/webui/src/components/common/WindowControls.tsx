@@ -111,12 +111,12 @@ function NativeWindowControls() {
   }
 
   return (
-    <div className="flex h-full shrink-0">
+    <div className="flex h-full shrink-0 ">
       {/* Minimize */}
       <button
         type="button"
         onClick={() => appWindow.minimize()}
-        className="flex h-full w-12 items-center justify-center text-base-400 transition-colors hover:bg-base-800 hover:text-base-100"
+        className="flex h-full w-10 items-center justify-center text-base-400 transition-colors hover:bg-base-800 hover:text-base-100"
         aria-label="Minimize"
         title="Minimize"
       >
@@ -127,7 +127,7 @@ function NativeWindowControls() {
       <button
         type="button"
         onClick={() => void toggleMaximize()}
-        className="flex h-full w-12 items-center justify-center text-base-400 transition-colors hover:bg-base-800 hover:text-base-100"
+        className="flex h-full w-10 items-center justify-center text-base-400 transition-colors hover:bg-base-800 hover:text-base-100"
         aria-label={isMaximized ? 'Restore' : 'Maximize'}
         title={isMaximized ? 'Restore' : 'Maximize'}
       >
@@ -138,7 +138,7 @@ function NativeWindowControls() {
       <button
         type="button"
         onClick={() => appWindow.close()}
-        className="flex h-full w-12 items-center justify-center text-base-400 transition-colors hover:bg-red-600 hover:text-white"
+        className="flex h-full w-10 items-center justify-center text-base-400 transition-colors hover:bg-red-600 hover:text-white"
         aria-label="Close"
         title="Close"
       >

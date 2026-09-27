@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { Paperclip, ArrowUp, Square, Mic, Plus, Folder, X, Search, AlertTriangle } from 'lucide-react'
-import { Attachment } from '@/types'
+import { Attachment, SourceFolder } from '@/types'
 import type { SectionId } from '@/components/settings/SettingsModal'
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8765' : ''
@@ -57,6 +57,14 @@ interface Props {
   onToggleDeepResearch?: () => void
   /** Grant Novi read-only access to a local folder for this chat session. */
   onAttachFolder?: (path: string) => boolean
+  /** New API: attach source folder to conversation */
+  onAttachSource?: (convId: string, path: string) => Promise<SourceFolder>
+  /** Currently attached source folders for this conversation */
+  attachedSources?: SourceFolder[]
+  /** Callback to detach a source folder */
+  onDetachSource?: (path: string) => Promise<void>
+  /** Current conversation ID for source attachment */
+  conversationId?: string
 }
 
 export interface PromptInputHandle {
@@ -76,6 +84,10 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   deepResearch,
   onToggleDeepResearch,
   onAttachFolder,
+  onAttachSource,
+  attachedSources = [],
+  onDetachSource,
+  conversationId,
 }, ref) {
   const [value, setValue] = useState('')
   const [dragActive, setDragActive] = useState(false)
@@ -92,7 +104,6 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   const valueRef = useRef('')
   const prefixRef = useRef('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
-  const [attachedFolder, setAttachedFolder] = useState<string | null>(null)
   const [folderError, setFolderError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [primaryCaps, setPrimaryCaps] = useState<{ vision: boolean; tools: boolean; reasoning: boolean; thinking: boolean; audio: boolean; coding: boolean } | null>(null)
@@ -381,11 +392,12 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
   const blockingIncompat = incompatibilities.some((c) => c.key === 'vision' || c.key === 'audio' || c.key === 'thinking')
 
   const handleAttachFolder = useCallback(async () => {
+    if (!conversationId) {
+      setFolderError('Start a conversation first before attaching folders')
+      return
+    }
     setFolderError(null)
     try {
-      // Browsers represent a selected directory as every file inside it. Use
-      // the native picker instead so we grant the folder path, never upload
-      // or attach its contents to the chat.
       const response = await fetch(`${API_BASE}/api/directory-picker`, { method: 'POST' })
       const data = await response.json()
       if (!response.ok || !data.path) {
@@ -393,15 +405,34 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         setFolderError(data.error || 'Could not select that folder')
         return
       }
-      if (!onAttachFolder?.(data.path)) {
-        setFolderError('Novi is not connected. Try again once it reconnects.')
-        return
+      // Use the new conversation source API
+      if (onAttachSource && conversationId) {
+        try {
+          await onAttachSource(conversationId, data.path)
+        } catch (error) {
+          setFolderError(error instanceof Error ? error.message : 'Failed to attach folder')
+        }
+      } else if (onAttachFolder) {
+        // Legacy path
+        if (!onAttachFolder(data.path)) {
+          setFolderError('Novi is not connected. Try again once it reconnects.')
+          return
+        }
       }
-      setAttachedFolder(data.path)
     } catch (error) {
       setFolderError(error instanceof Error ? error.message : 'Could not select that folder')
     }
-  }, [onAttachFolder])
+  }, [onAttachFolder, onAttachSource, conversationId])
+
+  const handleDetachFolder = useCallback(async (path: string) => {
+    if (!onDetachSource) return
+    setFolderError(null)
+    try {
+      await onDetachSource(path)
+    } catch (error) {
+      setFolderError(error instanceof Error ? error.message : 'Could not remove that folder')
+    }
+  }, [onDetachSource])
 
   const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -447,6 +478,36 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           </span>
         </div>
       )}
+      {/* Source folders bar - horizontal chips at top when folders are attached */}
+      {attachedSources.length > 0 && (
+        <div className="border-b border-base-800/50 bg-base-900/50 rounded-t-2xl px-3 py-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {attachedSources.map((src) => {
+              const folderName = src.root.split(/[/\\]/).filter(Boolean).pop() || src.root
+              const displayName = `./${folderName}`
+              return (
+                <span
+                  key={src.hash || src.root}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono text-base-300 bg-base-800 border border-base-700/50 rounded-full group relative"
+                  title={src.root}
+                >
+                  <Folder size={10} className="text-accent shrink-0" />
+                  <span className="truncate max-w-[140px]">{displayName}</span>
+                  {onDetachSource && (
+                    <button
+                      onClick={() => { void handleDetachFolder(src.root) }}
+                      className="absolute -right-5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded-full text-base-500 hover:text-err hover:bg-base-700"
+                      aria-label={`Remove folder ${displayName}`}
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={value}
@@ -483,12 +544,6 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
               </button>
             </span>
           ))}
-        </div>
-      )}
-      {attachedFolder && (
-        <div className="flex items-center gap-1.5 px-4 pb-2 text-xs text-base-300">
-          <Folder size={13} className="text-accent shrink-0" />
-          <span className="truncate" title={attachedFolder}>Folder available to Novi: {attachedFolder}</span>
         </div>
       )}
       {folderError && (
@@ -545,12 +600,14 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
                 >
                   <Paperclip size={13} /> Attach files or photos
                 </button>
-                <button
-                  onClick={() => { setMenuOpen(false); void handleAttachFolder() }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-base-200 hover:bg-base-800 transition-colors"
-                >
-                  <Folder size={13} /> Attach folder
-                </button>
+                {conversationId && (
+                  <button
+                    onClick={() => { setMenuOpen(false); void handleAttachFolder() }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-base-200 hover:bg-base-800 transition-colors"
+                  >
+                    <Folder size={13} /> Attach folder
+                  </button>
+                )}
               </div>
             )}
           </div>

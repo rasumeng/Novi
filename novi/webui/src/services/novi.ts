@@ -108,8 +108,9 @@ export class NoviClient {
           sequence?: number
         }
         if (event.runId && typeof event.sequence === 'number') {
+          if (this.activeRunId !== event.runId) this.lastRunSequence = 0
           this.activeRunId = event.runId
-          this.lastRunSequence = Math.max(this.lastRunSequence, event.sequence)
+          if (event.sequence === this.lastRunSequence + 1) this.lastRunSequence = event.sequence
         }
         this.onEvent(event)
       } catch {
@@ -232,7 +233,7 @@ export async function fetchConversations(): Promise<Conversation[]> {
 }
 
 export async function saveConversation(conv: Conversation): Promise<void> {
-  await fetch(`${API_BASE}/api/conversations`, {
+  const response = await fetch(`${API_BASE}/api/conversations`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -243,6 +244,7 @@ export async function saveConversation(conv: Conversation): Promise<void> {
       messages: conv.messages.map((m) => ({ role: m.role, content: m.content, model: m.model, attachments: m.attachments })),
     }),
   })
+  if (!response.ok) throw new Error("Couldn't save this conversation")
 }
 
 export async function deleteConversationApi(id: string): Promise<void> {

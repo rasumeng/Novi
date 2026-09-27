@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Search, Settings, Server, SlidersHorizontal, Loader2 } from 'lucide-react'
-import { fetchTools, fetchSkills } from '@/services/novi'
+import { fetchTools } from '@/services/novi'
 import type { SchemaResponse } from './api'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
@@ -11,11 +11,9 @@ import { GeneralSettings } from './GeneralSettings'
 import { ModelsSettings } from './ModelsSettings'
 import { SettingField } from './SettingField'
 import { MemorySettings } from './MemorySettings'
-import { SkillsSection } from './SkillsSection'
 import { ConnectorsSection } from './ConnectorsSection'
 import { PermissionsSettings } from './PermissionsSettings'
 import type { SectionId, ToolInfo } from './types'
-import type { Skill } from '@/types'
 
 export type { SectionId }
 
@@ -23,7 +21,6 @@ interface Props {
   open: boolean
   onClose: () => void
   initialSection?: SectionId
-  onCreateSkill?: () => void
   onSectionChange?: (section: SectionId) => void
 }
 
@@ -60,12 +57,11 @@ function isDevUnlocked(): boolean {
   }
 }
 
-export function SettingsModal({ open, onClose, initialSection, onCreateSkill, onSectionChange }: Props) {
+export function SettingsModal({ open, onClose, initialSection, onSectionChange }: Props) {
   const [section, setSection] = useState<SectionId>('general')
   const framework = useFrameworkSettings()
   const [search, setSearch] = useState('')
   const [tools, setTools] = useState<ToolInfo[]>([])
-  const [skills, setSkills] = useState<Skill[]>([])
   const modalRef = useRef<HTMLDivElement>(null)
 
   useFocusTrap(modalRef, open)
@@ -92,13 +88,9 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill, on
 
   const reloadData = () => {
     if (!open) return
-    if (initialSection) setSection(initialSection)
+    // Old browser history can still point at the temporarily hidden Skills page.
+    if (initialSection) setSection(initialSection === 'skills' ? 'general' : initialSection)
     void fetchTools().then(setTools).catch(() => {})
-    void fetchSkills().then(setSkills).catch(() => {})
-  }
-
-  const refreshSkills = () => {
-    void fetchSkills().then(setSkills).catch(() => {})
   }
 
   useEffect(() => { reloadData() }, [open, initialSection]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -215,15 +207,6 @@ export function SettingsModal({ open, onClose, initialSection, onCreateSkill, on
 
                 {!framework.loading && section === 'memory' && (
                   <MemorySettings framework={framework} />
-                )}
-
-                {!framework.loading && section === 'skills' && (
-                  <SkillsSection
-                    skills={skills}
-                    onRefresh={refreshSkills}
-                    onCreateSkill={onCreateSkill}
-                    onClose={close}
-                  />
                 )}
 
                 {!framework.loading && section === 'connectors' && (

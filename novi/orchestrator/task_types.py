@@ -8,7 +8,7 @@ Job is an execution instance of a Task.
 Architecture:
   Conversation → Message → Task → ExecutionHistory → [Job₁, Job₂, ...]
                                                           │
-                                                   Runtime.run_stream()
+                                                   RunService.start()
 
 Ownership contract (guard: tests/test_task_job_runtime_boundaries.py):
 

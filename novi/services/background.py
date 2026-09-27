@@ -47,13 +47,10 @@ def run_background(ctx, goal: str, *, conversation_id: str = "",
 
     ``on_event`` receives each persisted :class:`RunEvent` so callers surface
     progress without owning lifecycle logic or interpreting positional tuples.
-    ``stop_check`` mirrors the WebUI stop flag: when it flips mid-stream the
-    coordinator stops generation and finalises the Job.
+    ``stop_check`` cancels the durable run when the caller requests a stop.
 
-    ``metadata`` is merged into the fresh Job's metadata so background /
-    schedule / queue runs can be traced to their source (e.g.
-    ``{"source": "background", "run_id": ...}``). The coordinator stays the
-    only owner of Job creation — the caller only tags.
+    ``metadata`` is accepted for callers migrating from the Job API. This
+    service does not create Jobs or interpret Job metadata.
 
     Returns a :class:`BackgroundRunResult` with run-linked Task/Job ids when
     the request preparation layer assigned them.
@@ -63,16 +60,15 @@ def run_background(ctx, goal: str, *, conversation_id: str = "",
 
     service = build_run_service(ctx, headless=True)
     try:
-        run_id, state, events = execute_text(service, ctx, goal,
-            conversation_id or f"background:{id(service)}", attachments=attachments or ())
-        for item in events:
+        def deliver(item):
             if on_event is not None:
                 try:
                     on_event(item)
                 except Exception as e:
                     log.warning("background on_event failed: %s", e)
-        if stop_check is not None and stop_check() and not state.finished:
-            state = service.cancel(run_id)
+        run_id, state, events = execute_text(service, ctx, goal,
+            conversation_id or f"background:{id(service)}", attachments=attachments or (),
+            on_event=deliver, stop_check=stop_check)
 
         return BackgroundRunResult(
             answer=render_public_text(state, events),

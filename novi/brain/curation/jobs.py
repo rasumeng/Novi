@@ -111,12 +111,40 @@ class MemoryJobs:
                                               'text': str(body), 'timestamp': turn['ts']})
                     # Persist every segment before evaluating any of them. Only
                     # the final segment can advance beyond the source batch.
+                    # Coherence: stable coordinates (original_start/length)
+                    # plus 200-char surrounding context preserve
+                    # qualification/correction that a pure byte-window would
+                    # orphan. The primary `text` remains non-overlapping so
+                    # a naive join still reconstructs the durable source;
+                    # validation must use original_start + stable id, never
+                    # the window alone, to define semantic scope.
                     segments = []
+                    _WINDOW = 1200
+                    _CONTEXT = 200
                     for span in spans:
-                        for offset in range(0, len(span['text']), 1200):
-                            segments.append(dict(span, id=f'{span["id"]}:{offset}',
-                                                 original_start=offset,
-                                                 text=span['text'][offset:offset+1200]))
+                        text = span['text']
+                        if len(text) <= _WINDOW:
+                            segments.append(dict(span, id=f'{span["id"]}:0',
+                                                 original_start=0,
+                                                 original_length=len(text),
+                                                 text=text,
+                                                 context_before="",
+                                                 context_after=""))
+                        else:
+                            for offset in range(0, len(text), _WINDOW):
+                                window = text[offset:offset + _WINDOW]
+                                if not window.strip():
+                                    continue
+                                before = text[max(0, offset - _CONTEXT):offset] if offset > 0 else ""
+                                after = text[offset + _WINDOW:offset + _WINDOW + _CONTEXT] if offset + _WINDOW < len(text) else ""
+                                segments.append(dict(span, id=f'{span["id"]}:{offset}',
+                                                     original_start=offset,
+                                                     original_length=len(text),
+                                                     text=window,
+                                                     context_before=before,
+                                                     context_after=after))
+                                if offset + _WINDOW >= len(text):
+                                    break
                     chunks = [segments[i:i+4] for i in range(0, len(segments), 4)] or [[]]
                     for index, chunk in enumerate(chunks):
                         part_id = job_id if index == 0 else f'{job_id}-{index}'

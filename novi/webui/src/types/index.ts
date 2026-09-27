@@ -24,6 +24,14 @@ export interface ChatMessage {
   thoughtElapsedMs?: number
 }
 
+export interface SourceFolder {
+  root: string
+  capability: string
+  indexedAt?: string
+  stats?: { total: number }
+  hash?: string
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -32,6 +40,7 @@ export interface Conversation {
   messages: ChatMessage[]
   projectId?: string | null
   workspace?: { root: string; capability: string; indexedAt?: string; stats?: { total: number } } | null
+  sources?: SourceFolder[] | null
 }
 
 // Milestone 4 — assistant timeline + knowledge overview (user-facing shapes).
@@ -70,6 +79,7 @@ export interface Project {
   conversationIds: string[]
   sharedContext: string
   workspace?: { root: string; capability: string; indexedAt?: string; stats?: { total: number } } | null
+  sources?: SourceFolder[] | null
   pinned?: boolean
   createdAt: string
   updatedAt: string

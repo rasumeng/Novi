@@ -226,33 +226,3 @@ def test_recover_once_runs_single_sweep(tmp_path, monkeypatch):
     assert second == []
     assert store.load("job-parity").status is JobStatus.INTERRUPTED
     assert len(seen) == 1                       # events emitted exactly once
-
-
-def test_recover_once_reached_from_build_application_execution(tmp_path,
-                                                               monkeypatch):
-    import novi.jobs.persistence as persistence
-    monkeypatch.setattr(persistence, "JOBS_DIR", tmp_path / "jobs")
-
-    from novi.jobs.job import Job
-    from novi.jobs.persistence import JobStore
-    from novi.services.context import NoviContext
-    from novi.services.execution import build_application_execution
-
-    store = JobStore()
-    store.save(Job(id="job-surface", task_id="task-surface",
-                   status=JobStatus.RUNNING))
-
-    ctx = NoviContext(cfg={"ollama": {"url": "http://x"}})
-    calls = []
-
-    def spy(bus=None):
-        calls.append(1)
-        return ctx.recover_jobs(bus=bus)
-    ctx.recover_once = spy
-    # monkeypatch context's job store so the sweep hits the temp dir
-    ctx._job_store = store
-
-    runtime, coordinator, _ = build_application_execution(ctx)
-    assert runtime is not None and coordinator is not None
-    assert len(calls) == 1
-    assert store.load("job-surface").status is JobStatus.INTERRUPTED

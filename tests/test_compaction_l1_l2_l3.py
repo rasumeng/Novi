@@ -144,11 +144,9 @@ def test_l3_checkpoint_stable_persists_to_job_checkpoint():
     assert d["stable"]["goal"] == "Find routing"
 
 
-def test_runtime_injects_stable_state_text_when_truncated():
-    # Behavioral: create compacted context with stable_state_text and assert runtime injects it
+def test_context_manager_preserves_stable_state_when_truncated():
     from novi.runtime.context_manager import ContextManager
     from novi.runtime.execution_context import ExecutionContext
-    from novi.runtime.runtime import NoviRuntime
 
     cm = ContextManager(model_name="test-8k")
     ctx = ExecutionContext(user_input="Find routing", project_id="proj-A", conversation_id="conv-1")
@@ -160,24 +158,7 @@ def test_runtime_injects_stable_state_text_when_truncated():
     assert stable_text
     assert "proj-A" in stable_text
 
-    # Runtime should inject stable_state_text into system prompt via _system_prompt
-    runtime = NoviRuntime(
-        model_service=None,
-        memory=None,
-        registry=None,
-        project_index=None,
-        cfg={"runtime": {}},
-        simple_llm=None,
-    )
-    prompt = runtime._system_prompt(
-        "Find routing",
-        stable_state_text=stable_text,
-    )
-    assert "proj-A" in prompt
-    assert "Stable execution state" in prompt
-
-    # Also verify the run_stream injection path: ctx.metadata stable_state dict -> to_text
-    # Simulate what run_stream does for base_msgs construction
+    # The serialized stable state can be reconstructed for a later run.
     from novi.runtime.execution_state import StableState
     ctx2 = ExecutionContext(user_input="Find routing", project_id="proj-A")
     ctx2.history = [("u", "msg")] * 10
@@ -185,10 +166,6 @@ def test_runtime_injects_stable_state_text_when_truncated():
     cm2 = ContextManager(model_name="test-8k")
     cm2.compact_history(ctx2)
     assert "stable_state" in ctx2.metadata
-    # Re-derive text as runtime does
     st_dict = ctx2.metadata["stable_state"]
     injected = StableState.from_dict(st_dict).to_text()
     assert "proj-A" in injected
-    prompt2 = runtime._system_prompt("hello", stable_state_text=injected)
-    assert "proj-A" in prompt2
-    assert "Stable execution state" in prompt2

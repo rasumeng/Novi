@@ -130,10 +130,12 @@ def register_defaults(reg: ConfigRegistry):
             ),
             Setting(
                 id="providers.ollama.reasoning",
-                label="Stream model reasoning",
-                description=("Stream the model's reasoning/thinking trace to the "
-                             "conversation UI when the selected model exposes one. "
-                             "Models without a reasoning trace are unaffected."),
+                label="Extended reasoning (thinking trace)",
+                description=("Request extended reasoning/thinking from the model when available. "
+                             "This controls only the thinking trace; it does not affect tool calling, "
+                             "conversational completion, or model capability. "
+                             "Models without a reasoning trace are unaffected, and reasoning is never "
+                             "required to complete a conversational response."),
                 category=Category.MODELS,
                 owner="providers",
                 type=SettingType.BOOL,

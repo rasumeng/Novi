@@ -11,9 +11,7 @@ def test_agent_run_status_is_typed_enum():
 
 
 def test_agent_run_finished_invariant():
-    from novi.runtime.execution_context import ExecutionContext
-
-    ctx = ExecutionContext(user_input="hello")
+    ctx = {"user_input": "hello"}
     run = AgentRun(id="run-1", conversation_id="conv-1", goal="hello", status=AgentRunStatus.RUNNING, context=ctx)
     assert not run.finished
     run.status = AgentRunStatus.COMPLETED
@@ -25,9 +23,7 @@ def test_agent_run_finished_invariant():
 
 
 def test_agent_run_token_usage_nullable():
-    from novi.runtime.execution_context import ExecutionContext
-
-    ctx = ExecutionContext(user_input="hi")
+    ctx = {"user_input": "hi"}
     run = AgentRun(id="r", conversation_id="c", goal="hi", status=AgentRunStatus.RUNNING, context=ctx, token_usage=None)
     assert run.token_usage is None
     run.token_usage = 42

@@ -27,8 +27,10 @@ from .sources import (
     ProjectRetrievalSource,
     WebRetrievalSource,
 )
-from .trace import DebugTraceEvent, TraceAction, TraceEvent
 from .unified_retrieval import SourceBinding, UnifiedRetriever
+
+
+
 
 log = logging.getLogger("novi.retrieval")
 
@@ -117,7 +119,7 @@ class RetrievalRecoveryState:
 class RetrievalExecutor:
     """Execute retrieval plans and direct search.
 
-    Single entry point: ``execute(ctx, user_input)`` yields trace events
+    Single entry point: ``execute(ctx, user_input)`` yields progress events
     and populates context retrieval fields.
     """
 
@@ -300,16 +302,13 @@ class RetrievalExecutor:
 
     def commit_recovery(self, ctx: ExecutionContext, decision: RecoveryDecision,
                         action: str) -> RetrievalRecoveryState:
-        """Record an executed recovery action on the run's state and trace."""
+        """Record an executed recovery action on the run's state."""
         state = self._recovery(ctx)
         state.attempts_used += 1
         state.retry_attempted = True
         state.action = action
         state.recommendation = decision.action
         state.reason = decision.reason
-        if ctx.trace is not None:
-            ctx.trace.recovery_attempts = state.attempts_used
-            ctx.trace.recovery_action = action
         return state
 
     @staticmethod
@@ -370,18 +369,10 @@ class RetrievalExecutor:
             except Exception:
                 pass
 
-    def _trace_event(self, action: TraceAction, category: str, summary: str,
-                     trace=None,
-                     debug_category: str | None = None,
-                     debug_data: dict | None = None) -> TraceEvent:
-        event = TraceEvent(action=action, category=category, summary=summary)
-        if trace is not None:
-            trace.user_events.append(event)
-        self._emit_bus("trace_event", trace_event=event.to_dict())
-        if self.debug_trace and trace is not None and debug_category:
-            dbg = DebugTraceEvent(category=debug_category, data=debug_data)
-            trace.debug_events.append(dbg)
-        return event
+    def _progress_event(self, category: str, summary: str) -> str:
+        log.debug("%s: %s", category, summary)
+        self._emit_bus("status", text=summary)
+        return summary
 
     # ── static utilities ────────────────────────────────────────────────
 
@@ -433,7 +424,7 @@ class RetrievalExecutor:
         return "grounded"
 
     def _finalize_grounding(self, ctx, bundle) -> str:
-        """Populate honest grounding fields on ctx/trace from bundle; return status."""
+        """Populate honest grounding fields on ctx from bundle; return status."""
         status = self._classify_grounding_status(bundle)
         ctx.grounding_status = status
         ctx.grounding_error = bundle.error
@@ -443,33 +434,16 @@ class RetrievalExecutor:
         # keep quality as FAILED; for not_configured ensure FAILED too
         if status in ("not_configured", "failed") and not ctx.grounding_quality:
             ctx.grounding_quality = RetrievalQuality.FAILED.value
-        if ctx.trace is not None:
-            ctx.trace.grounding_status = status
-            ctx.trace.grounding_error = bundle.error
-            ctx.trace.grounding_quality = ctx.grounding_quality
-            ctx.trace.grounding_searched = bool(ctx.grounding_text) or bool(bundle.error) or status in ("not_configured", "failed", "no_results")
-            ctx.trace.grounding_source_count = bundle.source_count
-            ctx.trace.grounding_relevance_score = bundle.quality.value if bundle.quality else 0.0
         return status
 
     # ── low-level search ────────────────────────────────────────────────
 
-    def execute_search(self, user_input: str, trace=None) -> EvidenceBundle:
+    def execute_search(self, user_input: str) -> EvidenceBundle:
         if not user_input or not user_input.strip():
             return EvidenceBundle(query=user_input)
         if not self._is_search_configured():
             # Honest not_configured without touching provider/network
             bundle = EvidenceBundle(query=user_input, error=NOT_CONFIGURED_MSG, quality=RetrievalQuality.FAILED)
-            if trace is not None and self.debug_trace:
-                trace.debug_events.append(DebugTraceEvent(
-                    category="retrieval",
-                    data={
-                        "status": "not_configured",
-                        "error": bundle.error,
-                        "query": user_input,
-                        "quality": bundle.quality.value,
-                    },
-                ))
             return bundle
         collector = self._web_source
         bundle = collector.collect(user_input, min_sources=2)
@@ -477,32 +451,11 @@ class RetrievalExecutor:
         if bundle.error:
             log.warning("grounding search failed for '%s': %s", user_input, bundle.error)
             bundle.quality = RetrievalQuality.FAILED
-            if trace is not None and self.debug_trace:
-                trace.debug_events.append(DebugTraceEvent(
-                    category="retrieval",
-                    data={
-                        "status": "failed",
-                        "error": bundle.error,
-                        "query": user_input,
-                        "provider": "searxng",
-                        "quality": bundle.quality.value,
-                    },
-                ))
             return bundle
 
         if not bundle.results or bundle.source_count == 0:
             log.info("grounding search found no textual sources for '%s'", user_input)
             bundle.quality = RetrievalQuality.EMPTY
-            if trace is not None and self.debug_trace:
-                trace.debug_events.append(DebugTraceEvent(
-                    category="retrieval",
-                    data={
-                        "status": "empty",
-                        "query": user_input,
-                        "provider": "searxng",
-                        "quality": bundle.quality.value,
-                    },
-                ))
             return bundle
 
         key_terms = self.extract_key_terms(user_input)
@@ -592,7 +545,7 @@ class RetrievalExecutor:
     def execute(
         self, ctx: ExecutionContext, user_input: str
     ) -> Generator[tuple[str, Any], None, None]:
-        """Single retrieval entry point. Yields trace events for the stream.
+        """Single retrieval entry point. Yields progress events for the stream.
 
         Dispatch order:
           1. Structured retrieval plan (non-NONE strategy)
@@ -713,8 +666,6 @@ class RetrievalExecutor:
         )
         if result.quality == RetrievalQuality.FAILED:
             return
-        if ctx.trace is not None:
-            ctx.trace.memory_queried = True
         if result.quality != RetrievalQuality.SUFFICIENT or not result.items:
             return
         try:
@@ -723,9 +674,6 @@ class RetrievalExecutor:
             merger = ResultMerger()
             merged = merger.merge([result], user_input, allocation)
             items = list(merger.select(merged.items, user_input, allocation))
-            if ctx.trace is not None:
-                ctx.trace.memory_result_count = len(items)
-                ctx.trace.memory_latency_ms = round((time.time() - t0) * 1000, 2)
             ctx.memory_context = self._format_memory_context(items)
         except Exception:
             return
@@ -840,16 +788,6 @@ class RetrievalExecutor:
         if not should_query:
             return
         # Lifecycle: Searching workspace…
-        try:
-            if ctx.trace is not None:
-                self._trace_event(
-                    action=getattr(__import__("novi.runtime.trace", fromlist=["TraceAction"]), "TraceAction").RETRIEVING,
-                    category="workspace",
-                    summary="Searching workspace…",
-                    trace=ctx.trace,
-                )
-        except Exception:
-            pass
         result = self._workspace_source.retrieve(
             user_input,
             ContextAllocation(max_results=3, max_context_chars=6000),
@@ -867,16 +805,6 @@ class RetrievalExecutor:
             parts.append(f"Source: {path}\n{snippet}")
         ctx.workspace_context = "\n\n".join(parts)
         ctx.workspace_files_used = files_used
-        if ctx.trace is not None:
-            try:
-                self._trace_event(
-                    action=getattr(__import__("novi.runtime.trace", fromlist=["TraceAction"]), "TraceAction").RETRIEVING,
-                    category="workspace",
-                    summary=f"Reading {len(files_used)} file{'s' if len(files_used)!=1 else ''}…",
-                    trace=ctx.trace,
-                )
-            except Exception:
-                pass
 
     # ── retrieval plan strategies (private) ──────────────────────────────
 
@@ -884,101 +812,47 @@ class RetrievalExecutor:
         self, ctx: ExecutionContext, user_input: str
     ) -> Generator[tuple[str, Any], None, None]:
         plan = ctx.analysis.retrieval_plan
-        ctx.trace.retrieval_strategy = plan.strategy.value
-        ctx.trace.retrieval_sources = ",".join(s.value for s in plan.sources)
         ctx.retrieval_plan = plan
 
         if plan.strategy == RetrievalStrategy.NONE:
-            event = self._trace_event(
-                action=TraceAction.RESPONDING,
-                category="knowledge",
-                summary="This is a stable concept well-covered in available knowledge.",
-                trace=ctx.trace,
-                debug_category="grounding",
-                debug_data={
-                    "retrieval_plan": plan.strategy.value,
-                    "reason": plan.reason,
-                },
-            )
-            yield ("trace", event)
+            event = self._progress_event(category="knowledge", summary="This is a stable concept well-covered in available knowledge.")
+            yield ("status", event)
             return
 
         if plan.strategy == RetrievalStrategy.WEB_ONLY:
-            event = self._trace_event(
-                action=TraceAction.RETRIEVING,
-                category="information_retrieval",
-                summary="This question may depend on recent information. Looking up current data.",
-                trace=ctx.trace,
-                debug_category="grounding",
-                debug_data={
-                    "retrieval_plan": plan.strategy.value,
-                    "reason": plan.reason,
-                    "allocation": self._allocation_debug(plan),
-                },
-            )
-            yield ("trace", event)
-            yield ("thinking", event.action.value, event.summary, user_input)
+            event = self._progress_event(category="information_retrieval", summary="This question may depend on recent information. Looking up current data.")
+            yield ("status", event)
+            yield ("thinking", "Retrieving", event, user_input)
             t0 = time.time()
-            bundle = self.execute_search(user_input, trace=ctx.trace)
+            bundle = self.execute_search(user_input)
             self._apply_web_evidence(ctx, bundle)
             status = self._finalize_grounding(ctx, bundle)
-            ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
             if status == "not_configured":
-                yield ("status", NOT_CONFIGURED_MSG)
-                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-                yield ("trace", ev2)
+                ev2 = self._progress_event(category="search", summary=NOT_CONFIGURED_MSG)
+                yield ("status", ev2)
             elif status == "failed":
                 err = bundle.error or "Search failed"
-                yield ("status", err)
-                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-                yield ("trace", ev2)
+                ev2 = self._progress_event(category="search", summary=err)
+                yield ("status", ev2)
             elif status == "no_results":
                 msg = "No search results found for this query."
-                yield ("status", msg)
-                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
-                yield ("trace", ev2)
+                ev2 = self._progress_event(category="search", summary=msg)
+                yield ("status", ev2)
             return
 
         if plan.strategy in (RetrievalStrategy.KNOWLEDGE_ONLY, RetrievalStrategy.PROJECT_FIRST):
-            event = self._trace_event(
-                action=TraceAction.RETRIEVING,
-                category="knowledge_retrieval",
-                summary="Searching local knowledge base for relevant information.",
-                trace=ctx.trace,
-                debug_category="retrieval",
-                debug_data={
-                    "retrieval_plan": plan.strategy.value,
-                    "reason": plan.reason,
-                    "allocation": self._allocation_debug(plan),
-                },
-            )
-            yield ("trace", event)
+            event = self._progress_event(category="knowledge_retrieval", summary="Searching local knowledge base for relevant information.")
+            yield ("status", event)
             yield ("thinking", "Searching knowledge base...", "", user_input)
             t0 = time.time()
             kb_text = self.retrieve_knowledge(user_input)
             ctx.grounding_text = kb_text
             ctx.grounding_quality = RetrievalQuality.SUFFICIENT.value if kb_text else RetrievalQuality.EMPTY.value
-            ctx.trace.grounding_searched = bool(kb_text)
-            ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
-            ctx.trace.grounding_quality = ctx.grounding_quality
-            ctx.trace.grounding_source_count = 1 if kb_text else 0
-            ctx.trace.grounding_relevance_score = 1.0 if kb_text else 0.0
             return
 
         if plan.strategy in (RetrievalStrategy.KNOWLEDGE_THEN_WEB, RetrievalStrategy.MEMORY_FIRST):
-            event = self._trace_event(
-                action=TraceAction.RETRIEVING,
-                category="information_retrieval",
-                summary="Searching local knowledge first, then web if needed.",
-                trace=ctx.trace,
-                debug_category="retrieval",
-                debug_data={
-                    "retrieval_plan": plan.strategy.value,
-                    "reason": plan.reason,
-                    "allocation": self._allocation_debug(plan),
-                },
-            )
-            yield ("trace", event)
+            event = self._progress_event(category="information_retrieval", summary="Searching local knowledge first, then web if needed.")
+            yield ("status", event)
             yield ("thinking", "Searching knowledge base...", "", user_input)
             t0 = time.time()
             kb_text = self.retrieve_knowledge(user_input)
@@ -986,131 +860,73 @@ class RetrievalExecutor:
                 ctx.grounding_text = kb_text
                 ctx.grounding_quality = RetrievalQuality.SUFFICIENT.value
                 ctx.retrieval_escalated = False
-                ctx.trace.grounding_searched = True
-                ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
-                ctx.trace.grounding_quality = ctx.grounding_quality
-                ctx.trace.grounding_source_count = 1
-                ctx.trace.grounding_relevance_score = 1.0
                 return
 
             ctx.retrieval_escalated = True
-            ctx.trace.retrieval_escalated = True
             yield ("thinking", "Escalating to web search...", "", user_input)
-            bundle = self.execute_search(user_input, trace=ctx.trace)
+            bundle = self.execute_search(user_input)
             self._apply_web_evidence(ctx, bundle)
             status = self._finalize_grounding(ctx, bundle)
-            ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
             if status == "not_configured":
-                yield ("status", NOT_CONFIGURED_MSG)
-                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-                yield ("trace", ev2)
+                ev2 = self._progress_event(category="search", summary=NOT_CONFIGURED_MSG)
+                yield ("status", ev2)
             elif status == "failed":
                 err = bundle.error or "Search failed"
-                yield ("status", err)
-                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-                yield ("trace", ev2)
+                ev2 = self._progress_event(category="search", summary=err)
+                yield ("status", ev2)
             elif status == "no_results":
                 msg = "No search results found for this query."
-                yield ("status", msg)
-                ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
-                yield ("trace", ev2)
+                ev2 = self._progress_event(category="search", summary=msg)
+                yield ("status", ev2)
             return
 
     def _execute_grounding_search(
         self, ctx: ExecutionContext, user_input: str
     ) -> Generator[tuple[str, Any], None, None]:
-        grounding_data = {
-            "needs_grounding": True,
-            "confidence": ctx.analysis.grounding.confidence,
-            "source": ctx.analysis.grounding.source,
-            "reason": ctx.analysis.grounding.reason,
-            "signals": [s.type for s in ctx.analysis.evidence.signals],
-            "evidence_confidence": ctx.analysis.evidence.confidence,
-        }
-        event = self._trace_event(
-            action=TraceAction.RETRIEVING,
-            category="information_retrieval",
-            summary="This question may depend on recent information. Looking up current data.",
-            trace=ctx.trace,
-            debug_category="grounding",
-            debug_data=grounding_data,
-        )
-        yield ("trace", event)
-        yield ("thinking", event.action.value, event.summary, user_input)
+        event = self._progress_event(category="information_retrieval", summary="This question may depend on recent information. Looking up current data.")
+        yield ("status", event)
+        yield ("thinking", "Retrieving", event, user_input)
         t0 = time.time()
-        bundle = self.execute_search(user_input, trace=ctx.trace)
+        bundle = self.execute_search(user_input)
         self._apply_web_evidence(ctx, bundle)
         status = self._finalize_grounding(ctx, bundle)
-        ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
         if status == "not_configured":
-            yield ("status", NOT_CONFIGURED_MSG)
-            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-            yield ("trace", ev2)
+            ev2 = self._progress_event(category="search", summary=NOT_CONFIGURED_MSG)
+            yield ("status", ev2)
         elif status == "failed":
             err = bundle.error or "Search failed"
-            yield ("status", err)
-            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-            yield ("trace", ev2)
+            ev2 = self._progress_event(category="search", summary=err)
+            yield ("status", ev2)
         elif status == "no_results":
             msg = "No search results found for this query."
-            yield ("status", msg)
-            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
-            yield ("trace", ev2)
+            ev2 = self._progress_event(category="search", summary=msg)
+            yield ("status", ev2)
 
     def _emit_no_grounding(
         self, ctx: ExecutionContext
     ) -> Generator[tuple[str, Any], None, None]:
-        grounding_data = {
-            "needs_grounding": False,
-            "confidence": ctx.analysis.grounding.confidence,
-            "source": ctx.analysis.grounding.source,
-            "reason": ctx.analysis.grounding.reason,
-            "signals": [s.type for s in ctx.analysis.evidence.signals],
-            "evidence_confidence": ctx.analysis.evidence.confidence,
-        }
-        event = self._trace_event(
-            action=TraceAction.RESPONDING,
-            category="knowledge",
-            summary="This is a stable concept well-covered in available knowledge.",
-            trace=ctx.trace,
-            debug_category="grounding",
-            debug_data=grounding_data,
-        )
-        yield ("trace", event)
+        event = self._progress_event(category="knowledge", summary="This is a stable concept well-covered in available knowledge.")
+        yield ("status", event)
 
     def _execute_direct_web(
         self, ctx: ExecutionContext, user_input: str
     ) -> Generator[tuple[str, Any], None, None]:
         intent_str = ctx.intent_str
-        event = self._trace_event(
-            action=TraceAction.RETRIEVING,
-            category="information_retrieval",
-            summary="This question depends on current information. Looking up data.",
-            trace=ctx.trace,
-            debug_category="grounding",
-            debug_data={
-                "intent": intent_str,
-                "source": "fallback_intent",
-            },
-        )
-        yield ("trace", event)
-        yield ("thinking", event.action.value, event.summary, user_input)
+        event = self._progress_event(category="information_retrieval", summary="This question depends on current information. Looking up data.")
+        yield ("status", event)
+        yield ("thinking", "Retrieving", event, user_input)
         t0 = time.time()
-        bundle = self.execute_search(user_input, trace=ctx.trace)
+        bundle = self.execute_search(user_input)
         self._apply_web_evidence(ctx, bundle)
         status = self._finalize_grounding(ctx, bundle)
-        ctx.trace.grounding_latency_ms = round((time.time() - t0) * 1000, 2)
         if status == "not_configured":
-            yield ("status", NOT_CONFIGURED_MSG)
-            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=NOT_CONFIGURED_MSG, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-            yield ("trace", ev2)
+            ev2 = self._progress_event(category="search", summary=NOT_CONFIGURED_MSG)
+            yield ("status", ev2)
         elif status == "failed":
             err = bundle.error or "Search failed"
-            yield ("status", err)
-            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=err, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status, "searchError": bundle.error})
-            yield ("trace", ev2)
+            ev2 = self._progress_event(category="search", summary=err)
+            yield ("status", ev2)
         elif status == "no_results":
             msg = "No search results found for this query."
-            yield ("status", msg)
-            ev2 = self._trace_event(action=TraceAction.RETRIEVING, category="search", summary=msg, trace=ctx.trace, debug_category="grounding", debug_data={"grounding_status": status})
-            yield ("trace", ev2)
+            ev2 = self._progress_event(category="search", summary=msg)
+            yield ("status", ev2)

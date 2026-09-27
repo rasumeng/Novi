@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Trash2, Search, X, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { ProjectForm } from './ProjectForm'
-import { ProjectDetail } from './ProjectDetail'
+import { ProjectHome } from './ProjectHome'
+import { ProjectSettingsModal } from './ProjectSettingsModal'
 import { useConfirm } from '@/hooks/useConfirm'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 import { NoviMascot } from '@/components/brand/NoviMascot'
@@ -29,6 +30,8 @@ interface Props {
   loading?: boolean
   error?: string | null
   onRetry?: () => void
+  onAttachProjectSource?: (projId: string, path: string) => Promise<any>
+  onDetachProjectSource?: (projId: string, path: string) => Promise<void>
 }
 
 export function ProjectsPanel({
@@ -51,10 +54,13 @@ export function ProjectsPanel({
   loading = false,
   error = null,
   onRetry,
+  onAttachProjectSource,
+  onDetachProjectSource,
 }: Props) {
   const { confirm, dialog } = useConfirm()
   const [showForm, setShowForm] = useState(false)
   const [search, setSearch] = useState('')
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null)
   // Controlled — single source of truth is activeProjectId from useNoviChat
   const selectedProjectId = activeProjectId ?? null
 
@@ -103,23 +109,52 @@ export function ProjectsPanel({
     onSelectProject(id)
   }
 
+  const settingsProject = settingsProjectId ? projects.find(p => p.id === settingsProjectId) ?? null : null
+
+  const handleDeleteFromSettings = async (id: string) => {
+    const proj = projects.find(p => p.id === id)
+    if (!proj) return
+    const ok = await confirm({
+      title: `Delete "${proj.name}"?`,
+      description: `This removes the project. Its ${proj.conversationIds.length} linked conversation${proj.conversationIds.length !== 1 ? 's' : ''} won't be deleted. This can't be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (ok) {
+      onDeleteProject(id)
+      if (selectedProjectId === id) onSelectProject(null)
+      setSettingsProjectId(null)
+    }
+  }
+
   if (selectedProject) {
     return (
-      <ProjectDetail
-        project={selectedProject}
-        conversations={conversations}
-        onBack={handleBack}
-        onUpdate={onUpdateProject}
-        onSelectConversation={onSelectConversation}
-        onRemoveConversation={onRemoveConversation}
-        onStartConversation={onStartProjectConversation ? () => onStartProjectConversation(selectedProject.id) : undefined}
-        onSendInProject={onSendInProject}
-        activeConversationId={activeConversationId}
-        connection={connection as any}
-        generating={generating}
-        onStop={onStop}
-        onOpenFull={onOpenFull}
-      />
+      <>
+        <ProjectHome
+          project={selectedProject}
+          conversations={conversations}
+          onSelectConversation={onSelectConversation}
+          onRemoveConversation={onRemoveConversation}
+          onSendInProject={onSendInProject}
+          activeConversationId={activeConversationId}
+          connection={connection as any}
+          generating={generating}
+          onStop={onStop}
+          onOpenFull={onOpenFull}
+          onUpdate={onUpdateProject}
+          onOpenSettings={(id) => setSettingsProjectId(id)}
+        />
+        {settingsProject && onAttachProjectSource && onDetachProjectSource && (
+          <ProjectSettingsModal
+            open={!!settingsProjectId}
+            onClose={() => setSettingsProjectId(null)}
+            project={settingsProject}
+            onUpdate={onUpdateProject}
+            onAddSource={onAttachProjectSource}
+            onRemoveSource={onDetachProjectSource}
+            onDelete={handleDeleteFromSettings}
+          />
+        )}
+      </>
     )
   }
 
@@ -267,6 +302,17 @@ export function ProjectsPanel({
           </motion.div>
         )}
       </AnimatePresence>
+      {settingsProject && onAttachProjectSource && onDetachProjectSource && (
+        <ProjectSettingsModal
+          open={!!settingsProjectId}
+          onClose={() => setSettingsProjectId(null)}
+          project={settingsProject}
+          onUpdate={onUpdateProject}
+          onAddSource={onAttachProjectSource}
+          onRemoveSource={onDetachProjectSource}
+          onDelete={handleDeleteFromSettings}
+        />
+      )}
     </div>
   )
 }

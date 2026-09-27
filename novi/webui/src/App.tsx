@@ -38,15 +38,6 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SectionId>('general')
   const [searchOpen, setSearchOpen] = useState(false)
-  const [activityOpen, setActivityOpen] = useState(() => {
-    try {
-      const cur = localStorage.getItem('novi_activity_panel')
-      if (cur !== null) return cur === 'true'
-      const legacy = localStorage.getItem('cozmo_activity_panel')
-      if (legacy !== null) return legacy === 'true'
-    } catch {}
-    return false
-  })
   const chat = useNoviChat()
   const workspaceRef = useRef<WorkspaceLocation | null>(null)
 
@@ -107,21 +98,9 @@ export default function App() {
     pushWorkspaceHistory({ settingsOpen: true, settingsSection: section ?? workspaceRef.current?.settingsSection ?? 'general', searchOpen: false })
   }, [pushWorkspaceHistory])
 
-  const handleCreateSkill = useCallback(() => {
-    pushWorkspaceHistory({ settingsOpen: true, settingsSection: 'skills', searchOpen: false })
-  }, [pushWorkspaceHistory])
-
   const handleSelectConversation = useCallback((id: string) => {
     pushWorkspaceHistory({ section: 'conversations', conversationId: id, settingsOpen: false, searchOpen: false })
   }, [pushWorkspaceHistory])
-
-  const handleToggleActivity = useCallback(() => {
-    setActivityOpen(v => {
-      const next = !v
-      try { localStorage.setItem('novi_activity_panel', String(next)) } catch {}
-      return next
-    })
-  }, [])
 
   const workingActivityTitle = chat.generatingConversationId
     ? chat.generatingConversationTitle
@@ -133,15 +112,8 @@ export default function App() {
   }, [chat])
 
   const handleSendInProject = useCallback((projectId: string, content: string) => {
-    const conv = chat.conversations.find(c => c.id === chat.activeId) as any
-    const proj = chat.projects.find(p => p.id === projectId)
-    const activeInProject = !!proj && (!!conv && (conv.projectId === projectId || proj.conversationIds.includes(chat.activeId)))
-    if (activeInProject) {
-      chat.sendMessage(content)
-    } else {
-      chat.setActiveProjectId(projectId)
-      ;(chat.sendMessage as any)(content, undefined, undefined, projectId)
-    }
+    chat.setActiveProjectId(projectId)
+    chat.sendMessage(content, undefined, undefined, projectId, true)
     setActiveSection('conversations')
   }, [chat])
 
@@ -174,6 +146,8 @@ export default function App() {
             loading={(chat as any).projectsLoading}
             error={(chat as any).projectsError}
             onRetry={(chat as any).refreshProjects}
+            onAttachProjectSource={chat.attachProjectSource}
+            onDetachProjectSource={chat.detachProjectSource}
           /></Suspense>
         )
       case 'timeline':
@@ -188,23 +162,20 @@ export default function App() {
           /></Suspense>
         )
       default:
-        return (
+return (
           <Conversation
             conversation={chat.active}
             connection={chat.connection}
             generating={chat.generating}
             busyReason={chat.busyReason}
-            inlineSteps={chat.inlineSteps}
-            thinking={chat.thinking}
-            liveThought={chat.liveThought}
             plan={chat.plan}
             permission={chat.permission}
-            agentState={chat.agentState}
-            progress={chat.progress}
             activeProject={chat.activeProject}
             backgroundRuns={chat.backgroundRuns}
             onSend={chat.sendMessage}
             onAttachFolder={chat.attachFolder}
+            onAttachSource={chat.attachConversationSource}
+            onDetachSource={(path: string) => chat.detachConversationSource(chat.activeId, path)}
             deepResearch={chat.deepResearch}
             onToggleDeepResearch={chat.toggleDeepResearch}
             onStop={chat.stop}
@@ -216,9 +187,6 @@ export default function App() {
             conversations={chat.conversations}
             onOpenConversation={handleSelectConversation}
             timeline={chat.timeline}
-            activityOpen={activityOpen}
-            onToggleActivity={handleToggleActivity}
-            memoryActivity={chat.memoryActivity}
             runProjection={chat.runProjection}
           />
         )
@@ -228,8 +196,7 @@ export default function App() {
   // if (boot.phase !== 'ready') {
   //   return (
   //     <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
-  //       <TitleBar minimal />
-  //       <BootScreen state={boot} embedded />
+  //       <BootScreen state={boot} />
   //     </div>
   //   )
   // }
@@ -239,14 +206,9 @@ export default function App() {
       <TitleBar
         connection={chat.connection}
         reconnected={chat.reconnected}
-        workingActivityTitle={workingActivityTitle}
-        isActiveConversation={activeSection === 'conversations' && chat.generating}
-        memoryActivity={chat.memoryActivity}
         onSelectConversation={handleSelectConversation}
         collapsed={collapsed}
         onToggleSidebar={() => setCollapsed(v => !v)}
-        activityOpen={activityOpen}
-        onToggleActivity={handleToggleActivity}
         onSearch={() => pushWorkspaceHistory({ searchOpen: true, settingsOpen: false })}
           onOpenSettings={() => handleOpenSettings()}
       />
@@ -280,6 +242,8 @@ export default function App() {
           onUpdateProject={chat.updateProject}
           onDeleteProject={chat.deleteProject}
           boot={boot}
+          onAttachProjectSource={chat.attachProjectSource}
+          onDetachProjectSource={chat.detachProjectSource}
         />
 
         {renderSection()}
@@ -290,7 +254,6 @@ export default function App() {
         open={settingsOpen}
         onClose={() => pushWorkspaceHistory({ settingsOpen: false })}
         initialSection={settingsSection}
-        onCreateSkill={handleCreateSkill}
         onSectionChange={(section) => pushWorkspaceHistory({ settingsOpen: true, settingsSection: section })}
       /></Suspense>
     </div>

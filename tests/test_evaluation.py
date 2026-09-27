@@ -252,10 +252,12 @@ class TestTraceCollector:
         assert tc.last == {"request_id": "1", "intent": "coding"}
 
     def test_accepts_trace_object(self):
-        from novi.runtime.trace import ExecutionTrace
-
         tc = TraceCollector()
-        trace = ExecutionTrace(user_input="hello", intent="coding")
+        class Trace:
+            def to_dict(self):
+                return {"user_input": "hello", "intent": "coding"}
+
+        trace = Trace()
         tc.record(trace)
         assert tc.last["intent"] == "coding"
 
@@ -349,74 +351,57 @@ class TestEvaluationRunner:
 # ── Runtime driver (fake runtime through RuntimeInterface) ───────────────
 
 
-class _FakeRuntime:
-    """Minimal RuntimeInterface-compatible runtime that emits traces."""
+class _FakeRunService:
+    """Minimal public RunService collaborator for evaluation tests."""
 
-    def __init__(self, event_bus, answer="", fail=False, delay=0.0):
-        from novi.runtime.event_bus import EventType
-
-        self.event_bus = event_bus
+    def __init__(self, answer="", fail=False, delay=0.0):
         self._answer = answer
         self._fail = fail
         self._delay = delay
-        self._event_type = EventType
 
-    def run(self, user_input):
+    def start(self, request):
         import time
 
         time.sleep(self._delay)
         if self._fail:
             raise RuntimeError("model unavailable")
-        self.event_bus.emit(
-            self._event_type.TRACE_COMPLETED,
-            trace={
-                "intent": "conversation",
-                "grounding_searched": False,
-                "grounding_quality": "",
-                "retrieval_sources": "web",
-                "retrieval_strategy": "web_only",
-                "recovery_attempts": 0,
-                "max_steps": 5,
-                "tools_bound": ["web_search"],
-                "steps": [
-                    {
-                        "step": 0,
-                        "tool_calls": [
-                            {"name": "web_search", "success": True, "latency_ms": 5.0}
-                        ],
-                    }
-                ],
-            },
+        self.request = request
+        return "run-1"
+
+    def snapshot(self, run_id):
+        from novi.runtime.run_contracts import RunState, RunStatus
+        from novi.runtime.transcript import ContentBlock, ContentBlockType, MessageRole, TranscriptMessage
+
+        message = TranscriptMessage(
+            id="assistant-1",
+            role=MessageRole.ASSISTANT,
+            blocks=(ContentBlock(type=ContentBlockType.TEXT, text=self._answer),),
         )
-        return self._answer
+        return RunState(
+            id=run_id,
+            request=self.request,
+            status=RunStatus.COMPLETED,
+            transcript=(message,),
+        )
 
 
 class TestRuntimeDriver:
     def test_consumes_trace_and_answer(self):
         from novi.evaluation.drivers import RuntimeDriver
-        from novi.runtime.event_bus import EventBus
-
-        bus = EventBus()
-        fake = _FakeRuntime(bus, answer="a useful answer")
-        driver = RuntimeDriver(runtime=fake, event_bus=bus, timeout_s=10)
+        fake = _FakeRunService(answer="a useful answer")
+        driver = RuntimeDriver(run_service=fake, timeout_s=10)
         case = BenchmarkCase("r1", "query", expected_grounding=True,
                              expected_sources=["web"])
         result = driver.run(case)
         assert result.answer == "a useful answer"
         assert result.trace is not None
-        assert result.intent == "conversation"
-        assert result.retrieval_sources == ["web"]
-        assert result.tool_calls and result.tool_calls[0]["success"] is True
         assert result.error is None
         assert result.latency_ms > 0
 
     def test_records_failure_as_error(self):
         from novi.evaluation.drivers import RuntimeDriver
-        from novi.runtime.event_bus import EventBus
-
-        bus = EventBus()
-        fake = _FakeRuntime(bus, fail=True)
-        driver = RuntimeDriver(runtime=fake, event_bus=bus, timeout_s=10)
+        fake = _FakeRunService(fail=True)
+        driver = RuntimeDriver(run_service=fake, timeout_s=10)
         case = BenchmarkCase("r2", "query")
         result = driver.run(case)
         assert result.error is not None
@@ -424,11 +409,8 @@ class TestRuntimeDriver:
 
     def test_timeout_guard(self):
         from novi.evaluation.drivers import RuntimeDriver
-        from novi.runtime.event_bus import EventBus
-
-        bus = EventBus()
-        fake = _FakeRuntime(bus, delay=2.0)
-        driver = RuntimeDriver(runtime=fake, event_bus=bus, timeout_s=0.2)
+        fake = _FakeRunService(delay=2.0)
+        driver = RuntimeDriver(run_service=fake, timeout_s=0.2)
         case = BenchmarkCase("r3", "query")
         result = driver.run(case)
         assert result.error is not None

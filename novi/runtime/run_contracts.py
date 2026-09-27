@@ -38,6 +38,8 @@ class ModelSnapshot:
     provider: str
     model: str
     context_window: int | None = None
+    supports_tools: bool | None = None
+    capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class RunEventType(str, Enum):
     RUN_STATE_CHANGED = "run.state_changed"
     MESSAGE_STARTED = "message.started"
     MESSAGE_DELTA = "message.delta"
+    MESSAGE_REASONING = "message.reasoning"
     MESSAGE_COMPLETED = "message.completed"
     TOOL_REQUESTED = "tool.requested"
     TOOL_STARTED = "tool.started"
@@ -106,6 +109,8 @@ class RunEventType(str, Enum):
     PERMISSION_RESOLVED = "permission.resolved"
     CONTEXT_COMPACTING = "context.compacting"
     CONTEXT_COMPACTED = "context.compacted"
+    THINKING = "thinking"
+    STATUS = "status"
     RUN_COMPLETED = "run.completed"
     RUN_BLOCKED = "run.blocked"
     RUN_FAILED = "run.failed"
@@ -176,3 +181,6 @@ class ModelTurn:
     finish_reason: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    is_complete: bool = False
+    # Native reasoning is a separate delta, never answer text or executable input.
+    reasoning_delta: str = ""

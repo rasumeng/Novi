@@ -125,6 +125,15 @@ impl BackendLauncher {
                     .to_string(),
             );
         }
+        // Never mistake an orphaned process on Novi's port for the child we
+        // are about to launch. Without this preflight, readiness can race the
+        // new child's bind failure and silently connect the UI to stale code.
+        if self.is_ready() {
+            return Err(format!(
+                "Another Novi backend is already using {}:{}. Quit that process and reopen Novi.",
+                self.config.host, self.config.port
+            ));
+        }
         let (program, args, cwd) = self.command_parts();
 
         let mut cmd = Command::new(&program);

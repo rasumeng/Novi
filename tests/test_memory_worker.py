@@ -86,6 +86,19 @@ def test_foreground_and_close_prevent_shadow_calls(tmp_path):
     assert not calls
 
 
+def test_packet_preparation_does_not_hold_the_primary_model_lease(tmp_path):
+    worker, _, _, _ = fixture(tmp_path)
+    worker.models.inference = InferenceCoordinator(clock=lambda: 100)
+    worker.models.inference._last_foreground = 0
+
+    def prepare(packet):
+        assert not worker.models.inference.memory_active
+        return packet
+
+    worker.brain.memory_packet = prepare
+    assert worker.run_once()['state'] == 'abstained'
+
+
 def test_pause_is_durable(tmp_path):
     worker, _, _, store = fixture(tmp_path)
     worker.pause()

@@ -379,27 +379,3 @@ class TestEvidencePriorityPrompt:
 
         assert "primary source" in BASE_PROMPT.lower()
         assert "supplements" in BASE_PROMPT.lower()
-
-    def test_system_prompt_has_priority_when_grounding(self):
-        """When grounding_text present, system prompt has priority instruction."""
-        from novi.runtime.runtime import NoviRuntime
-
-        rt = NoviRuntime()
-        prompt = rt._system_prompt(
-            user_input="test",
-            grounding="search result content here",
-        )
-        assert "primary source" in prompt.lower()
-        assert "prioritize" in prompt.lower()
-        assert "supplement" in prompt.lower()
-
-    def test_system_prompt_without_grounding(self):
-        """Without grounding_text, identity has evidence priority but no grounding section."""
-        from novi.runtime.runtime import NoviRuntime
-
-        rt = NoviRuntime()
-        prompt = rt._system_prompt(user_input="test")
-        # Identity always has the general instruction
-        assert "primary source" in prompt.lower()
-        # But no grounding-specific injection
-        assert "Search results for the user's question" not in prompt

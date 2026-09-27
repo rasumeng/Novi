@@ -49,7 +49,6 @@ from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
 from novi.runtime.event_bus import EventBus
 from novi.runtime.execution_context import ExecutionContext
 from novi.runtime.retrieval_coordinator import RetrievalBudget, RetrievalCoordinator
-from novi.runtime.runtime import NoviRuntime
 
 
 # ── shared stubs ──────────────────────────────────────────────────────────
@@ -244,53 +243,6 @@ def test_attempt_bound_independent_of_budget():
     assert result["search_attempts"] == 2
 
 
-def test_no_coordinator_bypass_possible_via_runtime():
-    """The runtime always injects the run's coordinator into graph state."""
-    from novi.runtime.runtime import NoviRuntime
-
-    captured = {}
-
-    class _M:
-        def resolve_primary(self):
-            return ("ollama", "m1")
-
-        def validate(self, *a, **k):
-            return []
-
-        def bind_model(self, name, tools, temperature=0.0):
-            return _StubModel()
-
-        def client_for_model(self, name, temperature=0.0):
-            return _StubModel()
-
-    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
-                      cfg={"runtime": {"temperature": 0.2}})
-    original = rt._research_graph_state
-
-    def spy(ctx, runnable, base_msgs, user_input):
-        state = original(ctx, runnable, base_msgs, user_input)
-        captured["coordinator"] = state.get("coordinator")
-        captured["should_stop"] = callable(state.get("should_stop"))
-        return state
-
-    rt._research_graph_state = spy
-    ctx = ExecutionContext(user_input="q")
-    ctx.analysis = SimpleNamespace(
-        intent=SimpleNamespace(value="research"),
-        evidence=SimpleNamespace(signals=[], confidence=1.0, needs_memory=False),
-        complexity=SimpleNamespace(score=1, plan_level=0, max_steps=3),
-        capabilities=["research"], strategy=SimpleNamespace(value="research"),
-        grounding=SimpleNamespace(needs_grounding=True, confidence=0.8,
-                                  source="heuristic", reason="test"),
-        retrieval_plan=None,
-    )
-    rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
-    for _ in rt.run_stream(context=ctx):
-        pass
-    assert captured["coordinator"] is not None
-    assert captured["should_stop"] is True
-
-
 # ── cancellation (F5) ─────────────────────────────────────────────────────
 
 
@@ -401,32 +353,6 @@ def test_normal_execution_unaffected_without_probe():
 # ── honest plan/step semantics (F6) ───────────────────────────────────────
 
 
-def _make_plan(task_id="t1", n=3):
-    from novi.planner.models import Plan, PlanStep
-
-    plan = Plan(id="p1", task_id=task_id)
-    descriptions = ["Gather relevant information", "Synthesize findings",
-                    "Deliver an answer"]
-    for i in range(n):
-        plan.add_step(PlanStep(id=f"s{i}", plan_id=plan.id,
-                               description=descriptions[i % len(descriptions)]))
-    return plan
-
-
-def _make_execution_plan(plan, analysis):
-    from novi.orchestrator.task_types import ExecutionPlan
-
-    return ExecutionPlan(
-        task_id=plan.task_id,
-        tools=["calculator"],
-        model_spec={"model": "m1"},
-        plan=plan,
-        context={"analysis": analysis},
-        max_steps=6,
-        temperature=0.2,
-    )
-
-
 _RESEARCH_ANALYSIS = dict(
     intent=SimpleNamespace(value="research"),
     evidence=SimpleNamespace(signals=[], confidence=1.0, needs_memory=False),
@@ -437,190 +363,6 @@ _RESEARCH_ANALYSIS = dict(
                               source="heuristic", reason="test"),
     retrieval_plan=None,
 )
-
-
-def _run_research_with_plan(rt, ctx):
-    kinds = []
-    for item in rt.run_stream(context=ctx):
-        kinds.append(item[0])
-    return kinds
-
-
-def test_research_plan_single_honest_step():
-    bus = EventBus()
-    bus_events = []
-    bus.on_any(lambda ev: bus_events.append((ev.type, ev.data)))
-
-    class _M:
-        def bind_model(self, name, tools, temperature=0.0):
-            return _StubModel()
-
-        def client_for_model(self, name, temperature=0.0):
-            return _StubModel()
-
-    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
-                      event_bus=bus, cfg={"runtime": {"temperature": 0.2}})
-    rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
-
-    plan = _make_plan()
-    ep = _make_execution_plan(plan, SimpleNamespace(**_RESEARCH_ANALYSIS))
-    ctx = ExecutionContext(user_input="python asyncio event loop basics")
-    ctx.execution_plan = ep
-    ctx.analysis = ep.context["analysis"]
-
-    kinds = _run_research_with_plan(rt, ctx)
-
-    # Exactly one honest logical step — no phantom completions.
-    assert kinds.count("step.started") == 1
-    assert kinds.count("step.completed") == 1
-    assert kinds.count("step.failed") == 0
-    assert kinds.count("plan.completed") == 1
-
-    statuses = [s.status.value for s in plan.steps]
-    assert statuses[0] == "completed"
-    assert statuses[1:] == ["cancelled", "cancelled"], (
-        "subsumed template steps must be CANCELLED, never phantom-COMPLETED")
-
-    started = [d for t, d in bus_events if t == "step.started"]
-    completed = [d for t, d in bus_events if t == "step.completed"]
-    assert len(completed) == 1
-    assert completed[0]["index"] == started[0]["index"]
-
-    plan_completed = [d for t, d in bus_events if t == "plan.completed"]
-    assert plan_completed and plan_completed[0]["step_count"] == 1
-
-
-def test_coding_plan_single_honest_step():
-    from langchain_core.messages import AIMessage
-
-    plan = _make_plan()
-    analysis = SimpleNamespace(
-        intent=SimpleNamespace(value="coding"),
-        evidence=SimpleNamespace(signals=[], confidence=1.0, needs_memory=False),
-        complexity=SimpleNamespace(score=2, plan_level=1, max_steps=6),
-        capabilities=["coding"],
-        strategy=SimpleNamespace(value="coding"),
-        grounding=SimpleNamespace(needs_grounding=False, confidence=0.8,
-                                  source="heuristic", reason="test"),
-        retrieval_plan=None,
-    )
-
-    class _StreamRunnable:
-        def stream(self, msgs):
-            yield AIMessage(content="patched")
-
-        def invoke(self, msgs):
-            return AIMessage(content="patched")
-
-    class _M:
-        def bind_model(self, name, tools, temperature=0.0):
-            return _StreamRunnable()
-
-        def client_for_model(self, name, temperature=0.0):
-            return _StreamRunnable()
-
-    rt = NoviRuntime(model_service=_M(), coding_graph=CodingGraph(),
-                      cfg={"runtime": {"temperature": 0.2}})
-    plan_ref = ep = _make_execution_plan(plan, analysis)
-    ctx = ExecutionContext(user_input="add a logging helper")
-    ctx.execution_plan = ep
-    ctx.analysis = analysis
-
-    kinds = [item[0] for item in rt.run_stream(context=ctx)]
-
-    assert kinds.count("step.started") == 1
-    assert kinds.count("step.completed") == 1
-    statuses = [s.status.value for s in plan.steps]
-    assert statuses[0] == "completed"
-    assert statuses[1:] == ["cancelled", "cancelled"]
-
-
-def test_research_failure_emits_honest_step_and_plan_failed():
-    plan = _make_plan()
-    analysis = SimpleNamespace(**_RESEARCH_ANALYSIS)
-
-    class _EmptyModel:
-        def invoke(self, msgs):
-            return type("R", (), {"content": ""})()
-
-    class _M:
-        def bind_model(self, name, tools, temperature=0.0):
-            return _EmptyModel()
-
-        def client_for_model(self, name, temperature=0.0):
-            return _EmptyModel()
-
-    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
-                      cfg={"runtime": {"temperature": 0.2}})
-    rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
-    ctx = ExecutionContext(user_input="python asyncio event loop basics")
-    ctx.execution_plan = _make_execution_plan(plan, analysis)
-    ctx.analysis = analysis
-
-    kinds = [item[0] for item in rt.run_stream(context=ctx)]
-
-    assert kinds.count("step.failed") == 1
-    assert kinds.count("plan.failed") == 1
-    assert kinds.count("plan.completed") == 0
-    assert plan.steps[0].status.value == "failed"
-
-
-def test_job_lifecycle_checkpoint_stays_honest():
-    """One graph execution → one checkpoint whose step reflects reality."""
-    from novi.services.job_lifecycle import JobLifecycle
-
-    class FakeManager:
-        def __init__(self):
-            self.checkpoints = []
-
-        def set_event_sink(self, sink):
-            pass
-
-        def submit(self, **kw):
-            raise AssertionError("job pre-registered by test")
-
-        def start(self, job_id):
-            return True
-
-        def checkpoint(self, job_id, cp):
-            self.checkpoints.append(cp)
-
-        def complete(self, job_id, result=""):
-            pass
-
-        def fail(self, job_id, error=""):
-            pass
-
-    mgr = FakeManager()
-    bus = EventBus()
-    lifecycle = JobLifecycle(mgr)
-    lifecycle.register("t1", "j1")
-    lifecycle.subscribe(bus)
-
-    plan = _make_plan()
-
-    class _M:
-        def bind_model(self, name, tools, temperature=0.0):
-            return _StubModel()
-
-        def client_for_model(self, name, temperature=0.0):
-            return _StubModel()
-
-    rt = NoviRuntime(model_service=_M(), research_graph=ResearchGraph(),
-                      event_bus=bus, cfg={"runtime": {"temperature": 0.2}})
-    rt.retrieval_executor.execute_search = lambda query, trace=None: _bundle()
-    analysis = SimpleNamespace(**_RESEARCH_ANALYSIS)
-    ctx = ExecutionContext(user_input="python asyncio event loop basics")
-    ctx.execution_plan = _make_execution_plan(plan, analysis)
-    ctx.analysis = analysis
-
-    for _ in rt.run_stream(context=ctx):
-        pass
-
-    assert len(mgr.checkpoints) == 1, "one honest step → one checkpoint"
-    cp = mgr.checkpoints[0]
-    assert cp.step == 1, "Checkpoint.step must equal real completed steps"
-    assert cp.completed_steps == [plan.steps[0].id]
 
 
 # ── tool category single source (F1) ──────────────────────────────────────
@@ -643,7 +385,7 @@ def test_tool_category_single_source():
 def test_duplicate_category_tables_cannot_return():
     """Source-scan the runtime and executor: no local _TOOL_CATEGORIES table
     may exist anywhere except tool_registry."""
-    import novi.runtime.runtime as rt_mod
+    import novi.runtime.agent_loop as rt_mod
     import novi.runtime.tool_executor as te_mod
 
     for mod in (rt_mod, te_mod):
@@ -714,28 +456,6 @@ def test_coding_retry_event_on_bounded_reimplement():
     assert len(retries) == 1
     assert retries[0]["reason"] == "max_steps"
     assert result["answer"] == "finished properly"
-
-
-def test_webui_forwards_phase_events_additively():
-    """The WebSocket forwarder passes phase/retry payloads verbatim and still
-    routes unknown kinds through the generic branch."""
-    import novi.webui_server as ws
-
-    forwarded = []
-
-    class Dummy:
-        def _emit(self, payload):
-            forwarded.append(payload)
-
-    ws.Session._forward_item(Dummy(), ("phase", {"phase": "searching"}))
-    ws.Session._forward_item(Dummy(), ("retry", {"phase": "retry",
-                                                 "attempt": 2}))
-    ws.Session._forward_item(Dummy(), ("token", "hello"))
-
-    assert forwarded[0] == {"type": "phase", "phase": "searching"}
-    assert forwarded[1] == {"type": "retry", "phase": "retry", "attempt": 2}
-    assert forwarded[2] == {"type": "token", "text": "hello",
-                            "detail": None, "query": None}
 
 
 # ── architecture: graph import boundary stays closed ──────────────────────

@@ -22,6 +22,8 @@ class MockNoviClient {
   }
   disconnect() {}
   sendChat(content: string, conversationId?: string, _attachments?: unknown, _projectId?: string, deepResearch?: boolean) {
+    this.sequence = 0
+    this.messageStarted = false
     this.sent.push({ content, conversationId, deepResearch })
     return true
   }
@@ -36,6 +38,23 @@ class MockNoviClient {
 
   emit(ev: ServerEvent) {
     this.onEvent(ev)
+  }
+
+  private sequence = 0
+  private messageStarted = false
+
+  // Generate the same sequenced envelopes used by the backend, not legacy tokens.
+  emitRun(event: ServerEvent) {
+    const send = (fields: object) => this.emit({
+      ...fields, runId: `run-${this.sent.length}`, conversationId: this.sent[this.sent.length - 1].conversationId,
+      sequence: ++this.sequence,
+    } as ServerEvent)
+    if (!this.sequence) send({ type: 'run_state', status: 'running' })
+    if (['token', 'reasoning'].includes(event.type) && !this.messageStarted) {
+      send({ type: 'message_start', messageId: 'reply' })
+      this.messageStarted = true
+    }
+    send({ ...event, ...(['token', 'reasoning'].includes(event.type) ? { messageId: 'reply' } : {}) })
   }
 
   static latest(): MockNoviClient {
@@ -64,6 +83,7 @@ vi.mock('@/services/novi', () => ({
 // Imported after the mock so the hook picks up MockNoviClient.
 const { useNoviChat } = await import('./useNoviChat')
 const { resetBootCache } = await import('./bootCache')
+const { fetchProjects } = await import('@/services/novi')
 
 function findConv(list: Conversation[], id: string) {
   return list.find((c) => c.id === id)
@@ -85,10 +105,123 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ state: 'idle', version: 0,
     instance_id: 'test', job_id: null, mode: 'shadow', reason: '', note_ids: [] }) })))
   MockNoviClient.instances = []
+  vi.mocked(fetchProjects).mockResolvedValue([])
   resetBootCache()
 })
 
 describe('generation ownership', () => {
+  it('always creates a new conversation when sending from a project home', async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([{
+      id: 'project-1', name: 'Project One', description: '', sharedContext: '',
+      conversationIds: ['A'], sources: [{ root: 'C:\\project', capability: 'READ' }],
+      createdAt: '', updatedAt: '',
+    }])
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.projects).toHaveLength(1))
+    act(() => result.current.chat.setActiveId('A'))
+
+    act(() => result.current.chat.sendMessage(
+      'start a fresh project chat', undefined, undefined, 'project-1', true,
+    ))
+
+    await waitFor(() => expect(MockNoviClient.latest().sent).toHaveLength(1))
+    const sent = MockNoviClient.latest().sent[0]
+    expect(sent.conversationId).not.toBe('A')
+    expect(result.current.chat.active).toMatchObject({
+      id: sent.conversationId,
+      projectId: 'project-1',
+      sources: [{ root: 'C:\\project', capability: 'READ' }],
+    })
+    expect(findConv(result.current.chat.conversations, 'A')?.messages).toEqual([])
+  })
+
+  it('keeps landing-page sources temporary and promotes them before the first run', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('/sources')) {
+        return { ok: true, json: async () => ({ source: {
+          root: 'C:\\work\\notes', capability: 'READ', hash: 'source-1',
+        } }) } as Response
+      }
+      return { ok: true, json: async () => ({ state: 'idle', version: 0,
+        instance_id: 'test', job_id: null, mode: 'shadow', reason: '', note_ids: [] }) } as Response
+    })
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+
+    await act(async () => {
+      await result.current.chat.attachConversationSource('__draft__', 'C:\\work\\notes')
+    })
+    expect(result.current.chat.active.sources).toEqual([
+      { root: 'C:\\work\\notes', capability: 'READ' },
+    ])
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/__draft__/sources'))).toBe(false)
+
+    act(() => result.current.chat.sendMessage('summarize the notes'))
+    await waitFor(() => expect(MockNoviClient.latest().sent).toHaveLength(1))
+    const sent = MockNoviClient.latest().sent[0]
+    expect(sent.conversationId).not.toBe('__draft__')
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).includes(`/api/conversations/${sent.conversationId}/sources`))).toBe(true)
+    expect(result.current.chat.active.sources?.[0].root).toBe('C:\\work\\notes')
+  })
+
+  it('replaces a first-query fallback with Novi\'s generated title', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/api/conversations/A/title')) {
+        return { ok: true, json: async () => ({ title: 'Dependency Map' }) } as Response
+      }
+      return { ok: true, json: async () => ({ state: 'idle', version: 0,
+        instance_id: 'test', job_id: null, mode: 'shadow', reason: '', note_ids: [] }) } as Response
+    })
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('please summarize every dependency in this repository'))
+
+    const client = MockNoviClient.latest()
+    act(() => client.emitRun({ type: 'done' }))
+
+    await waitFor(() => expect(findConv(result.current.chat.conversations, 'A')?.title)
+      .toBe('Dependency Map'))
+    expect(fetchMock.mock.calls.some(([input]) =>
+      String(input).endsWith('/api/conversations/A/title'))).toBe(true)
+  })
+
+  it('shows current-protocol chunks before completion, including after context status events', async () => {
+    const { result } = renderChatHook()
+    await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
+    act(() => result.current.chat.setActiveId('A'))
+    act(() => result.current.chat.sendMessage('hello'))
+    const client = MockNoviClient.latest()
+    const emit = (type: string, sequence: number, fields = {}) => act(() => client.emit({
+      type, sequence, runId: 'stream-run', conversationId: 'A', ...fields,
+    } as ServerEvent))
+    emit('run_state', 1, { status: 'running' })
+    emit('status', 2, { text: 'Compacting conversation context…' })
+    emit('status', 3, { text: 'Conversation context compacted.' })
+    emit('message_start', 4, { messageId: 'reply' })
+    emit('token', 5, { messageId: 'reply', text: 'Hello **' })
+    expect(result.current.chat.active.messages.slice(-1)[0]).toMatchObject({
+      content: 'Hello **', streaming: true,
+    })
+    expect(result.current.chat.generating).toBe(true)
+    act(() => result.current.chat.setActiveId('B'))
+    emit('token', 6, { messageId: 'reply', text: 'world**' })
+    expect(findConv(result.current.chat.conversations, 'A')?.messages.slice(-1)[0]).toMatchObject({
+      content: 'Hello **world**', streaming: true,
+    })
+    expect(result.current.chat.active.messages).toHaveLength(0)
+    emit('message_end', 7, { messageId: 'reply' })
+    emit('done', 8)
+    expect(findConv(result.current.chat.conversations, 'A')?.messages.slice(-1)[0]).toMatchObject({
+      content: 'Hello **world**', streaming: false,
+    })
+  })
+
   it('routes streaming tokens to the conversation that started the generation, not the one on screen', async () => {
     const { result } = renderChatHook()
 
@@ -115,8 +248,8 @@ describe('generation ownership', () => {
     expect(result.current.chat.generatingConversationId).toBe('A')
 
     // 3. Receive streaming tokens while B is on screen.
-    act(() => client.emit({ type: 'token', text: 'Hi ' }))
-    act(() => client.emit({ type: 'token', text: 'there' }))
+    act(() => client.emitRun({ type: 'token', text: 'Hi ' }))
+    act(() => client.emitRun({ type: 'token', text: 'there' }))
 
     // 4. Tokens must appear only in A.
     const convAAfter = findConv(result.current.chat.conversations, 'A')
@@ -128,7 +261,7 @@ describe('generation ownership', () => {
 
     // The trace panel for the on-screen conversation (B) must stay empty even
     // though a "thinking" step was pushed for the in-flight generation.
-    act(() => client.emit({ type: 'thinking', text: 'Reasoning...' }))
+    act(() => client.emitRun({ type: 'tool_call', id: 'read-1', tool: 'read_file', args: { path: 'example.txt' } }))
     expect(result.current.chat.inlineSteps).toEqual([])
 
     // Switching back to A reveals the same generation state again — nothing
@@ -137,7 +270,7 @@ describe('generation ownership', () => {
     expect(result.current.chat.generating).toBe(true)
     expect(result.current.chat.inlineSteps.length).toBeGreaterThan(0)
 
-    act(() => client.emit({ type: 'done' }))
+    act(() => client.emitRun({ type: 'done' }))
     expect(result.current.chat.generating).toBe(false)
     expect(result.current.chat.busyReason).toBeNull()
     expect(result.current.chat.generatingConversationId).toBeNull()
@@ -170,7 +303,7 @@ describe('generation ownership', () => {
     act(() => result.current.chat.stop())
     expect(result.current.chat.generating).toBe(true)
 
-    act(() => MockNoviClient.latest().emit({ type: 'cancelled' }))
+    act(() => MockNoviClient.latest().emitRun({ type: 'cancelled' }))
     expect(result.current.chat.generating).toBe(false)
   })
 
@@ -206,7 +339,7 @@ describe('cross-conversation notifications', () => {  it('pushes a notification 
 
     // Switch away before it finishes.
     act(() => result.current.chat.setActiveId('B'))
-    act(() => client.emit({ type: 'done' }))
+    act(() => client.emitRun({ type: 'done' }))
 
     expect(result.current.notifications.notifications).toHaveLength(1)
     expect(result.current.notifications.notifications[0]).toMatchObject({ conversationId: 'A', severity: 'success' })
@@ -214,7 +347,7 @@ describe('cross-conversation notifications', () => {  it('pushes a notification 
     // Now do the same but stay on the conversation that's generating — no notification expected.
     act(() => result.current.chat.setActiveId('B'))
     act(() => result.current.chat.sendMessage('hello from B'))
-    act(() => client.emit({ type: 'done' }))
+    act(() => client.emitRun({ type: 'done' }))
     expect(result.current.notifications.notifications).toHaveLength(1) // unchanged
   })
 })
@@ -300,7 +433,7 @@ describe('agent phase activity (Phase 8G)', () => {
 })
 
 describe('reasoning thought block', () => {
-  it('accumulates reasoning events and attaches the trace to the assistant message on first token', async () => {
+  it('streams reasoning separately and preserves it when answer tokens arrive', async () => {
     const { result } = renderChatHook()
     await waitFor(() => expect(result.current.chat.conversations).toHaveLength(2))
 
@@ -308,17 +441,16 @@ describe('reasoning thought block', () => {
     act(() => result.current.chat.sendMessage('hard problem'))
     const client = MockNoviClient.latest()
 
-    act(() => client.emit({ type: 'reasoning', text: 'step one ' }))
-    act(() => client.emit({ type: 'reasoning', text: 'step two' }))
-    act(() => client.emit({ type: 'token', text: 'Answer' }))
+    act(() => client.emitRun({ type: 'reasoning', text: 'step one ' }))
+    act(() => client.emitRun({ type: 'reasoning', text: 'step two' }))
+    act(() => client.emitRun({ type: 'token', text: 'Answer' }))
 
     const assistant = findConv(result.current.chat.conversations, 'A')?.messages.find((m) => m.role === 'assistant')
     expect(assistant?.content).toBe('Answer')
     expect(assistant?.thought).toBe('step one step two')
-    expect(assistant?.thoughtElapsedMs).toBeGreaterThanOrEqual(0)
 
     // The trace is drained — subsequent tokens don't re-append it.
-    act(() => client.emit({ type: 'token', text: ' extended' }))
+    act(() => client.emitRun({ type: 'token', text: ' extended' }))
     const after = findConv(result.current.chat.conversations, 'A')?.messages.find((m) => m.role === 'assistant')
     expect(after?.content).toBe('Answer extended')
     expect(after?.thought).toBe('step one step two')
@@ -335,16 +467,15 @@ describe('reasoning thought block', () => {
     expect(result.current.chat.thinking).toBe(false)
     expect(result.current.chat.liveThought).toBe('')
 
-    act(() => client.emit({ type: 'reasoning', text: 'step one ' }))
+    act(() => client.emitRun({ type: 'reasoning', text: 'step one ' }))
     expect(result.current.chat.thinking).toBe(true)
     expect(result.current.chat.liveThought).toBe('step one ')
 
-    act(() => client.emit({ type: 'reasoning', text: 'step two' }))
+    act(() => client.emitRun({ type: 'reasoning', text: 'step two' }))
     expect(result.current.chat.liveThought).toBe('step one step two')
 
-    // First token ends the thinking phase: the trace collapses into the
-    // message's thought block and the live state drains.
-    act(() => client.emit({ type: 'token', text: 'Answer' }))
+    // The first answer token ends thinking; the trace stays above the answer.
+    act(() => client.emitRun({ type: 'token', text: 'Answer' }))
     expect(result.current.chat.thinking).toBe(false)
     expect(result.current.chat.liveThought).toBe('')
   })
@@ -355,9 +486,10 @@ describe('reasoning thought block', () => {
 
     act(() => result.current.chat.setActiveId('A'))
     act(() => result.current.chat.sendMessage('simple'))
-    act(() => MockNoviClient.latest().emit({ type: 'token', text: 'Hi' }))
+    act(() => MockNoviClient.latest().emitRun({ type: 'token', text: 'Hi' }))
 
     const assistant = findConv(result.current.chat.conversations, 'A')?.messages.find((m) => m.role === 'assistant')
+    expect(assistant?.content).toBe('Hi')
     expect(assistant?.thought).toBeUndefined()
   })
 })

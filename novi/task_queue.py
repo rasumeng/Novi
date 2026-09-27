@@ -6,7 +6,7 @@ Ownership (Milestone 5 Phase 5E-2C): the queue is a DISPATCH mechanism only.
 The ``Task`` persisted here is queue bookkeeping (id/status/result for the UI);
 it is deliberately NOT the Milestone 5 Task — that lives in the TaskStore and
 owns intent/plan/history. The worker dispatches each queued prompt through the
-ExecutionCoordinator (``novi/services.background.run_background``), which
+RunService (``novi/services.background.run_background``), which
 creates the real TaskStore Task/Plan/Job/ExecutionHistory. ``Task.novi_task_id``
 links the queue record to the resulting TaskStore Task so continuation can
 discover it. No Job is ever created against a fake/orphan task id.
@@ -161,7 +161,7 @@ class TaskQueue:
         """Run a task in a background thread.
 
         runner: callable(task) -> str  -- executes the prompt through the
-        ExecutionCoordinator (dispatch stays here; Task/Job lifecycle lives in
+        RunService (dispatch stays here; Task/Job lifecycle lives in
         the coordinator). The returned text is stored as the queue task result.
         """
         with self._lock:

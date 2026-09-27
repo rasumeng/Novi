@@ -1,15 +1,13 @@
 // Conversation.tsx
 import { useEffect, useRef, useState } from 'react'
-import { Conversation as ConversationType, Attachment, InlineStep, PlanData, AgentStateInfo, ProgressInfo, Project, BackgroundRunInfo, TimelineEntry } from '@/types'
-import { ConnectionState, type MemoryActivityState } from '@/services/novi'
+import { Conversation as ConversationType, Attachment, PlanData, Project, BackgroundRunInfo, TimelineEntry, SourceFolder } from '@/types'
+import { ConnectionState } from '@/services/novi'
 import type { RunProjection } from '@/state/runReducer'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { UserMessage } from './UserMessage'
-import { AssistantResponse, AssistantWorkingIndicator } from './AssistantResponse'
-import { ThinkingTrace } from './ThinkingTrace'
+import { AssistantResponse, ToolTrace, WaitingBubble } from './AssistantResponse'
 import { InlinePlanApproval } from './InlinePlanApproval'
-import { PermissionPrompt } from '@/components/common/PermissionPrompt'
-import { ActivityPanel } from './ActivityPanel'
+import { PermissionPopup } from './PermissionPopup'
 import { ProjectContextBar } from './ProjectContextBar'
 import { PromptInput } from './PromptInput'
 import { LandingPage } from './LandingPage'
@@ -30,17 +28,14 @@ interface Props {
   connection: ConnectionState
   generating: boolean
   busyReason?: string | null
-  inlineSteps: InlineStep[]
-  thinking: boolean
-  liveThought: string
   plan: PlanData | null
   permission: PermissionRequest | null
-  agentState: AgentStateInfo | null
-  progress: ProgressInfo | null
   activeProject: Project | null
   backgroundRuns: BackgroundRunInfo[]
   onSend: (content: string, attachments?: Attachment[], deepResearch?: boolean) => void
   onAttachFolder?: (path: string) => boolean
+  onAttachSource?: (convId: string, path: string) => Promise<SourceFolder>
+  onDetachSource?: (path: string) => Promise<void>
   onStop: () => void
   deepResearch?: boolean
   onToggleDeepResearch?: () => void
@@ -52,9 +47,6 @@ interface Props {
   conversations?: ConversationType[]
   onOpenConversation?: (id: string) => void
   timeline?: TimelineEntry[]
-  activityOpen?: boolean
-  onToggleActivity?: () => void
-  memoryActivity?: MemoryActivityState | null
   runProjection?: RunProjection | null
 }
 
@@ -63,17 +55,14 @@ export function Conversation({
   connection,
   generating,
   busyReason,
-  inlineSteps,
-  thinking,
-  liveThought,
   plan,
   permission,
-  agentState,
-  progress,
   activeProject,
   backgroundRuns,
   onSend,
   onAttachFolder,
+  onAttachSource,
+  onDetachSource,
   onStop,
   deepResearch,
   onToggleDeepResearch,
@@ -85,40 +74,27 @@ export function Conversation({
   conversations,
   onOpenConversation,
   timeline,
-  activityOpen: controlledActivityOpen,
-  onToggleActivity: controlledToggle,
-  memoryActivity,
   runProjection,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [suggestionText, setSuggestionText] = useState('')
-  const [internalActivityOpen, setInternalActivityOpen] = useState(() => {
-    try {
-      const current = localStorage.getItem('novi_activity_panel')
-      if (current !== null) return current === 'true'
-      const legacy = localStorage.getItem('cozmo_activity_panel')
-      if (legacy !== null) {
-        localStorage.setItem('novi_activity_panel', legacy)
-        localStorage.removeItem('cozmo_activity_panel')
-        return legacy === 'true'
-      }
-    } catch {}
-    return false
-  })
 
-  const activityOpen = controlledActivityOpen ?? internalActivityOpen
-  const toggleActivity = controlledToggle ?? (() => {
-    const next = !internalActivityOpen
-    setInternalActivityOpen(next)
-    try { localStorage.setItem('novi_activity_panel', String(next)) } catch {}
-  })
-
+  const followBottom = useRef(true)
   useEffect(() => {
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [conversation.messages])
+    if (el && followBottom.current) el.scrollTop = el.scrollHeight
+  }, [conversation.messages, runProjection])
+  useEffect(() => { followBottom.current = true }, [conversation.id])
 
-  const hasStreamingAnswer = conversation.messages.some(m => m.role === 'assistant' && m.streaming)
+  const currentRun = runProjection && ['queued', 'running', 'awaiting_permission'].includes(runProjection.status)
+    ? runProjection : null
+  const hasStarted = !!currentRun && (currentRun.toolOrder.length > 0 || !!currentRun.statusText ||
+    Object.values(currentRun.messages).some(message => !!message.content || !!message.thought))
+  const waiting = generating && !hasStarted && !permission
+  const traces = runProjection?.toolOrder.map(id => runProjection.tools[id]) ?? []
+  const lastUserId = conversation.messages.filter(message => message.role === 'user').slice(-1)[0]?.id
+  const tracesAfter = (id: string | null) => traces.filter(tool => (tool.afterMessageId ?? null) === id)
+
   const isEmpty = conversation.messages.length === 0
 
   // Single composer instance — placed inline (centered, under the greeting)
@@ -134,6 +110,10 @@ export function Conversation({
         disabled={connection !== 'open' || !!busyReason}
         onSend={(content, attachments) => { setSuggestionText(''); onSend(content, attachments, deepResearch) }}
         onAttachFolder={onAttachFolder}
+        onAttachSource={onAttachSource}
+        onDetachSource={onDetachSource}
+        attachedSources={conversation.sources || []}
+        conversationId={conversation.id}
         onStop={onStop}
         onOpenSettings={onOpenSettings}
         suggestion={suggestionText}
@@ -148,7 +128,10 @@ export function Conversation({
     <main className="flex-1 flex flex-col min-w-0 bg-base-950">
       <ProjectContextBar project={activeProject} />
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={() => {
+        const el = scrollRef.current
+        if (el) followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+      }}>
         {isEmpty ? (
           // Centered "talking to Novi" moment: greeting → composer → quiet
           // context. Composer lives here, not in the footer, while empty.
@@ -177,23 +160,32 @@ export function Conversation({
                   ) : (
                     <AssistantResponse message={m} />
                   )}
+                  <div className="space-y-2">
+                    {(m.id === lastUserId ? tracesAfter(null) : tracesAfter(m.id)).map(tool => (
+                      <ToolTrace key={tool.id} tool={tool} />
+                    ))}
+                  </div>
                 </div>
               )
             })}
             {generating && (
               <div className="space-y-3" aria-live="polite">
-                {!hasStreamingAnswer && (
-                  thinking ? <ThinkingTrace text={liveThought} /> : <AssistantWorkingIndicator />
+                {waiting && <WaitingBubble />}
+                {currentRun?.statusText && !currentRun.messageOrder.length && !traces.length && (
+                  <p className="text-sm text-base-500">{currentRun.statusText}</p>
                 )}
                 {plan && (
                   <InlinePlanApproval plan={plan} onApprove={onApprovePlan} onReject={onRejectPlan} />
                 )}
-                {permission && (
-                  <PermissionPrompt request={permission}
-                    onAnswer={(allowed) => onAnswerPermission(allowed, permission.id)}
-                    onCancel={onStop} />
-                )}
               </div>
+            )}
+            {permission && (
+              <PermissionPopup
+                request={permission}
+                onAllow={() => onAnswerPermission(true, permission.id)}
+                onDeny={() => onAnswerPermission(false, permission.id)}
+                onCancel={onStop}
+              />
             )}
             {runProjection && ['blocked', 'failed', 'cancelled', 'interrupted'].includes(runProjection.status) && (
               <div role="status" className={`rounded-lg border px-3 py-2 text-[12px] ${
@@ -202,7 +194,7 @@ export function Conversation({
                   : 'border-red-500/25 bg-red-500/5 text-red-300'
               }`}>
                 <span className="font-medium capitalize">{runProjection.status.replace('_', ' ')}</span>
-                {runProjection.error && <span className="text-base-400"> — {runProjection.error}</span>}
+                {runProjection.error && <span className="text-base-500"> — {runProjection.error}</span>}
               </div>
             )}
           </div>
@@ -218,16 +210,6 @@ export function Conversation({
         </div>
       )}
     </main>
-      <ActivityPanel
-        open={activityOpen}
-        onToggle={toggleActivity}
-        generating={generating}
-        inlineSteps={inlineSteps}
-        agentState={agentState}
-        progress={progress}
-        activeProject={activeProject}
-        memoryActivity={memoryActivity ?? null}
-      />
     </div>
   )
 }

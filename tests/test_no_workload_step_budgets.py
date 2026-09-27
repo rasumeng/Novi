@@ -34,7 +34,7 @@ def test_no_workload_specific_max_steps():
     assert "safety rail" in lower, "complexity.py must contain safety rail comment"
 
     # Runtime: scan for per-workload step budgets
-    rt = pathlib.Path("novi/runtime/runtime.py").read_text(encoding="utf-8")
+    rt = pathlib.Path("novi/runtime/agent_loop.py").read_text(encoding="utf-8")
     rt_lower = rt.lower()
     # No workload.*max_steps assignment pattern - with re.S, limited distance
     assert not re.search(r"workload.{0,80}max_steps|max_steps.{0,80}workload", rt_lower, re.S), \
@@ -44,9 +44,9 @@ def test_no_workload_specific_max_steps():
         "per-workload max_steps mapping forbidden"
     # Dict mapping irrespective of workload keyword
     assert not re.search(r'"general"\s*:\s*\d+|"research"\s*:\s*\d+', rt, re.S), \
-        "per-workload max_steps dict mapping forbidden in runtime.py"
+        "per-workload max_steps dict mapping forbidden in agent_loop.py"
     assert not re.search(r"'general'\s*:\s*\d+|'research'\s*:\s*\d+", rt, re.S), \
-        "per-workload max_steps dict mapping forbidden in runtime.py"
+        "per-workload max_steps dict mapping forbidden in agent_loop.py"
     # Also forbid quoted dict budget
     assert not re.search(r'"general"\s*:\s*8|"research"\s*:\s*12', rt, re.S), \
         "per-workload max_steps dict mapping forbidden in runtime.py"
@@ -54,7 +54,3 @@ def test_no_workload_specific_max_steps():
     assert "safety rail" in rt_lower, "runtime.py must contain 'safety rail' comment"
     assert "not completion" in rt_lower or "not completion boundary" in rt_lower, \
         "runtime.py must contain safety rail completion phrase"
-
-    # Also check react_attempt safety rail
-    ra = pathlib.Path("novi/runtime/react_attempt.py").read_text(encoding="utf-8")
-    assert "safety rail" in ra.lower(), "react_attempt.py must contain safety rail comment"

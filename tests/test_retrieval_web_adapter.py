@@ -16,10 +16,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
+from novi.tools.search_pipeline import SearchResult
 from novi.runtime.retrieval import RetrievalExecutor
 from novi.runtime.retrieval_budget import ContextAllocation
 from novi.runtime.sources import KnowledgeRetrievalSource, WebRetrievalSource
-from novi.runtime.trace import ExecutionTrace
 
 
 class _FakeCollector:
@@ -56,7 +56,7 @@ def _knowledge_result(text="knowledge chunk", score=0.95, path="guides/guide.md"
 def _sufficient_bundle(text="result text", quality=RetrievalQuality.SUFFICIENT):
     return EvidenceBundle(
         query="q",
-        results=[{"title": "x", "url": "https://example.com/x"}],
+        results=[SearchResult(title="x", url="https://example.com/x", snippet=text)],
         merged_text=text,
         source_count=1,
         quality=quality,
@@ -105,29 +105,24 @@ class TestExecuteSearchWebRouting:
         assert bundle.merged_text == "test query result"
         assert bundle.quality == RetrievalQuality.SUFFICIENT
 
-    def test_failed_transition_and_trace_event(self):
+    def test_failed_transition_and_error_state(self):
         exe = RetrievalExecutor(debug_trace=True)
         collector = _FakeCollector([
             EvidenceBundle(query="q", error="search api 400",
                            quality=RetrievalQuality.FAILED),
         ])
         exe = RetrievalExecutor(debug_trace=True, web_source=WebRetrievalSource(collector))
-        trace = ExecutionTrace(user_input="q")
-        bundle = exe.execute_search("q", trace=trace)
+        bundle = exe.execute_search("q")
         assert bundle.quality == RetrievalQuality.FAILED
         assert bundle.error == "search api 400"
-        assert trace.debug_events[0].data["status"] == "failed"
-        assert trace.debug_events[0].data["error"] == "search api 400"
 
-    def test_empty_transition_and_trace_event(self):
+    def test_empty_transition_and_error_state(self):
         collector = _FakeCollector([
             EvidenceBundle(query="q", quality=RetrievalQuality.EMPTY),
         ])
         exe = RetrievalExecutor(debug_trace=True, web_source=WebRetrievalSource(collector))
-        trace = ExecutionTrace(user_input="q")
-        bundle = exe.execute_search("q", trace=trace)
+        bundle = exe.execute_search("q")
         assert bundle.quality == RetrievalQuality.EMPTY
-        assert trace.debug_events[0].data["status"] == "empty"
 
     def test_low_relevance_reformulation_retry_via_adapter(self):
         collector = _FakeCollector([

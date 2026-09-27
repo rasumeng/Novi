@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "novi"
 version = "0.2.0"
-description = "Fully local AI agent powered by Ollama — specialist model routing, ChromaDB memory, WebUI, and tools"
+description = "Local-first AI agent with provider-neutral inference, LanceDB memory, WebUI, and tools"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -66,3 +66,6 @@ novi = [
 
 [project.scripts]
 novi = "novi.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

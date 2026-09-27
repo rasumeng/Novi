@@ -52,7 +52,7 @@ class JobLifecycle:
         return self._active.get(task_id)
 
     def register(self, task_id: str, job_id: str) -> None:
-        """Pre-register a Job created by an ExecutionCoordinator.
+        """Pre-register a Job created by a RunService projection.
 
         Milestone 5 Phase 5E-1 ownership guard: when the coordinator has
         already created + started the Job for this task (fresh submit or a
@@ -89,7 +89,7 @@ class JobLifecycle:
         if not task_id:
             return
         if task_id in self._active:
-            # ExecutionCoordinator pre-created + started this Job (5E-1).
+            # RunService pre-created + started this Job.
             # Observe it; never create a duplicate on plan.started.
             return
 

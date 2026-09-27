@@ -26,6 +26,7 @@ class ToolDispatcher(Protocol):
 
 @dataclass(frozen=True)
 class AgentLoopLimits:
+    """Global safety rails, not workload routing and not completion boundaries."""
     max_model_turns: int = 20
     max_tool_calls: int = 100
     max_progress_messages: int = 20
@@ -53,10 +54,10 @@ class AgentLoop:
         self._compactor = compactor
         self._context_inputs = context_inputs
         self._skill_service = skill_service
-        self._event_sink: Callable[[RunEvent], None] | None = None
+        self._event_sink: Callable[[RunEvent, RunState], None] | None = None
 
-    def set_event_sink(self, sink: Callable[[RunEvent], None] | None) -> None:
-        """Observe events synchronously as the loop emits them."""
+    def set_event_sink(self, sink: Callable[[RunEvent, RunState], None] | None) -> None:
+        """Persist each event with its authoritative snapshot before delivery."""
         self._event_sink = sink
 
     def run(self, initial: RunState) -> AgentLoopResult:
@@ -74,7 +75,7 @@ class AgentLoop:
                 run_id=state.id, conversation_id=state.conversation_id,
                 type=kind, payload=payload or {}))
             if self._event_sink is not None:
-                self._event_sink(events[-1])
+                self._event_sink(events[-1], state)
 
         def append_message(message: TranscriptMessage) -> None:
             nonlocal state
@@ -143,38 +144,74 @@ class AgentLoop:
                         "removed_message_ids": list(compacted.removed_message_ids),
                     })
             try:
-                chunks: list[ModelTurn] = []
-                for chunk in self._provider.stream(state.transcript):
+                message_id = f"msg-{uuid4().hex}"
+                message_started = False
+                accumulated_text = ""
+                final_turn: ModelTurn | None = None
+
+                for turn in self._provider.stream(state.transcript):
                     if self._cancelled():
                         return terminal(RunStatus.CANCELLED, "cancelled_during_provider", RunEventType.RUN_CANCELLED)
-                    if not isinstance(chunk, ModelTurn):
+                    if not isinstance(turn, ModelTurn):
                         raise TypeError("provider emitted an unsupported turn chunk")
-                    chunks.append(chunk)
+
+                    # Emit MESSAGE_STARTED on first chunk with text
+                    if (turn.text or turn.reasoning_delta) and not message_started:
+                        emit(RunEventType.MESSAGE_STARTED, {"message_id": message_id})
+                        message_started = True
+
+                    if turn.reasoning_delta:
+                        emit(RunEventType.MESSAGE_REASONING, {
+                            "message_id": message_id, "content": turn.reasoning_delta})
+
+                    # Emit MESSAGE_DELTA for incremental text
+                    if turn.text and turn.text != accumulated_text:
+                        new_text = turn.text[len(accumulated_text):]
+                        accumulated_text = turn.text
+                        emit(RunEventType.MESSAGE_DELTA, {"message_id": message_id, "content": new_text})
+
+                    # Track the final turn for tool calls and usage
+                    if turn.is_complete:
+                        final_turn = turn
+                        break
+
+                if final_turn is None:
+                    return terminal(RunStatus.FAILED, "no_complete_turn_received", RunEventType.RUN_FAILED)
+
+                # Update state with usage from final turn
+                state = replace(state, model_turns=state.model_turns + 1,
+                    input_tokens=_add_usage(state.input_tokens, final_turn.input_tokens),
+                    output_tokens=_add_usage(state.output_tokens, final_turn.output_tokens))
+
+                if not final_turn.text.strip() and not final_turn.calls:
+                    return terminal(RunStatus.FAILED, "empty_model_turn", RunEventType.RUN_FAILED)
+                if not _valid_calls(final_turn.calls):
+                    return terminal(RunStatus.FAILED, "malformed_tool_call", RunEventType.RUN_FAILED)
+
+                call_blocks = tuple(ContentBlock(type=ContentBlockType.TOOL_CALL,
+                    call_id=call.id, tool_name=call.name, arguments=call.arguments) for call in final_turn.calls)
+
+                # Always append assistant message to transcript (for both tool calls and natural completion)
+                append_message(TranscriptMessage(id=message_id,
+                    role=MessageRole.ASSISTANT, visible_to_user=bool(final_turn.text.strip()),
+                    source="model", trust="untrusted",
+                    blocks=((ContentBlock(type=ContentBlockType.TEXT, text=final_turn.text),)
+                            if final_turn.text.strip() else ()) + call_blocks))
+
+                # Emit MESSAGE_COMPLETED with full text (only if we started a message)
+                if message_started:
+                    emit(RunEventType.MESSAGE_COMPLETED, {"message_id": message_id, "content": accumulated_text})
+
+                if not final_turn.calls:
+                    # Natural completion via text response – no tool needed.
+                    # This covers both conversational and task runs.
+                    # Also covers: tool use followed by text response (e.g.,
+                    # web search failed, model explains failure).
+                    return terminal(RunStatus.COMPLETED, "natural_completion", RunEventType.RUN_COMPLETED)
             except Exception as exc:
                 return terminal(RunStatus.FAILED, f"provider_error: {exc}", RunEventType.RUN_FAILED)
-            turn = _combine_turn(chunks)
-            state = replace(state, model_turns=state.model_turns + 1,
-                input_tokens=_add_usage(state.input_tokens, turn.input_tokens),
-                output_tokens=_add_usage(state.output_tokens, turn.output_tokens))
-            if not turn.text.strip() and not turn.calls:
-                return terminal(RunStatus.FAILED, "empty_model_turn", RunEventType.RUN_FAILED)
-            if not _valid_calls(turn.calls):
-                return terminal(RunStatus.FAILED, "malformed_tool_call", RunEventType.RUN_FAILED)
 
-            call_blocks = tuple(ContentBlock(type=ContentBlockType.TOOL_CALL,
-                call_id=call.id, tool_name=call.name, arguments=call.arguments) for call in turn.calls)
-            if turn.calls:
-                append_message(TranscriptMessage(id=f"assistant-{uuid4().hex}",
-                    role=MessageRole.ASSISTANT, visible_to_user=bool(turn.text.strip()),
-                    source="model", trust="untrusted",
-                    blocks=((ContentBlock(type=ContentBlockType.TEXT, text=turn.text),)
-                            if turn.text.strip() else ()) + call_blocks))
-            if turn.text.strip():
-                public_message(turn.text.strip(), record=not turn.calls)
-            if not turn.calls:
-                return terminal(RunStatus.FAILED, "missing_finish_task", RunEventType.RUN_FAILED)
-
-            has_external = any(call.name not in {"report_progress", "activate_skill", "finish_task"}
+            has_external = any(call.name not in {"report_progress", "activate_skill"}
                                for call in turn.calls)
             cancelled_after_effect = False
             for index, call in enumerate(turn.calls):
@@ -185,6 +222,8 @@ class AgentLoop:
                     emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
                     cancelled_after_effect = True
                     continue
+                # Emit thinking event for the tool call
+                emit(RunEventType.THINKING, {"text": f"Calling {call.name}…"})
                 emit(RunEventType.TOOL_REQUESTED, {"call_id": call.id, "name": call.name,
                                                    "arguments": call.arguments})
                 if call.name == "report_progress":
@@ -201,31 +240,10 @@ class AgentLoop:
                                             output=message.strip())
                     tool_result_message(result)
                     emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
+                    emit(RunEventType.THINKING, {"text": f"{call.name} completed"})
                     if result.status is ToolResultStatus.SUCCEEDED:
                         public_message(result.output)
                     continue
-                if call.name == "finish_task":
-                    summary = call.arguments.get("summary")
-                    outcome = call.arguments.get("outcome")
-                    if has_external:
-                        result = ToolResult(call_id=call.id, status=ToolResultStatus.FAILED,
-                            error="cannot finish in a batch containing external calls")
-                        tool_result_message(result)
-                        emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
-                        continue
-                    if not isinstance(summary, str) or not summary.strip() or outcome not in {"completed", "blocked"}:
-                        result = ToolResult(call_id=call.id, status=ToolResultStatus.FAILED,
-                            error="finish_task requires summary and outcome completed|blocked")
-                        tool_result_message(result)
-                        emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
-                        continue
-                    result = ToolResult(call_id=call.id, status=ToolResultStatus.SUCCEEDED, output=summary.strip())
-                    tool_result_message(result)
-                    emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
-                    public_message(summary.strip())
-                    if outcome == "completed":
-                        return terminal(RunStatus.COMPLETED, "finish_task", RunEventType.RUN_COMPLETED)
-                    return terminal(RunStatus.BLOCKED, "finish_task_blocked", RunEventType.RUN_BLOCKED)
                 if call.name == "activate_skill":
                     name = call.arguments.get("name")
                     try:
@@ -249,7 +267,10 @@ class AgentLoop:
                                             error=f"skill activation failed: {exc}")
                     tool_result_message(result)
                     emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
+                    emit(RunEventType.THINKING, {"text": f"Skill '{name}' activated"})
                     continue
+                # External tool calls (file ops, web search, etc.)
+                emit(RunEventType.STATUS, {"text": f"Executing {call.name}…"})
                 if state.tool_calls >= self._limits.max_tool_calls:
                     result = ToolResult(call_id=call.id, status=ToolResultStatus.CANCELLED,
                                         error="tool call budget exhausted")
@@ -271,6 +292,7 @@ class AgentLoop:
                             "expires_at": request.expires_at.isoformat(),
                             "proposed_diff": request.proposed_diff,
                         })
+                        emit(RunEventType.THINKING, {"text": f"Permission required for {call.name}"})
                         return AgentLoopResult(state=state, events=tuple(events))
                     if authorization is not None and authorization.kind.value in {"denied", "blocked"}:
                         result = ToolResult(call_id=call.id, status=ToolResultStatus.DENIED,
@@ -294,6 +316,13 @@ class AgentLoop:
                     state = replace(state, tool_calls=state.tool_calls + 1)
                 tool_result_message(result)
                 emit(RunEventType.TOOL_COMPLETED, _result_payload(call, result))
+                # Emit thinking event for tool completion
+                if result.status is ToolResultStatus.SUCCEEDED:
+                    emit(RunEventType.THINKING, {"text": f"{call.name} completed"})
+                elif result.status is ToolResultStatus.FAILED:
+                    emit(RunEventType.THINKING, {"text": f"{call.name} failed: {result.error}"})
+                elif result.status is ToolResultStatus.DENIED:
+                    emit(RunEventType.THINKING, {"text": f"{call.name} denied"})
                 if self._cancelled():
                     cancelled_after_effect = True
             if cancelled_after_effect:
@@ -321,7 +350,7 @@ class AgentLoop:
                 run_id=state.id, conversation_id=state.conversation_id,
                 type=kind, payload=payload))
             if self._event_sink is not None:
-                self._event_sink(events[-1])
+                self._event_sink(events[-1], state)
 
         for call in calls:
             authorize = getattr(self._dispatcher, "authorize", None)
@@ -357,16 +386,6 @@ class AgentLoop:
         offset = len(events)
         events.extend(replace(event, sequence=event.sequence + offset) for event in continued.events)
         return AgentLoopResult(continued.state, tuple(events))
-
-
-def _combine_turn(chunks: list[ModelTurn]) -> ModelTurn:
-    if not chunks:
-        return ModelTurn()
-    return ModelTurn(text="".join(chunk.text for chunk in chunks),
-        calls=tuple(call for chunk in chunks for call in chunk.calls),
-        finish_reason=next((chunk.finish_reason for chunk in reversed(chunks) if chunk.finish_reason), None),
-        input_tokens=next((chunk.input_tokens for chunk in reversed(chunks) if chunk.input_tokens is not None), None),
-        output_tokens=next((chunk.output_tokens for chunk in reversed(chunks) if chunk.output_tokens is not None), None))
 
 
 def _valid_calls(calls: tuple[ToolCall, ...]) -> bool:

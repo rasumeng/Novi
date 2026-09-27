@@ -67,7 +67,7 @@ vi.mock('@/hooks/useFrameworkSettings', () => ({
 
 import { SettingsModal } from './SettingsModal'
 
-const NAV = ['General', 'Models', 'Memory', 'Skills', 'Connectors', 'Permissions']
+const NAV = ['General', 'Models', 'Memory', 'Connectors', 'Permissions']
 // Developer asserted separately per Task 7
 
 function navButtonLabels(): string[] {
@@ -81,7 +81,7 @@ describe('SettingsModal navigation (M4 IA)', () => {
     frameworkMock.installs = {}
   })
 
-  it('exposes all six beta navigation destinations', () => {
+  it('exposes all five navigation destinations', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
     const labels = navButtonLabels()
     for (const label of NAV) {
@@ -112,14 +112,22 @@ describe('SettingsModal navigation (M4 IA)', () => {
     expect(screen.getByText('Model library')).toBeTruthy()
   })
 
-  it('has exactly six beta destinations (Developer asserted separately per Task 7)', () => {
+  it('has exactly five destinations (Developer asserted separately)', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
     // Leave General first so its content-area quick-link buttons don't get
     // counted alongside the sidebar nav buttons.
     fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
     const nav = navButtonLabels().filter((l) => NAV.includes(l))
-    expect(nav).toHaveLength(6)
-    expect(new Set(nav).size).toBe(6)
+    expect(nav).toHaveLength(5)
+    expect(new Set(nav).size).toBe(5)
+  })
+
+  it('hides Skills and opens General for a saved Skills destination', () => {
+    render(<SettingsModal open initialSection="skills" onClose={vi.fn()} />)
+    expect(navButtonLabels()).not.toContain('Skills')
+    expect(screen.getByText('Novi is running')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Search settings'), { target: { value: 'skills' } })
+    expect(navButtonLabels()).not.toContain('Skills')
   })
 
   it('keeps Permissions as a destination distinct from Connectors', () => {

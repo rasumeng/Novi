@@ -18,7 +18,6 @@ from novi.runtime.retrieval import (
     RetrievalRecoveryState,
 )
 from novi.runtime.retrieval_policy import RetrievalPlan, RetrievalStrategy
-from novi.runtime.trace import ExecutionTrace
 
 
 def _plan(strategy: RetrievalStrategy) -> RetrievalPlan:
@@ -46,7 +45,6 @@ def _analysis(intent="conversation", strategy=RetrievalStrategy.NONE,
 def _ctx(quality="", strategy=RetrievalStrategy.NONE, needs_grounding=False,
          has_plan=True, intent="conversation"):
     ctx = ExecutionContext(user_input="question")
-    ctx.trace = ExecutionTrace(user_input="question")
     ctx.analysis = _analysis(intent=intent, strategy=strategy,
                              needs_grounding=needs_grounding, has_plan=has_plan)
     ctx.grounding_quality = quality
@@ -192,7 +190,7 @@ class TestRecommendAfterTool:
 
 
 class TestCommitRecovery:
-    def test_records_state_and_trace(self):
+    def test_records_recovery_state(self):
         exe = RetrievalExecutor()
         ctx = _ctx()
         d = RecoveryDecision(action=RecoveryAction.UPGRADE_SEARCH,
@@ -204,8 +202,6 @@ class TestCommitRecovery:
         assert state.recommendation == RecoveryAction.UPGRADE_SEARCH
         assert state.reason == "plan needs web"
         assert state.retry_available is False
-        assert ctx.trace.recovery_attempts == 1
-        assert ctx.trace.recovery_action == "upgrade_search"
 
     def test_commit_blocks_further_upgrades(self):
         exe = RetrievalExecutor()
@@ -228,117 +224,3 @@ class TestExecuteInitializesState:
         ctx = _ctx(quality="weak")
         list(exe.execute(ctx, "question"))
         assert ctx.retrieval_recovery.quality == "weak"
-
-
-class _ScriptedRunnable:
-    """Returns a fixed sequence of messages from runnable.stream()."""
-
-    def __init__(self, responses):
-        self._responses = list(responses)
-        self._i = 0
-
-    def stream(self, msgs):
-        idx = min(self._i, len(self._responses) - 1)
-        self._i += 1
-        yield self._responses[idx]
-
-
-def _runtime(model_service=None, registry=None):
-    from unittest.mock import MagicMock
-
-    from novi.runtime.runtime import NoviRuntime
-    from novi.runtime.tool_registry import ToolRegistry
-
-    reg = registry
-    if reg is None:
-        from novi.tools import TOOL_REGISTRY
-
-        reg = ToolRegistry()
-        for name, fn in TOOL_REGISTRY.items():
-            reg.register(name, fn)
-    return NoviRuntime(model_service=model_service or MagicMock(), registry=reg)
-
-
-class TestRuntimeIntegration:
-    def test_midloop_upgrade_when_model_answers_without_tools(self):
-        """Site 2: web plan + web tools already bound + poor quality →
-        executor recommends upgrade, runtime rebinds tools, trace records it."""
-        from unittest.mock import MagicMock, patch
-
-        from novi.runtime.evidence import EvidenceBundle
-        from novi.runtime.runtime import NoviRuntime
-
-        rt = _runtime()
-        ctx = ExecutionContext(user_input="question")
-        ctx.trace = ExecutionTrace(user_input="question")
-        ctx.model_name = "test-model"
-        ctx.allowed_tools = ["web_search", "web_fetch", "read_file"]
-        ctx.analysis = _analysis(strategy=RetrievalStrategy.WEB_ONLY)
-
-        empty = EvidenceBundle(query="question", results=[], source_count=0,
-                               quality=RetrievalQuality.EMPTY)
-        with patch("novi.runtime.evidence.EvidenceCollector.collect", return_value=empty):
-            events = list(rt.run_stream(context=ctx))
-
-        assert ctx.trace.recovery_attempts == 1
-        assert ctx.trace.recovery_action == "upgrade_search"
-        assert ctx.retrieval_recovery.attempts_used == 1
-        assert ctx.retrieval_recovery.action == "upgrade_search"
-        assert "web_search" in ctx.allowed_tools
-        assert any(k == "token" for k, *_ in events)
-
-    def test_posttool_escalation_when_knowledge_empty(self):
-        """Site 3: search_knowledge returns empty in-loop → executor escalates,
-        runtime binds web tools, model answers afterwards."""
-        from unittest.mock import MagicMock, patch
-
-        from langchain_core.messages import AIMessage
-
-        rt = _runtime()
-        rt.tool_executor._perm_mode = "bypass"
-
-        ai1 = AIMessage(content='{"name": "search_knowledge", "args": {"query": "q"}}')
-        ai2 = AIMessage(content="Here is my answer.")
-        rt.model_service.bind_model.return_value = _ScriptedRunnable([ai1, ai2])
-
-        ctx = ExecutionContext(user_input="question")
-        ctx.trace = ExecutionTrace(user_input="question")
-        ctx.model_name = "test-model"
-        ctx.analysis = _analysis(strategy=RetrievalStrategy.NONE)
-
-        class _EmptyIndex:
-            def search(self, query, k=5, rerank=True):
-                return []
-
-        with patch("novi.tools.file_ops.get_knowledge_index", return_value=_EmptyIndex()):
-            events = list(rt.run_stream(context=ctx))
-
-        assert ctx.trace.recovery_attempts == 1
-        assert ctx.trace.recovery_action == "post_tool_escalation"
-        assert ctx.retrieval_recovery.action == "post_tool_escalation"
-        finals = "".join(str(e[1]) for e in events if e[0] == "token")
-        assert "answer" in finals
-
-    def test_preloop_plan_upgrade_grants_search_tools(self):
-        """Site 1: web plan + web tools missing → tools granted before loop."""
-        from unittest.mock import MagicMock, patch
-
-        from novi.runtime.evidence import EvidenceBundle
-
-        rt = _runtime()
-        ctx = ExecutionContext(user_input="question")
-        ctx.trace = ExecutionTrace(user_input="question")
-        ctx.model_name = "test-model"
-        ctx.allowed_tools = ["read_file"]
-        ctx.analysis = _analysis(strategy=RetrievalStrategy.WEB_ONLY)
-
-        empty = EvidenceBundle(query="question", results=[], source_count=0,
-                               quality=RetrievalQuality.EMPTY)
-        with patch("novi.runtime.evidence.EvidenceCollector.collect", return_value=empty):
-            events = list(rt.run_stream(context=ctx))
-
-        assert "web_search" in ctx.allowed_tools
-        assert "web_fetch" in ctx.allowed_tools
-        assert ctx.trace.recovery_attempts == 1
-        assert ctx.trace.recovery_action == "upgrade_search"
-        assert ctx.retrieval_recovery.attempts_used == 1

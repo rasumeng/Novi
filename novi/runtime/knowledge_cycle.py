@@ -71,7 +71,6 @@ class KnowledgeCycle:
     def prepare(self, ctx, user_input):
         """Returns True when this cycle owns retrieval for this turn."""
         from .retrieval import _memory_enabled
-        from .trace import TraceAction
         request = classify_request(user_input)
         ctx.metadata['knowledge_request'] = asdict(request)
         session = SearchSession(self.authorize, self.stop, request.offline)
@@ -146,23 +145,23 @@ class KnowledgeCycle:
                 ctx.grounding_status = 'failed'
                 ctx.search_error = 'Current information could not be verified offline' if request.offline else 'Insufficient evidence'
             ctx.metadata['knowledge_origin'] = 'memory' if valid and sufficient else 'model'
-            self.executor._trace_event(TraceAction.RETRIEVING, 'knowledge',
-                'Using recalled knowledge' if valid and sufficient else 'Knowledge assessment completed', trace=ctx.trace)
+            self.executor._progress_event('knowledge',
+                'Using recalled knowledge' if valid and sufficient else 'Knowledge assessment completed')
             return True
         query = str(decision.get('query', '')).strip()[:500]
         if not query:
             ctx.grounding_status, ctx.search_error = 'failed', 'No safe public query was resolved'
             return True
-        self.executor._trace_event(TraceAction.RETRIEVING, 'search', 'Searching for missing or current information', trace=ctx.trace)
+        self.executor._progress_event('search', 'Searching for missing or current information')
         try:
             with session.activate():
-                bundle = self.executor.execute_search(query, trace=ctx.trace)
+                bundle = self.executor.execute_search(query)
         except (PermissionError, InterruptedError, TimeoutError) as exc:
             ctx.grounding_status = 'failed'
             ctx.grounding_quality = 'failed'
             ctx.search_error = str(exc)
             ctx.metadata['knowledge_origin'] = 'unavailable'
-            self.executor._trace_event(TraceAction.RETRIEVING, 'search', str(exc), trace=ctx.trace)
+            self.executor._progress_event('search', str(exc))
             return True
         self.executor._apply_web_evidence(ctx, bundle)
         self.executor._finalize_grounding(ctx, bundle)

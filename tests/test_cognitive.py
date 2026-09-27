@@ -17,16 +17,14 @@ import pytest
 class TestMemoryContextAssembly:
     @pytest.fixture
     def runtime(self):
-        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.retrieval import RetrievalExecutor
 
-        rt = NoviRuntime(model_service=MagicMock())
-        return rt
+        return RetrievalExecutor()
 
     def _ctx(self, user_input="hello", needs_memory=True, intent="conversation"):
         import types
         from novi.runtime.execution_context import ExecutionContext
         from novi.runtime.retrieval_policy import RetrievalPlan, SourceType
-        from novi.runtime.trace import ExecutionTrace
 
         plan = RetrievalPlan()
         if needs_memory:
@@ -35,7 +33,6 @@ class TestMemoryContextAssembly:
             plan.sources.append(SourceType.PROJECT)
 
         ctx = ExecutionContext(user_input=user_input)
-        ctx.trace = ExecutionTrace(user_input=user_input)
         ctx.analysis = types.SimpleNamespace(
             intent=types.SimpleNamespace(value=intent),
             capabilities=["conversation"],
@@ -54,21 +51,21 @@ class TestMemoryContextAssembly:
     def test_query_memory_empty_when_no_memory(self, runtime):
         """Without a memory manager, executor leaves memory_context empty."""
         ctx = self._ctx()
-        list(runtime.retrieval_executor.execute(ctx, "hello"))
+        list(runtime.execute(ctx, "hello"))
         assert ctx.memory_context == ""
 
     def test_query_memory_returns_formatted(self, runtime):
         """With memory manager, executor populates formatted sections."""
-        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.retrieval import RetrievalExecutor
 
         mock_memory = MagicMock()
         mock_memory.query.return_value = [
             {"text": "User likes Python", "distance": 0.2,
              "metadata": {"type": "preference", "frequency": 3, "timestamp": ""}},
         ]
-        rt = NoviRuntime(model_service=MagicMock(), memory=mock_memory)
+        rt = RetrievalExecutor(memory=mock_memory)
         ctx = self._ctx()
-        list(rt.retrieval_executor.execute(ctx, "hello"))
+        list(rt.execute(ctx, "hello"))
         assert "Preference" in ctx.memory_context or "preference" in ctx.memory_context
         assert "likes Python" in ctx.memory_context
 
@@ -96,20 +93,20 @@ class TestMemoryContextAssembly:
 
     def test_memory_filtered_by_intent(self, runtime):
         """Executor filters memory by types matching intent."""
-        from novi.runtime.runtime import NoviRuntime
+        from novi.runtime.retrieval import RetrievalExecutor
 
         mock_memory = MagicMock()
-        rt = NoviRuntime(model_service=MagicMock(), memory=mock_memory)
+        rt = RetrievalExecutor(memory=mock_memory)
         ctx = self._ctx(user_input="refactor main.py", intent="coding")
-        list(rt.retrieval_executor.execute(ctx, "refactor main.py"))
+        list(rt.execute(ctx, "refactor main.py"))
         call_kwargs = mock_memory.query.call_args[1]
         assert "memory_types" in call_kwargs
         assert call_kwargs["memory_types"] == ["project", "learning", "reference"]
 
-    def test_runtime_no_direct_memory_retrieval(self, runtime):
-        """Legacy memory retrieval methods removed from runtime."""
+    def test_executor_uses_source_adapters_for_memory(self, runtime):
+        """Memory retrieval stays behind the executor's source adapters."""
         assert not hasattr(runtime, "_query_memory")
-        assert not hasattr(runtime, "_rank_memories")
+        assert callable(runtime._rank_memories)
 
 
 # ── Priority 2: ModelSelector strict contract ───────────────────────────────

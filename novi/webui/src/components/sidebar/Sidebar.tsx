@@ -1,10 +1,12 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Folder, FolderOpen, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown, Loader2 } from 'lucide-react'
+import { Plus, Folder, FolderOpen, FolderKanban, ChevronRight, ChevronDown, MoreHorizontal, Pin, PinOff, Pencil, Trash2, Settings, LayoutGrid, ChevronsUpDown, Loader2, House } from 'lucide-react'
 import { Conversation, Project } from '@/types'
 import { SidebarItem } from './SidebarItem'
 import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
 import { ProjectForm } from '@/components/projects/ProjectForm'
+import { ProjectSettingsModal } from '@/components/projects/ProjectSettingsModal'
+import { useConfirm } from '@/hooks/useConfirm'
 import type { BootState } from '@/hooks/useBoot'
 
 interface Props {
@@ -19,7 +21,7 @@ interface Props {
   onDelete: (id: string) => void
   projects?: Project[]
   activeProjectId?: string | null
-  onSelectProject?: (id: string) => void
+  onSelectProject?: (id: string | null) => void
   onCreateProject?: (name: string, description?: string, sharedContext?: string) => Promise<Project | null>
   onUpdateProject?: (id: string, data: Partial<Project>) => Promise<Project | null>
   onDeleteProject?: (id: string) => void
@@ -28,9 +30,11 @@ interface Props {
   jobsCount?: number
   generatingConversationId?: string | null
   boot?: BootState
+  onAttachProjectSource?: (projId: string, path: string) => Promise<any>
+  onDetachProjectSource?: (projId: string, path: string) => Promise<void>
 }
 
-export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null, boot }: Props) {
+export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null, boot, onAttachProjectSource, onDetachProjectSource }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem('novi_sidebar_expanded_projects')
@@ -49,6 +53,8 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
   const [renameValue, setRenameValue] = useState("")
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null)
+  const { confirm: confirmDelete, dialog: deleteDialog } = useConfirm()
   const menuRef = useRef<HTMLDivElement>(null)
   const headerMenuRef = useRef<HTMLDivElement>(null)
 
@@ -133,6 +139,21 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
       if (!projectsExpanded) toggleProjectsSection()
     }
     setNewProjectOpen(false)
+  }
+
+  const settingsProject = settingsProjectId ? (projects ?? []).find(pr => pr.id === settingsProjectId) ?? null : null
+  const handleDeleteFromSettings = async (id: string) => {
+    const proj = (projects ?? []).find(pr => pr.id === id)
+    if (!proj) return
+    const ok = await confirmDelete({
+      title: `Delete "${proj.name}"?`,
+      description: `This removes the project. Its ${proj.conversationIds.length} linked conversation${proj.conversationIds.length !== 1 ? 's' : ''} won't be deleted. This can't be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (ok) {
+      onDeleteProject?.(id)
+      setSettingsProjectId(null)
+    }
   }
 
   const uniformItem = (active: boolean) =>
@@ -273,7 +294,7 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                     {headerMenuOpen && (
                       <div ref={headerMenuRef} className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-base-700 bg-base-850 shadow-lg z-50 py-1">
                         <button
-                          onClick={() => { setHeaderMenuOpen(false); onSectionChange('projects') }}
+                          onClick={() => { setHeaderMenuOpen(false); onSelectProject?.(null); onSectionChange('projects') }}
                           className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
                         >
                           <LayoutGrid size={13} /> View all projects
@@ -419,11 +440,25 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                                         }}
                                         className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
                                       >
-                                        <Settings size={13} /> Settings
+                                        <House size={13} /> Project home
+                                      </button>
+                                      <button
+                                        onClick={() => { setSettingsProjectId(p.id); setProjectMenuId(null) }}
+                                        className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-base-100"
+                                      >
+                                        <Settings size={13} /> Project settings
                                       </button>
                                       <div className="border-t border-base-700 my-1" />
                                       <button
-                                        onClick={() => { onDeleteProject?.(p.id); setProjectMenuId(null) }}
+                                        onClick={async () => {
+                                          setProjectMenuId(null)
+                                          const ok = await confirmDelete({
+                                            title: `Delete "${p.name}"?`,
+                                            description: `This removes the project. Its ${p.conversationIds.length} linked conversation${p.conversationIds.length !== 1 ? 's' : ''} won't be deleted. This can't be undone.`,
+                                            confirmLabel: 'Delete',
+                                          })
+                                          if (ok) onDeleteProject?.(p.id)
+                                        }}
                                         className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-err hover:bg-base-800"
                                       >
                                         <Trash2 size={13} /> Delete
@@ -509,6 +544,18 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
           </motion.div>
         )}
       </AnimatePresence>
+      {deleteDialog}
+      {settingsProject && onUpdateProject && onAttachProjectSource && onDetachProjectSource && (
+        <ProjectSettingsModal
+          open={!!settingsProjectId}
+          onClose={() => setSettingsProjectId(null)}
+          project={settingsProject}
+          onUpdate={onUpdateProject}
+          onAddSource={onAttachProjectSource}
+          onRemoveSource={onDetachProjectSource}
+          onDelete={handleDeleteFromSettings}
+        />
+      )}
     </motion.aside>
   )
 }

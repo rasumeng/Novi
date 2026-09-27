@@ -18,7 +18,12 @@ class Provider:
         self.turns = list(turns)
 
     def stream(self, transcript):
-        yield self.turns.pop(0)
+        turn = self.turns.pop(0)
+        # Test providers yield complete turns; mark as final
+        if not getattr(turn, "is_complete", False):
+            from dataclasses import replace
+            turn = replace(turn, is_complete=True)
+        yield turn
 
 
 class LoopFactory:
@@ -47,8 +52,7 @@ def request(conversation="c"):
 
 def test_start_persists_one_run_and_replayable_terminal(tmp_path):
     store = RunStore(tmp_path)
-    factory = LoopFactory([[ModelTurn(calls=(ToolCall("f", "finish_task",
-        {"summary": "done", "outcome": "completed"}),))]])
+    factory = LoopFactory([[ModelTurn(text="Task completed successfully.")]])
     service = RunService(store, factory, id_factory=lambda: "r1")
     run_id = service.start(request())
     assert run_id == "r1"
@@ -65,10 +69,8 @@ def test_start_persists_one_run_and_replayable_terminal(tmp_path):
 def test_next_run_inherits_canonical_conversation_transcript(tmp_path):
     store = RunStore(tmp_path)
     factory = LoopFactory([
-        [ModelTurn(calls=(ToolCall("f1", "finish_task",
-            {"summary": "first", "outcome": "completed"}),))],
-        [ModelTurn(calls=(ToolCall("f2", "finish_task",
-            {"summary": "second", "outcome": "completed"}),))],
+        [ModelTurn(text="First task completed.")],
+        [ModelTurn(text="Second task completed.")],
     ])
     service = RunService(store, factory, id_factory=iter(["r1", "r2"]).__next__)
     service.start(RunRequest(conversation_id="same", user_message_id="u1", user_text="one"))
@@ -77,7 +79,7 @@ def test_next_run_inherits_canonical_conversation_transcript(tmp_path):
 
     texts = [block.text for message in service.snapshot(second_id).transcript
              for block in message.blocks if block.text]
-    assert texts == ["one", "first", "two", "second"]
+    assert texts == ["one", "First task completed.", "two", "Second task completed."]
     store.close()
 
 
@@ -107,6 +109,36 @@ def test_permission_response_resumes_same_run_without_restarting_goal(tmp_path):
     store.close()
 
 
+def test_permission_expiry_resumes_same_run_with_honest_denial(tmp_path):
+    permissions = PermissionService(
+        descriptors={"write_file": ToolDescriptor("write_file", effects=("write",))},
+        policy=ToolAuthorizationPolicy(tool_rules={"write_file": "ask"}),
+        approval_ttl_seconds=1)
+    factory = LoopFactory([[
+        ModelTurn(calls=(ToolCall("c1", "write_file", {"path": "a", "content": "x"}),)),
+    ]], permissions)
+    store = RunStore(tmp_path)
+    service = RunService(store, factory, permission_service=permissions,
+                         id_factory=lambda: "expires")
+    terminal = threading.Event()
+    service.listen(lambda event: terminal.set()
+                   if event.type.value == "run.failed" else None)
+    try:
+        service.start(request())
+        permission = permissions.pending_for_call("expires", "c1")
+        assert terminal.wait(timeout=3), "expired permission did not resume the run"
+        resolved = permissions.request(permission.id)
+        assert resolved.decision.kind is PermissionDecisionKind.EXPIRED
+        state = service.snapshot("expires")
+        assert state.status is RunStatus.FAILED
+        tool_events = [event for event in service.subscribe("expires")
+                       if event.type.value == "tool.completed"]
+        assert tool_events[-1].payload["status"] == "denied"
+        assert tool_events[-1].payload["error"] == "expired"
+    finally:
+        service.close()
+
+
 def test_single_flight_and_cancel_awaiting_permission(tmp_path):
     permissions = PermissionService(
         descriptors={"write_file": ToolDescriptor("write_file", effects=("write",))},
@@ -129,6 +161,25 @@ def test_single_flight_and_cancel_awaiting_permission(tmp_path):
     store.close()
 
 
+def test_cancel_notifies_subscribers_with_terminal_event(tmp_path):
+    permissions = PermissionService(
+        descriptors={"write_file": ToolDescriptor("write_file", effects=("write",))},
+        policy=ToolAuthorizationPolicy(tool_rules={"write_file": "ask"}),
+    )
+    factory = LoopFactory([[
+        ModelTurn(calls=(ToolCall("c1", "write_file", {"path": "a", "content": "x"}),))
+    ]], permissions)
+    store = RunStore(tmp_path)
+    service = RunService(store, factory, permission_service=permissions, id_factory=lambda: "r1")
+    received = []
+    service.listen(received.append)
+    service.start(request())
+    service.cancel("r1")
+
+    assert received[-1].type.value == "run.cancelled"
+    store.close()
+
+
 def test_restart_marks_active_run_interrupted_without_replaying_effects(tmp_path):
     store = RunStore(tmp_path)
     from novi.runtime.run_contracts import RunState
@@ -147,8 +198,11 @@ def test_events_are_replayable_while_the_run_is_still_active(tmp_path):
         def stream(self, transcript):
             entered.set()
             release.wait(timeout=2)
-            yield ModelTurn(calls=(ToolCall("f", "finish_task",
-                {"summary": "done", "outcome": "completed"}),))
+            turn = ModelTurn(text="Task completed.")
+            if not getattr(turn, "is_complete", False):
+                from dataclasses import replace
+                turn = replace(turn, is_complete=True)
+            yield turn
 
     class Factory:
         def __call__(self, state, cancelled):
@@ -173,8 +227,7 @@ def test_events_are_replayable_while_the_run_is_still_active(tmp_path):
 
 def test_prepared_run_has_id_before_execution_and_notifies_subscribers(tmp_path):
     store = RunStore(tmp_path)
-    factory = LoopFactory([[ModelTurn(calls=(ToolCall("f", "finish_task",
-        {"summary": "done", "outcome": "completed"}),))]])
+    factory = LoopFactory([[ModelTurn(text="Task completed.")]])
     service = RunService(store, factory, id_factory=lambda: "prepared")
     received = []
     unsubscribe = service.listen(received.append)

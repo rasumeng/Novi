@@ -5,7 +5,7 @@ Agent-wide primitive, not workspace-specific. First consumer is Workspace,
 but same system manages Memory/Project/Web/Attachments/Tool results/Skills
 and long-running execution state.
 
-Flow: Orchestrator → ExecutionCoordinator → ExecutionContext → ContextManager → Retrieval/Compression → NoviRuntime → Model
+Flow: RunService → AgentLoop → ContextBuilder/Compactor → selected model
 Answers: "Given goal, execution state, model budget, and available sources, what context does model actually need now?"
 """
 
@@ -110,7 +110,7 @@ class ContextManager:
         Ephemeral status (context.compacting text, "Still working", etc.)
         must NOT enter ExecutionContext.history or checkpoint; only PROGRESS
         and FINISH assistant messages do. This method never appends ephemeral
-        status — see ExecutionCoordinator.execute for history contract.
+        status — see RunService for the durable run contract.
         """
         # Canonical base — preserves project_id/conversation_id/plan/errors/budget_breakdown isolation
         stable = StableState.from_context(ctx)

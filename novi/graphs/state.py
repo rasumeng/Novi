@@ -57,7 +57,7 @@ def append_error(state: dict, *, source: str, stage: str, kind: str,
 def should_stop(state: dict) -> bool:
     """Whether the runtime's stop signal has fired for this run.
 
-    Cancellation stays owned by NoviRuntime: the runtime injects a
+    Cancellation stays owned by RunService: the run injects a
     ``should_stop`` callable into per-run state; graphs only consult it at
     node boundaries. Missing callable / callable failure ⇒ not stopped.
     """

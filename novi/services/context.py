@@ -31,8 +31,8 @@ class NoviContext:
 
     Usage:
         ctx = NoviContext()
-        runtime = ctx.create_runtime()
-        runtime.run("hello")
+        service = ctx.run_service
+        service.start(run_request)
     """
 
     def __init__(self, cfg: dict | None = None):
@@ -50,6 +50,8 @@ class NoviContext:
         self._simple_llm: object | None = None
         self._memory: object | None = None
         self._project_index: object | None = None
+        self._orchestrator: object | None = None
+        self._task_store: object | None = None
         self._scheduler: object | None = None
         self._embedding: object | None = None
         self._reranker: object | None = None
@@ -245,6 +247,9 @@ class NoviContext:
         return self._memory_worker
 
     def close(self):
+        if self._run_service is not None:
+            self._run_service.close()
+            self._run_service = None
         if self._memory_worker is not None:
             self._memory_worker.close()
         if self._model_service is not None:
@@ -335,7 +340,7 @@ class NoviContext:
                 complexity_estimator=ComplexityEstimator(),
                 evidence_detector=EvidenceDetector(),
                 capability_registry=capability_registry,
-                task_store=TaskStore(),
+                task_store=self.task_store,
                 planner_engine=PlannerEngine(),
                 router=router,
                 conversation_state_store=ConversationStateStore(),
@@ -343,7 +348,15 @@ class NoviContext:
             )
         return self._orchestrator
 
-    # ── durable execution lifecycle (Milestone 5 Phase 4) ────────────────
+# ── durable execution lifecycle (Milestone 5 Phase 4) ────────────────
+
+    @property
+    def task_store(self):
+        from ..orchestrator.task_store import TaskStore
+
+        if self._task_store is None:
+            self._task_store = TaskStore()
+        return self._task_store
 
     @property
     def job_store(self):
@@ -367,10 +380,9 @@ class NoviContext:
         from .job_lifecycle import JobLifecycle
 
         if self._job_lifecycle is None:
-            task_store = getattr(self.orchestrator, "task_store", None)
             self._job_lifecycle = JobLifecycle(
                 job_manager=self.job_manager,
-                task_store=task_store,
+                task_store=self.task_store,
             )
         return self._job_lifecycle
 
@@ -386,14 +398,14 @@ class NoviContext:
         """Read-only continuation resolver (TaskStore + JobStore join).
 
         Shared across every migrated execution surface (CLI, Telegram, WebUI).
-        The ExecutionCoordinator consumes this to resolve "continue" through
+        The run service consumes this to resolve "continue" through
         the SAME path as WebUI — no per-surface continuation logic.
         """
         from .continuation import ContinuationService
 
         if self._continuation is None:
             self._continuation = ContinuationService(
-                task_store=getattr(self.orchestrator, "task_store", None),
+                task_store=self.task_store,
                 job_store=self.job_store,
                 job_manager=self.job_manager,
             )
@@ -459,74 +471,11 @@ class NoviContext:
                     self._brain._vault.index = index
 
     def create_runtime(self, **overrides) -> object:
-        from ..runtime.runtime import NoviRuntime
-        from ..runtime.event_bus import EventBus
-        from ..orchestrator.projection import TaskLifecycleProjection
+        """Return the canonical process-owned RunService."""
+        return self.run_service
 
-        orchestrator = overrides.get("orchestrator", self.orchestrator)
-        research_graph = overrides.get("research_graph", None)
-        if research_graph is None:
-            # Phase 7 Stage 3C: LangGraph research workflow. Model + search are
-            # injected per-run by the runtime (state["model"] / state["search"]),
-            # so the graph can be built once here without resolving a model.
-            from ..graphs import ResearchGraph
-
-            research_graph = ResearchGraph()
-        coding_graph = overrides.get("coding_graph", None)
-        if coding_graph is None:
-            # Phase 7 Stage 3D: LangGraph coding workflow. Model + run_loop are
-            # injected per-run by the runtime (state["model"] / state["run_loop"]),
-            # so the graph can be built once here without resolving a model.
-            from ..graphs import CodingGraph
-
-            coding_graph = CodingGraph()
-        runtime_graph = overrides.get("runtime_graph", None)
-        if runtime_graph is None:
-            # Dual-path migration: general runtime workflow. Built eagerly
-            # like research/coding (no model resolution at build time);
-            # execution is opt-in via the workflow_engine setting below.
-            from ..graphs import RuntimeWorkflowGraph
-
-            runtime_graph = RuntimeWorkflowGraph(
-                max_steps=int(self.config.get("runtime", {}).get("max_steps", 10))
-            )
-        workflow_engine = overrides.get(
-            "workflow_engine",
-            self.config.get("runtime", {}).get("workflow_engine", "langgraph"),
-        )
-        runtime = NoviRuntime(
-            model_service=overrides.get("model_service", self.model_service),
-            memory=overrides.get("memory", self.memory),
-            project_index=overrides.get("project_index", self.project_index),
-            cfg=overrides.get("cfg", self.config),
-            simple_llm=overrides.get("simple_llm", self.simple_llm),
-            event_bus=overrides.get("event_bus", EventBus()),
-            brain=overrides.get("brain", self.brain),
-            skills=overrides.get("skills", None),
-            registry=overrides.get("registry", None),
-            orchestrator=orchestrator,
-            research_graph=research_graph,
-            coding_graph=coding_graph,
-            runtime_graph=runtime_graph,
-            workflow_engine=workflow_engine,
-        )
-
-        # Wire Task lifecycle projection: runtime only emits events; this
-        # projection transitions + persists the owning Task via the store the
-        # orchestrator already holds.
-        task_store = getattr(orchestrator, "task_store", None) if orchestrator else None
-        TaskLifecycleProjection(task_store).subscribe(runtime.event_bus)
-
-        # Wire Job lifecycle (Phase 4): runtime stays a plan executor — this
-        # coordinator derives the Job/Checkpoint side of the same events and
-        # persists via JobStore + the Task's ExecutionHistory. Passive and
-        # additive: non-plan runs emit no plan events, so no jobs are created.
-        job_lifecycle = overrides.get("job_lifecycle", None)
-        if job_lifecycle is None:
-            job_lifecycle = self.job_lifecycle
-        if job_lifecycle is not None:
-            job_lifecycle.subscribe(runtime.event_bus)
-        return runtime
+    def _legacy_create_runtime(self, **overrides) -> object:
+        raise RuntimeError("legacy runtime construction was removed; use run_service")
 
     def warmup(self):
         """Eagerly initialize all services. Called at startup."""

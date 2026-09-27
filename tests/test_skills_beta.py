@@ -104,7 +104,7 @@ def test_skill_execution_requires_permission():
 
 def test_skill_loader_skips_invalid(tmp_path, monkeypatch):
     """Runtime loader never activates skills missing name/description."""
-    import novi.runtime.runtime as rt
+    from novi.skills.catalog import SkillCatalog
 
     skills_dir = tmp_path / "skills"
     good = skills_dir / "good-skill"
@@ -115,8 +115,8 @@ def test_skill_loader_skips_invalid(tmp_path, monkeypatch):
     bad = skills_dir / "bad-skill"
     bad.mkdir(parents=True)
     (bad / "SKILL.md").write_text("no frontmatter\n", "utf-8")
-    monkeypatch.setattr(rt, "SKILLS_DIR", skills_dir)
-    skills = rt._load_all_skills()
+    catalog = SkillCatalog(skills_dir)
+    skills = {record.name for record in catalog.list()}
     assert "good-skill" in skills
     assert "bad-skill" not in skills
 
@@ -193,7 +193,7 @@ def test_upload_skill_invalid_frontmatter_name_rejected(client):
 def test_loader_and_get_skip_invalid_frontmatter_name(tmp_path, monkeypatch, client):
     """An invalid frontmatter name can neither activate nor show as dead."""
     import novi.webui_server as ws
-    import novi.runtime.runtime as rt
+    from novi.skills.catalog import SkillCatalog
 
     evil = ws.SKILLS_DIR / "sneaky-skill"
     evil.mkdir()
@@ -202,7 +202,7 @@ def test_loader_and_get_skip_invalid_frontmatter_name(tmp_path, monkeypatch, cli
     )
     names = [s["name"] for s in client.get("/api/skills").json()]
     assert "sneaky-skill" not in names
-    monkeypatch.setattr(rt, "SKILLS_DIR", ws.SKILLS_DIR)
-    skills = rt._load_all_skills()
+    catalog = SkillCatalog(ws.SKILLS_DIR)
+    skills = {record.name for record in catalog.list()}
     assert "sneaky-skill" not in skills
     assert "../evil" not in skills

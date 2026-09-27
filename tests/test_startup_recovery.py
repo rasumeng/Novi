@@ -182,8 +182,8 @@ def test_startup_recovery_is_idempotent(task_store, job_store):
 # ── 6. no auto-resume ───────────────────────────────────────────────────────
 
 def test_startup_recovery_never_auto_resumes(task_store, job_store, monkeypatch):
-    """Startup marks INTERRUPTED but executes nothing: submit + runtime = 0."""
-    calls = {"submit": 0, "runtime_ctor": 0}
+    """Startup marks INTERRUPTED without submitting replacement work."""
+    calls = {"submit": 0}
 
     from novi.jobs.manager import JobManager
     orig_submit = JobManager.submit
@@ -194,19 +194,11 @@ def test_startup_recovery_never_auto_resumes(task_store, job_store, monkeypatch)
 
     monkeypatch.setattr(JobManager, "submit", spy_submit)
 
-    import novi.runtime.runtime as runtime_mod
-
-    def boom(*a, **k):
-        calls["runtime_ctor"] += 1
-        raise AssertionError("startup recovery must never execute")
-
-    monkeypatch.setattr(runtime_mod, "NoviRuntime", boom)
-
     _seed(task_store, job_store, JobStatus.RUNNING)
     marked = recover_interrupted_jobs(job_store)
 
     assert len(marked) == 1
-    assert calls == {"submit": 0, "runtime_ctor": 0}
+    assert calls == {"submit": 0}
     assert job_store.load("job-task-1").status is JobStatus.INTERRUPTED
 
 

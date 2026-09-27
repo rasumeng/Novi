@@ -1,6 +1,6 @@
 # Novi Agent Runtime Replacement Plan
 
-**Status:** Proposed implementation plan; audit complete, implementation not started.
+**Status:** Implemented in the working tree; migration cleanup and full-suite verification are in progress. This document records the original design: the current implementation uses natural provider completion rather than `finish_task`, and explicitly projects journal events to the WebSocket contract. See README.md for the current architecture.
 
 **Goal:** One request creates one durable run that can think, emit several messages, request permissions, execute tools, process results, compact context and finish honestly.
 

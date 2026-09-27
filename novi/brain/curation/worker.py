@@ -137,28 +137,34 @@ class MemoryWorker:
             if not self.headroom():
                 self._emit('deferred', reason='Waiting for memory headroom')
                 return None
+            if self.models.inference.foreground_active:
+                return None
+            try:
+                client = self.client_factory(resolved, context=cfg.get('context_tokens', 16384),
+                                             output=1800, timeout=300, headroom=self.headroom)
+            except ValueError as exc:
+                self._emit('unavailable', reason=str(exc))
+                return None
+            mode = 'shadow' if manual_shadow else 'apply'
+            job = self.jobs.claim(mode=mode)
+            if job is None:
+                return None
+            self._emit('proposing', job)
+            saved = json.loads(job['result']) if job.get('result') else None
+            # Packet preparation can perform storage and embedding work. Keep it
+            # outside the primary-model lease so foreground chat never waits on
+            # unrelated, non-cancellable preparation.
+            packet = job['packet'] if saved and saved.get('state') == 'approved' else self.brain.memory_packet(job['packet'])
+
             with self.models.inference.try_acquire_memory(idle_seconds=0 if manual_shadow else 60) as cancel:
                 if cancel is None:
-                    return None
-                try:
-                    client = self.client_factory(resolved, context=cfg.get('context_tokens', 16384),
-                                                 output=1800, timeout=300, headroom=self.headroom)
-                except ValueError as exc:
-                    self._emit('unavailable', reason=str(exc))
-                    return None
+                    raise InterruptedError('Memory deferred for foreground inference')
                 with self._state_lock:
                     self._active_cancel = cancel
                     if self._paused or self.stop.is_set():
                         cancel.set()
                 if cancel.is_set():
-                    return None
-                mode = 'shadow' if manual_shadow else 'apply'
-                job = self.jobs.claim(mode=mode)
-                if job is None:
-                    return None
-                self._emit('proposing', job)
-                saved = json.loads(job['result']) if job.get('result') else None
-                packet = job['packet'] if saved and saved.get('state') == 'approved' else self.brain.memory_packet(job['packet'])
+                    raise InterruptedError('Memory deferred for foreground inference')
                 def reviewing():
                     self.jobs.stage(job['id'], 'verifying')
                     self._emit('verifying', job)

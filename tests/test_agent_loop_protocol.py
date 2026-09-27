@@ -25,6 +25,10 @@ class ScriptedProvider:
         turn = self.turns.pop(0)
         if isinstance(turn, Exception):
             raise turn
+        # Test providers yield complete turns; mark as final
+        if not getattr(turn, "is_complete", False):
+            from dataclasses import replace
+            turn = replace(turn, is_complete=True)
         yield turn
 
 
@@ -46,7 +50,25 @@ def state():
         conversation_id="conv-1", user_message_id="user-1", user_text="do the work"))
 
 
-def test_progress_two_tools_progress_and_explicit_finish():
+def test_natural_completion_no_tools():
+    """A run with no tool calls completes naturally on text response."""
+    provider = ScriptedProvider([
+        ModelTurn(text="Hello! I can help with that."),
+    ])
+    dispatcher = RecordingDispatcher({})
+
+    result = AgentLoop(provider, dispatcher).run(state())
+
+    assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
+    assert not dispatcher.calls
+    messages = [event.payload["content"] for event in result.events
+                if event.type.value == "message.completed"]
+    assert messages == ["Hello! I can help with that."]
+
+
+def test_natural_completion_after_tools():
+    """A run with tools followed by final text response completes naturally."""
     provider = ScriptedProvider([
         ModelTurn(text="Checking first.", calls=(
             ToolCall(id="p1", name="report_progress", arguments={"message": "Starting."}),
@@ -57,14 +79,14 @@ def test_progress_two_tools_progress_and_explicit_finish():
             ToolCall(id="p2", name="report_progress", arguments={"message": "Both files checked."}),
             ToolCall(id="c3", name="write_file", arguments={"path": "a.py", "content": "fixed"}),
         )),
-        ModelTurn(calls=(ToolCall(id="f1", name="finish_task",
-                                  arguments={"summary": "Fixed and verified.", "outcome": "completed"}),)),
+        ModelTurn(text="Fixed and verified."),
     ])
     dispatcher = RecordingDispatcher({})
 
     result = AgentLoop(provider, dispatcher).run(state())
 
     assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
     assert [call.id for call in dispatcher.calls] == ["c1", "c2", "c3"]
     messages = [event.payload["content"] for event in result.events
                 if event.type.value == "message.completed"]
@@ -75,8 +97,7 @@ def test_progress_two_tools_progress_and_explicit_finish():
 def test_every_assistant_call_has_one_result_before_next_provider_turn():
     provider = ScriptedProvider([
         ModelTurn(calls=(ToolCall(id="c1", name="read_file", arguments={"path": "a"}),)),
-        ModelTurn(calls=(ToolCall(id="f1", name="finish_task",
-                                  arguments={"summary": "done", "outcome": "completed"}),)),
+        ModelTurn(text="Done reading."),
     ])
     result = AgentLoop(provider, RecordingDispatcher({})).run(state())
     second_input = provider.transcripts[1]
@@ -84,23 +105,24 @@ def test_every_assistant_call_has_one_result_before_next_provider_turn():
     result_ids = [block.call_id for msg in second_input for block in msg.blocks if block.type.value == "tool_result"]
     assert call_ids == result_ids == ["c1"]
     assert result.state.finished
+    assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
 
 
-def test_finish_mixed_with_external_call_does_not_drop_external_work():
+def test_mixed_control_tool_with_external_call():
+    """Control tool (report_progress) in same batch as external call works."""
     provider = ScriptedProvider([
         ModelTurn(calls=(
-            ToolCall(id="f1", name="finish_task", arguments={"summary": "too soon", "outcome": "completed"}),
+            ToolCall(id="p1", name="report_progress", arguments={"message": "working"}),
             ToolCall(id="c1", name="write_file", arguments={"path": "a", "content": "x"}),
         )),
-        ModelTurn(calls=(ToolCall(id="f2", name="finish_task",
-                                  arguments={"summary": "now done", "outcome": "completed"}),)),
+        ModelTurn(text="Now done."),
     ])
     dispatcher = RecordingDispatcher({})
     result = AgentLoop(provider, dispatcher).run(state())
     assert [call.id for call in dispatcher.calls] == ["c1"]
     assert result.state.status is RunStatus.COMPLETED
-    assert any("cannot finish" in (block.result or {}).get("error", "")
-               for msg in provider.transcripts[1] for block in msg.blocks if block.type.value == "tool_result")
+    assert result.state.terminal_reason == "natural_completion"
 
 
 def test_empty_turn_and_provider_error_fail_honestly():
@@ -112,15 +134,17 @@ def test_empty_turn_and_provider_error_fail_honestly():
     assert "offline" in (errored.state.terminal_reason or "")
 
 
-def test_denial_is_recorded_and_model_can_finish_blocked():
+def test_denial_results_in_blocked_status():
+    """When a tool is denied and model responds, run completes (not blocked by default)."""
     provider = ScriptedProvider([
         ModelTurn(calls=(ToolCall(id="c1", name="write_file", arguments={"path": "a"}),)),
-        ModelTurn(calls=(ToolCall(id="f1", name="finish_task",
-                                  arguments={"summary": "Permission was denied.", "outcome": "blocked"}),)),
+        ModelTurn(text="Permission was denied, cannot proceed."),
     ])
     denied = ToolResult(call_id="c1", status=ToolResultStatus.DENIED, error="user denied")
     result = AgentLoop(provider, RecordingDispatcher({"c1": denied})).run(state())
-    assert result.state.status is RunStatus.BLOCKED
+    # Natural completion after denial - model explains and stops
+    assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
     assert any(event.payload.get("status") == "denied" for event in result.events)
 
 
@@ -154,18 +178,25 @@ def test_malformed_native_call_fails_as_protocol_error():
     assert result.state.terminal_reason == "malformed_tool_call"
 
 
-def test_cancellation_during_streaming_emits_no_partial_public_message():
+def test_cancellation_during_streaming_emits_partial_then_cancels():
+    """With true streaming, partial messages are emitted before cancellation."""
     class StreamingProvider:
         def stream(self, transcript):
-            yield ModelTurn(text="part one")
-            yield ModelTurn(text="part two")
+            # Yield incremental chunks (not complete turns)
+            yield ModelTurn(text="part one", is_complete=False)
+            yield ModelTurn(text="part two", is_complete=True)
 
     provider = StreamingProvider()
     checks = iter([False, False, True])
     result = AgentLoop(provider, RecordingDispatcher({}),
                        cancelled=lambda: next(checks, True)).run(state())
     assert result.state.status is RunStatus.CANCELLED
-    assert not any(event.type.value.startswith("message.") for event in result.events)
+    # With true streaming, we emit partial messages before cancellation
+    message_events = [e for e in result.events if e.type.value.startswith("message.")]
+    assert len(message_events) > 0  # Partial messages were emitted
+    # The message should contain "part one" (first chunk)
+    delta_events = [e for e in result.events if e.type.value == "message.delta"]
+    assert any("part one" in e.payload.get("content", "") for e in delta_events)
 
 
 def test_identical_reads_can_repeat_after_state_changes():
@@ -173,12 +204,12 @@ def test_identical_reads_can_repeat_after_state_changes():
     provider = ScriptedProvider([
         ModelTurn(calls=(ToolCall(id="c1", name="read_file", arguments=same_args),)),
         ModelTurn(calls=(ToolCall(id="c2", name="read_file", arguments=same_args),)),
-        ModelTurn(calls=(ToolCall(id="f1", name="finish_task",
-                                  arguments={"summary": "verified twice", "outcome": "completed"}),)),
+        ModelTurn(text="Verified twice."),
     ])
     dispatcher = RecordingDispatcher({})
     result = AgentLoop(provider, dispatcher).run(state())
     assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
     assert [call.id for call in dispatcher.calls] == ["c1", "c2"]
 
 
@@ -213,8 +244,7 @@ def test_loop_compacts_actual_transcript_before_provider_call():
                 visible_to_user=False, source="tool"),
         ))
     initial = replace(initial, transcript=tuple(transcript))
-    provider = ScriptedProvider([ModelTurn(calls=(ToolCall(
-        id="f", name="finish_task", arguments={"summary": "done", "outcome": "completed"}),))])
+    provider = ScriptedProvider([ModelTurn(text="Done.")])
     result = AgentLoop(provider, RecordingDispatcher({}), context_builder=ContextBuilder(),
         compactor=TranscriptCompactor(ContextBuilder()),
         context_inputs=ContextInputs(output_reserve=30)).run(initial)
@@ -232,11 +262,11 @@ def test_activate_skill_is_explicit_control_result_not_text_scanning(tmp_path):
     provider = ScriptedProvider([
         ModelTurn(text="reviewer", calls=(ToolCall(
             id="s1", name="activate_skill", arguments={"name": "reviewer"}),)),
-        ModelTurn(calls=(ToolCall(id="f", name="finish_task",
-            arguments={"summary": "reviewed", "outcome": "completed"}),)),
+        ModelTurn(text="Reviewed."),
     ])
     result = AgentLoop(provider, RecordingDispatcher({}), skill_service=skills).run(state())
     assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
     results = [block.result for message in provider.transcripts[1] for block in message.blocks
                if block.type is ContentBlockType.TOOL_RESULT]
     assert results[0]["structured"]["instructions"] == "Pinned review instructions"

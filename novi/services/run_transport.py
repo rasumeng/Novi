@@ -10,6 +10,7 @@ from novi.services.permission_service import PermissionDecision, PermissionDecis
 
 
 def event_to_socket_message(event: RunEvent) -> dict | None:
+    """Convert RunEvent to WebSocket message (new format only — includes runId, conversationId, sequence)."""
     payload = event.payload
     common = {"runId": event.run_id, "conversationId": event.conversation_id,
               "sequence": event.sequence}
@@ -20,6 +21,9 @@ def event_to_socket_message(event: RunEvent) -> dict | None:
         return {"type": "message_start", "messageId": payload.get("message_id"), **common}
     if kind is RunEventType.MESSAGE_DELTA:
         return {"type": "token", "text": payload.get("content", ""),
+                "messageId": payload.get("message_id"), **common}
+    if kind is RunEventType.MESSAGE_REASONING:
+        return {"type": "reasoning", "text": payload.get("content", ""),
                 "messageId": payload.get("message_id"), **common}
     if kind is RunEventType.MESSAGE_COMPLETED:
         return {"type": "message_end", "messageId": payload.get("message_id"), **common}
@@ -44,10 +48,15 @@ def event_to_socket_message(event: RunEvent) -> dict | None:
     if kind is RunEventType.PERMISSION_RESOLVED:
         return {"type": "permission_resolved", "id": payload.get("request_id"),
                 "decision": payload.get("decision"), **common}
+    if kind is RunEventType.THINKING:
+        return {"type": "thinking", "text": payload.get("text", ""), **common}
+    if kind is RunEventType.STATUS:
+        return {"type": "status", "text": payload.get("text", ""), **common}
+    # The client requires consecutive run sequences, including context events.
     if kind is RunEventType.CONTEXT_COMPACTING:
-        return {"type": "status", "text": "Compacting context…", **common}
+        return {"type": "status", "text": "Compacting conversation context…", **common}
     if kind is RunEventType.CONTEXT_COMPACTED:
-        return {"type": "status", "text": "Context compacted", **common}
+        return {"type": "status", "text": "Conversation context compacted.", **common}
     if kind is RunEventType.RUN_COMPLETED:
         return {"type": "done", **common}
     if kind is RunEventType.RUN_CANCELLED:
@@ -66,6 +75,7 @@ class RunSocketBridge:
         self._service = service
         self._emit = emit
         self._run_id: str | None = None
+        self._delivery_lock = threading.RLock()
         self._unsubscribe = service.listen(self._on_event)
         self._worker: threading.Thread | None = None
 
@@ -92,11 +102,6 @@ class RunSocketBridge:
         self._worker.start()
         return run_id
 
-    def replay(self, run_id: str, after_sequence: int = 0) -> None:
-        self._run_id = run_id
-        for event in self._service.subscribe(run_id, after_sequence):
-            self._on_event(event)
-
     def respond_permission(self, request_id: str, allowed: bool) -> None:
         request = self._service.permission_request(request_id)
         decision = PermissionDecision(request_id=request.id,
@@ -105,6 +110,13 @@ class RunSocketBridge:
             origin="socket", argument_digest=request.argument_digest)
         threading.Thread(target=self._service.respond_permission,
                          args=(request_id, decision), daemon=True).start()
+
+    def replay(self, run_id: str, after_sequence: int = 0) -> None:
+        # Serialize replay with live delivery; duplicate sequences are safe on clients.
+        with self._delivery_lock:
+            self._run_id = run_id
+            for event in self._service.subscribe(run_id, after_sequence):
+                self._on_event(event)
 
     def cancel(self) -> None:
         if self._run_id:
@@ -121,8 +133,9 @@ class RunSocketBridge:
                         "runId": run_id})
 
     def _on_event(self, event: RunEvent) -> None:
-        if self._run_id and event.run_id != self._run_id:
-            return
-        message = event_to_socket_message(event)
-        if message is not None:
-            self._emit(message)
+        with self._delivery_lock:
+            if self._run_id and event.run_id != self._run_id:
+                return
+            message = event_to_socket_message(event)
+            if message is not None:
+                self._emit(message)

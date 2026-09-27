@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 def isolated_app(tmp_path, monkeypatch):
     import novi.webui_server as ws
     import novi.paths as paths
+    import novi.workspace.service as workspace_service
 
     fake_home = tmp_path / "home"
     fake_home.mkdir(parents=True, exist_ok=True)
@@ -16,12 +17,93 @@ def isolated_app(tmp_path, monkeypatch):
     projects = fake_home / "projects"
     monkeypatch.setattr(ws, "app_home", lambda: fake_home)
     monkeypatch.setattr(paths, "home", lambda: fake_home)
+    monkeypatch.setattr(workspace_service, "app_home", lambda: fake_home)
     monkeypatch.setattr(ws, "CHATS_DIR", chats)
     monkeypatch.setattr(ws, "ATTACHMENTS_DIR", fake_home / "attachments")
     monkeypatch.setattr(ws, "_shared_backend", None)
     # ensure clean lock state? locks are module-level RLocks, no need to reset
     app = ws.create_app(cfg={})
     return app, chats, projects, fake_home
+
+
+def test_project_source_response_and_conversation_inheritance(isolated_app, tmp_path):
+    import novi.workspace.service as workspace_service
+
+    app, _, _, fake_home = isolated_app
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "notes.txt").write_text("project context", encoding="utf-8")
+
+    with TestClient(app) as client:
+        project = client.post("/api/projects", json={"name": "Sources"}).json()
+        attached = client.put(
+            f"/api/projects/{project['id']}/sources",
+            json={"root": str(source), "capability": "READ"},
+        )
+        assert attached.status_code == 200, attached.text
+        payload = attached.json()
+        assert payload["source"]["root"] == str(source.resolve())
+        assert payload["source"]["capability"] == "READ"
+        assert payload["project"]["sources"][0]["root"] == str(source.resolve())
+
+        created = client.put(
+            "/api/conversations",
+            json={
+                "id": "conv-sources",
+                "title": "Inherited",
+                "messages": [],
+                "projectId": project["id"],
+            },
+        )
+        assert created.status_code == 200, created.text
+        restored = client.get("/api/conversations/conv-sources/sources")
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["sources"][0]["root"] == str(source.resolve())
+
+        service = workspace_service.WorkspaceService()
+        listed = service.list_conversation_files("conv-sources")
+        assert [(item["folder"], item["path"]) for item in listed] == [
+            ("source", "notes.txt")
+        ]
+        assert service.read_conversation_file(
+            "conv-sources", listed[0]["source"], "notes.txt"
+        ) == "project context"
+        assert service.read_conversation_file(
+            "conv-sources", listed[0]["source"], "../notes.txt"
+        ) is None
+
+        assert (fake_home / "workspaces" / "conv_conv-sources").exists()
+        client.delete("/api/conversations/conv-sources")
+        assert not (fake_home / "workspaces" / "conv_conv-sources").exists()
+
+        assert (fake_home / "workspaces" / f"proj_{project['id']}").exists()
+        client.delete(f"/api/projects/{project['id']}")
+        assert not (fake_home / "workspaces" / f"proj_{project['id']}").exists()
+
+
+def test_conversation_title_is_generated_and_persisted(isolated_app, monkeypatch):
+    import novi.webui_server as ws
+
+    class TitleModel:
+        def invoke(self, prompt):
+            assert "untrusted content" in prompt
+            return '"Dependency Map"'
+
+    monkeypatch.setattr(ws, "get_backend", lambda cfg=None: {"simple_llm": TitleModel()})
+    app, _, _, _ = isolated_app
+    with TestClient(app) as client:
+        created = client.put("/api/conversations", json={
+            "id": "conv-title",
+            "title": "please summarize all the dependencies in this repository",
+            "messages": [{"role": "user", "content": "Please summarize all dependencies."}],
+        })
+        assert created.status_code == 200
+        response = client.post("/api/conversations/conv-title/title")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"title": "Dependency Map"}
+        restored = next(c for c in client.get("/api/conversations").json()
+                        if c["id"] == "conv-title")
+        assert restored["title"] == "Dependency Map"
 
 
 def test_linking_single_source(isolated_app):

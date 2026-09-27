@@ -12,7 +12,7 @@ def test_workspace_200file_budget():
         # one relevant
         (root / "routing.py").write_text("def model_routing(): pass # ModelService.resolve workload")
         svc = WorkspaceService()
-        proj = "test-200file"
+        proj = f"test-200file-{root.name}"
         res = svc.attach(proj, str(root))
         assert res["stats"]["total"] == 201
         # search should return only relevant, budgeted 3

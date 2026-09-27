@@ -137,14 +137,15 @@ def test_scenario_completed_trigger_runs_decay_pass():
     assert ("a", KnowledgeStatus.CANDIDATE) in layer.status_updates
 
 
-def test_confirmation_burst_reconfirms_pre_decay_item():
+def test_extracted_confirmation_does_not_verify_during_decay():
     # An item decayed to CANDIDATE is re-confirmed by an explicit-context claim.
     pre = _item("a", "stale pre-decay", tags=("build",), last_seen=_dt(1))
     claim = _item("b", "remember that I prefer python", tags=("preference",), last_seen=_dt(2))
     layer = StubKnowledgeLayer([pre, claim])
     report = _brain(layer).reflect()
     assert report.decays >= 1
-    assert ("b", KnowledgeStatus.VERIFIED) in layer.status_updates
+    assert ("b", KnowledgeStatus.VERIFIED) not in layer.status_updates
+    assert report.promotions == 0
 
 
 def test_full_store_history_preserved_after_decay():

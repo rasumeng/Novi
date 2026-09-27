@@ -7,7 +7,8 @@ WebUI, and other entry points.
 """
 
 from .services.context import NoviContext
-from .runtime.runtime import _load_all_skills
+from .skills.catalog import SkillCatalog
+from .paths import home as app_home
 
 
 class WebUIBackend:
@@ -98,7 +99,8 @@ class WebUIBackend:
         mcp_permissions = MCPPermissionGate(ctx.config.get("mcp", {}) or {})
 
         # Shared skills
-        skills = _load_all_skills()
+        skills_root = ctx.config.get("skills", {}).get("root")
+        skills = SkillCatalog(skills_root or (app_home() / "skills")).list()
 
         # Orchestrator — the composition root's single instance. Building a
         # second one here would fork TaskStore identity: JobLifecycle binds

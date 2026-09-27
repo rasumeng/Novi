@@ -38,7 +38,6 @@ def test_default_construction():
     assert ctx.activated_skills == []
     assert ctx.grounding_text == ""
     assert ctx.plan_context == ""
-    assert ctx.trace is None
     assert ctx.force_model == ""
     assert ctx.force_capability == ""
     assert ctx.metadata == {}
@@ -253,134 +252,7 @@ def test_to_dict_with_forces():
 # ── Integration with run_stream (smoke) ─────────────────────────────────────
 
 
-def test_run_stream_accepts_context():
-    """run_stream() should accept context= without error."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    ctx = ExecutionContext(user_input="hello")
-    # run_stream is a generator; consume it to trigger init
-    events = list(runtime.run_stream(context=ctx))
-    # Should have produced at least a thinking event and a token
-    kinds = [k for k, *_ in events]
-    assert "thinking" in kinds or "token" in kinds
-    # Trace should be populated
-    assert ctx.trace is not None
-    assert ctx.trace.user_input == "hello"
-    assert ctx.trace.request_id  # auto-generated
-
-
 # ── Phase 6B: ctx as source of truth ────────────────────────────────────────
-
-
-def test_ctx_model_name_controls_execution():
-    """ctx.model_name set before run_stream should be used for model binding."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    ctx = ExecutionContext(user_input="hello")
-    ctx.model_name = "test-model"
-    list(runtime.run_stream(context=ctx))
-    assert ctx.trace.model_selected == "test-model"
-
-
-def test_ctx_memory_context_persists():
-    """ctx.memory_context should survive through execution."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    ctx = ExecutionContext(user_input="hello")
-    ctx.memory_context = "User prefers dark mode"
-    list(runtime.run_stream(context=ctx))
-    # memory_context should still be on ctx after execution
-    assert ctx.memory_context == "User prefers dark mode"
-
-
-def test_ctx_plan_context_set_by_planner():
-    """ctx.plan_context should be populated when planning triggers."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    # High complexity to trigger planning
-    analysis = TaskAnalysis(
-        intent=IntentType.PLANNING,
-        complexity=ComplexityScore(score=8, plan_level=3, max_steps=10),
-        strategy=ExecutionStrategy.PLANNED,
-    )
-    ctx = ExecutionContext(user_input="design a distributed system", analysis=analysis)
-    list(runtime.run_stream(context=ctx))
-    # plan_context may or may not be populated depending on model_service,
-    # but the field should exist and trace should record the attempt
-    assert isinstance(ctx.plan_context, str)
-    assert isinstance(ctx.trace.plan_generated, bool)
-
-
-def test_ctx_trace_receives_intent():
-    """ctx.trace.intent should match ctx.intent_str after analysis."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    analysis = TaskAnalysis(intent=IntentType.CODING)
-    ctx = ExecutionContext(user_input="fix bug", analysis=analysis)
-    list(runtime.run_stream(context=ctx))
-    assert ctx.trace.intent == "coding"
-
-
-def test_ctx_trace_receives_model_routing():
-    """ctx.trace should record model routing decisions."""
-    from novi.runtime.runtime import NoviRuntime
-
-    class _Svc:
-        def resolve_primary(self):
-            return ("test", "test-model")
-
-        def bind_model(self, name, tools, temperature=0.0):
-            raise AssertionError("no bind expected")
-
-        def client_for_model(self, name, temperature=0.0):
-            from unittest.mock import MagicMock
-            m = MagicMock()
-            m.stream.return_value = iter([])
-            m.invoke.return_value = type("R", (), {"content": "hi"})()
-            return m
-
-    runtime = NoviRuntime(model_service=_Svc())
-    ctx = ExecutionContext(user_input="hello")
-    list(runtime.run_stream(context=ctx))
-    # model_selected should be set (from primary model)
-    assert ctx.trace.model_selected
-    assert ctx.trace.model_reason in ("primary_model", "config_override", "force_capability", "execution_plan")
-
-
-def test_ctx_allowed_tools_populated():
-    """ctx.allowed_tools should be populated from analysis capabilities."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    analysis = TaskAnalysis(
-        intent=IntentType.CODING,
-        capabilities=["coding", "filesystem"],
-    )
-    ctx = ExecutionContext(user_input="edit file", analysis=analysis)
-    list(runtime.run_stream(context=ctx))
-    assert len(ctx.allowed_tools) > 0
-
-
-def test_ctx_execution_plan_drives_tools():
-    """When execution_plan is set, ctx.allowed_tools comes from plan.tools."""
-    from novi.runtime.runtime import NoviRuntime
-    from novi.orchestrator.task_types import ExecutionPlan, Goal
-
-    runtime = NoviRuntime()
-    plan = ExecutionPlan(
-        goal=Goal(intent=IntentType.CODING),
-        tools=["read_file", "edit_file"],
-        model_spec={"model": "test-model"},
-    )
-    ctx = ExecutionContext(user_input="edit file", execution_plan=plan)
-    list(runtime.run_stream(context=ctx))
-    assert "read_file" in ctx.allowed_tools
-    assert "edit_file" in ctx.allowed_tools
 
 
 def test_ctx_to_dict_includes_memory_context():
@@ -390,100 +262,7 @@ def test_ctx_to_dict_includes_memory_context():
     assert d["memory_context_length"] == 11
 
 
-def test_ctx_grounding_populated():
-    """ctx.grounding_text should be set (even if empty) after grounding phase."""
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    ctx = ExecutionContext(user_input="hello")
-    list(runtime.run_stream(context=ctx))
-    # grounding_text exists on ctx (may be empty for non-research)
-    assert isinstance(ctx.grounding_text, str)
-
-
 # ── Regression: full web-search execution path ──────────────────────────────
-
-
-def test_full_research_pipeline_trace_ownership():
-    """Full research pipeline (intent → grounding → routing → ReAct → trace finalization)
-    must complete without AttributeError and ctx.trace must own all trace data.
-
-    Regression test for: 'NoviRuntime' object has no attribute '_trace'
-    """
-    from novi.runtime.runtime import NoviRuntime
-
-    class _Svc2:
-        def resolve_primary(self):
-            return ("test", "test-model")
-
-        def bind_model(self, name, tools, temperature=0.0):
-            raise AssertionError("no bind expected")
-
-        def client_for_model(self, name, temperature=0.0):
-            from unittest.mock import MagicMock
-            m = MagicMock()
-            m.stream.return_value = iter([])
-            return m
-
-    runtime = NoviRuntime(model_service=_Svc2())
-    analysis = TaskAnalysis(
-        intent=IntentType.RESEARCH,
-        strategy=ExecutionStrategy.RESEARCH,
-        complexity=ComplexityScore(score=3, plan_level=0, max_steps=5),
-        evidence=EvidenceAnalysis(
-            requirements=EvidenceRequirements(external=True),
-            confidence=0.9,
-            signals=[EvidenceSignal(type="temporal", strength="strong")],
-        ),
-        grounding=GroundingDecision(
-            needs_grounding=True,
-            confidence=0.9,
-            reason="Research intent",
-            source="keyword",
-        ),
-    )
-    ctx = ExecutionContext(user_input="what is the best pve build in SHindo Life", analysis=analysis)
-    # Deterministic: stub the live search; assertions target trace/routing state,
-    # not search results.
-    with patch("novi.tools.search_pipeline._search_multi", return_value=([], None)):
-        events = list(runtime.run_stream(context=ctx))
-
-    # Trace must exist and be fully owned by ctx
-    assert ctx.trace is not None, "ctx.trace must exist after execution"
-    assert ctx.trace.request_id, "trace must have request_id"
-    # total_latency_ms is >= 0 (may be 0 for very fast error paths)
-    assert isinstance(ctx.trace.total_latency_ms, (int, float))
-
-    # Grounding must have been attempted
-    assert isinstance(ctx.grounding_text, str)
-
-    # Tool binding must have been recorded (may be empty in error path)
-    assert isinstance(ctx.trace.tools_available, list)
-    assert isinstance(ctx.trace.tools_bound, list)
-
-    # Router decision must be recorded
-    assert ctx.trace.model_selected, "trace must record model name"
-    assert ctx.trace.model_reason, "trace must record model reason"
-
-    # Stop reason must be set
-    assert ctx.trace.stop_reason in ("completed", "empty", "max_steps", "stopped", "error")
-
-    # No AttributeError means no self._trace references survived
-    kinds = [k for k, *_ in events]
-    assert "thinking" in kinds or "token" in kinds
-
-
-def test_backward_compat_trace_ownership():
-    """Old API (positional params) must also populate trace through ctx.
-    Regression test for: 'NoviRuntime' object has no attribute '_trace'
-    """
-    from novi.runtime.runtime import NoviRuntime
-
-    runtime = NoviRuntime()
-    events = list(runtime.run_stream("hello"))
-    # Must not crash with AttributeError
-    kinds = [k for k, *_ in events]
-    assert "thinking" in kinds or "token" in kinds
 
 
 # ── Search reformulation tests ────────────────────────────────────────────────
@@ -545,7 +324,8 @@ class TestExecutorEntryPoint:
         def fake_collect(self, query, min_sources=1):
             b = EvidenceBundle(query=query)
             b.merged_text = "test result about shindo life"
-            b.results = [{"title": "x", "content": "test"}]
+            from novi.tools.search_pipeline import SearchResult
+            b.results = [SearchResult(title="test", url="https://example.com", snippet=b.merged_text)]
             b.source_count = 1
             b.quality = RetrievalQuality.SUFFICIENT
             return b
@@ -556,9 +336,7 @@ class TestExecutorEntryPoint:
 
     def _make_ctx(self, user_input: str):
         from novi.runtime.execution_context import ExecutionContext
-        from novi.runtime.trace import ExecutionTrace
         ctx = ExecutionContext(user_input=user_input)
-        ctx.trace = ExecutionTrace(user_input=user_input)
         return ctx
 
     def _set_research_analysis(self, ctx):
@@ -602,7 +380,8 @@ class TestExecutorEntryPoint:
         from novi.runtime.retrieval import RetrievalExecutor
         from novi.runtime.retrieval_policy import RetrievalStrategy
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         ctx = self._make_ctx("test web only")
         self._set_plan(ctx, RetrievalStrategy.WEB_ONLY)
         orig = self._fake_search()
@@ -612,10 +391,10 @@ class TestExecutorEntryPoint:
             from novi.runtime.evidence import EvidenceCollector
             EvidenceCollector.collect = orig
         kinds = [r[0] for r in results]
-        assert "trace" in kinds
+        assert "status" in kinds
         assert "thinking" in kinds
-        assert ctx.grounding_text == "test result about shindo life"
-        assert ctx.trace.retrieval_strategy == "web_only"
+        assert "test result about shindo life" in ctx.grounding_text
+        assert "https://example.com" in ctx.grounding_text
 
     # ── path 1: retrieval plan (KNOWLEDGE_ONLY) ──────────────────────────
 
@@ -623,14 +402,14 @@ class TestExecutorEntryPoint:
         from novi.runtime.retrieval import RetrievalExecutor
         from novi.runtime.retrieval_policy import RetrievalStrategy
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         ctx = self._make_ctx("test kb only")
         self._set_plan(ctx, RetrievalStrategy.KNOWLEDGE_ONLY)
         results = list(exe.execute(ctx, "test kb only"))
         kinds = [r[0] for r in results]
-        assert "trace" in kinds
+        assert "status" in kinds
         assert "thinking" in kinds
-        assert ctx.trace.retrieval_strategy == "knowledge_only"
 
     # ── path 1: retrieval plan (NONE) → no-op trace ─────────────────────
 
@@ -638,12 +417,13 @@ class TestExecutorEntryPoint:
         from novi.runtime.retrieval import RetrievalExecutor
         from novi.runtime.retrieval_policy import RetrievalStrategy
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         ctx = self._make_ctx("test plan none")
         self._set_plan(ctx, RetrievalStrategy.NONE)
         results = list(exe.execute(ctx, "test plan none"))
         kinds = [r[0] for r in results]
-        assert kinds == ["trace"]
+        assert kinds == ["status"]
         assert ctx.grounding_text == ""
 
     # ── path 2: analysis needs_grounding ─────────────────────────────────
@@ -652,7 +432,8 @@ class TestExecutorEntryPoint:
         import types
         from novi.runtime.retrieval import RetrievalExecutor
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         ctx = self._make_ctx("test needs grounding")
         ctx.analysis = types.SimpleNamespace(
             intent=types.SimpleNamespace(value="research"),
@@ -676,9 +457,10 @@ class TestExecutorEntryPoint:
             from novi.runtime.evidence import EvidenceCollector
             EvidenceCollector.collect = orig
         kinds = [r[0] for r in results]
-        assert "trace" in kinds
+        assert "status" in kinds
         assert "thinking" in kinds
-        assert ctx.grounding_text == "test result about shindo life"
+        assert "test result about shindo life" in ctx.grounding_text
+        assert "https://example.com" in ctx.grounding_text
 
     # ── path 3: analysis exists but no grounding ─────────────────────────
 
@@ -686,7 +468,8 @@ class TestExecutorEntryPoint:
         import types
         from novi.runtime.retrieval import RetrievalExecutor
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         ctx = self._make_ctx("test no grounding")
         ctx.analysis = types.SimpleNamespace(
             intent=types.SimpleNamespace(value="coding"),
@@ -705,7 +488,7 @@ class TestExecutorEntryPoint:
         )
         results = list(exe.execute(ctx, "test no grounding"))
         kinds = [r[0] for r in results]
-        assert kinds == ["trace"]
+        assert kinds == ["status"]
         assert ctx.grounding_text == ""
 
     # ── path 4: research intent fallback (no analysis) ───────────────────
@@ -714,7 +497,8 @@ class TestExecutorEntryPoint:
         import types
         from novi.runtime.retrieval import RetrievalExecutor
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         # research intent requires no analysis, needs execution_plan
         ctx = self._make_ctx("test research fallback")
         ctx.execution_plan = types.SimpleNamespace(
@@ -730,16 +514,18 @@ class TestExecutorEntryPoint:
             from novi.runtime.evidence import EvidenceCollector
             EvidenceCollector.collect = orig
         kinds = [r[0] for r in results]
-        assert "trace" in kinds
+        assert "status" in kinds
         assert "thinking" in kinds
-        assert ctx.grounding_text == "test result about shindo life"
+        assert "test result about shindo life" in ctx.grounding_text
+        assert "https://example.com" in ctx.grounding_text
 
     # ── path 5: nothing to do ───────────────────────────────────────────
 
     def test_execute_noop(self):
         from novi.runtime.retrieval import RetrievalExecutor
 
-        exe = RetrievalExecutor(debug_trace=True)
+        exe = RetrievalExecutor()
+        exe._is_search_configured = lambda: True
         ctx = self._make_ctx("test noop")
         results = list(exe.execute(ctx, "test noop"))
         assert results == []
@@ -799,72 +585,6 @@ class TestModelResolution:
         with pytest.raises(ModelUnavailableError) as exc_info:
             sel.resolve()
         assert "workload" not in str(exc_info.value).lower()
-
-    def test_strategy_helpers_return_chat_code_research(self):
-        """_strategy_for maps to chat|code|research; ctx.workload carries the strategy."""
-        from novi.runtime.runtime import NoviRuntime
-        from novi.runtime.execution_context import ExecutionContext
-
-        svc = self._service("gen-model")
-        runtime = NoviRuntime(model_service=svc)
-        ctx = ExecutionContext(user_input="hello")
-        assert runtime._strategy_for(ctx, "conversation") == "chat"
-        assert runtime._strategy_for(ctx, "coding") == "code"
-        assert runtime._strategy_for(ctx, "research") == "research"
-        list(runtime.run_stream(context=ctx))
-        assert ctx.workload == "chat"
-        assert ctx.model_name == "gen-model"
-        assert ctx.trace.workload == "chat"
-        assert ctx.model_reason == "primary_model"
-
-    def test_runtime_resolves_strategy_model(self):
-        """Runtime: intent/capability → strategy → primary model."""
-        from novi.runtime.runtime import NoviRuntime
-        from novi.runtime.execution_context import ExecutionContext
-
-        svc = self._service("gen-model")
-        runtime = NoviRuntime(model_service=svc)
-        ctx = ExecutionContext(user_input="hello")
-        list(runtime.run_stream(context=ctx))
-        assert ctx.workload == "chat"
-        assert ctx.model_name == "gen-model"
-        assert ctx.trace.workload == "chat"
-
-    def test_runtime_missing_model_yields_explicit_error(self):
-        """Missing primary model: explicit error, no LLM loop, no token output."""
-        import types
-        from novi.models import ModelUnavailableError
-        from novi.runtime.runtime import NoviRuntime
-        from novi.runtime.execution_context import ExecutionContext
-
-        def resolve_primary():
-            raise ModelUnavailableError("not-installed-model", ["qwen3:8b"])
-
-        runtime = NoviRuntime(model_service=types.SimpleNamespace(
-            resolve_primary=resolve_primary,
-        ))
-        ctx = ExecutionContext(user_input="hello")
-        events = list(runtime.run_stream(context=ctx))
-        kinds = [k for k, *_ in events]
-        assert "error" in kinds
-        assert any("not-installed-model" in str(e[1]) for e in events if e[0] == "error")
-        assert not any(k == "token" for k, *_ in events)
-
-    def test_runtime_rejects_non_vision_model_for_images(self):
-        """Image input against a KNOWN non-vision selected model: explicit rejection."""
-        import types
-        from novi.runtime.runtime import NoviRuntime
-        from novi.runtime.execution_context import ExecutionContext
-
-        # Use a seeded model known without vision (qwen3:8b has chat/reasoning/tools, no vision)
-        svc = self._service("qwen3:8b")
-        runtime = NoviRuntime(model_service=svc)
-        ctx = ExecutionContext(user_input="describe this")
-        ctx.attachments = [{"type": "image", "path": "x.png", "mime": "image/png"}]
-        events = list(runtime.run_stream(context=ctx))
-        kinds = [k for k, *_ in events]
-        assert "error" in kinds
-        assert any("vision" in str(e[1]).lower() for e in events if e[0] == "error")
 
 
 class TestToolExecutor:
@@ -955,11 +675,11 @@ class TestToolExecutor:
         assert tr.success is False
         assert tr.output.startswith("Error: empty returned empty output")
 
-    def test_execute_fallback_chain(self, executor, lesson_store):
+    def test_failure_requires_explicit_new_tool_call(self, executor, lesson_store):
         tr = executor.execute("fail", {})
-        assert tr.success is True
-        assert tr.output == "ok result"
-        assert len(lesson_store.calls) == 2
+        assert tr.success is False
+        assert tr.error == "Error: boom"
+        assert len(lesson_store.calls) == 1
 
     def test_execute_coordinator_intercept(self, executor):
         import types
@@ -1022,19 +742,6 @@ class TestToolExecutor:
 
     # ── record_tool_call ─────────────────────────────────────────────────
 
-    def test_record_tool_call(self):
-        from novi.runtime.trace import ExecutionTrace
-        trace = ExecutionTrace(user_input="test")
-        ToolExecutor.record_tool_call(
-            None, 0, "echo", {"x": 1}, '{"x":1}', 10.5, True,
-            trace=trace,
-        )
-        assert len(trace.steps) == 1
-        assert len(trace.steps[0].tool_calls) == 1
-        tc = trace.steps[0].tool_calls[0]
-        assert tc.name == "echo"
-        assert tc.latency_ms == 10.5
-        assert tc.success is True
 
     def test_record_tool_call_no_trace(self):
         # Must not raise

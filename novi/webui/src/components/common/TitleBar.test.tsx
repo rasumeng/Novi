@@ -5,11 +5,14 @@ import { TitleBar } from './TitleBar'
 vi.mock('./WindowControls', () => ({ WindowControls: () => null }))
 vi.mock('@/components/chat/NotificationBell', () => ({ NotificationBell: () => null }))
 
-describe('TitleBar memory status', () => {
-  it('shows Consolidating in the shared status area while memory is running', () => {
-    render(<TitleBar connection="open" workingActivityTitle="Current chat" isActiveConversation
-      memoryActivity={{ state: 'verifying', version: 2, instance_id: 'i', job_id: 'j', mode: 'apply', reason: '', note_ids: [] }} />)
-    expect(screen.getByRole('status').textContent).toBe('Consolidating')
+describe('TitleBar', () => {
+  it('keeps generation and memory activity out of the application chrome', () => {
+    render(<TitleBar connection="open" />)
+
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Search' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy()
     expect(screen.queryByText('Responding')).toBeNull()
+    expect(screen.queryByText('Consolidating')).toBeNull()
   })
 })

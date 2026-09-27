@@ -1,6 +1,6 @@
 // ProjectDetail.tsx — hub-only view: composer + uniform chat list, no inline messages
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { ArrowLeft, Edit3, Check, X, Plus, Folder, HardDrive, Send, Sparkles, MessageSquareText, MoveRight, Copy, Trash2 } from 'lucide-react'
+import { ArrowLeft, Edit3, Check, X, Plus, Folder, Send, Sparkles, MessageSquareText, MoveRight, Copy, Trash2 } from 'lucide-react'
 import { Project, Conversation } from '@/types'
 import { API_BASE } from '@/components/settings/api'
 import { NoviMascot } from '@/components/brand/NoviMascot'
@@ -38,65 +38,73 @@ export function ProjectDetail({
 }: Props) {
   const [editingContext, setEditingContext] = useState(false)
   const [contextValue, setContextValue] = useState(project.sharedContext)
-  const [workspacePath, setWorkspacePath] = useState(project.workspace?.root ?? "")
-  const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
-  const [editingWorkspace, setEditingWorkspace] = useState(false)
   const [composer, setComposer] = useState('')
   const [detailsOpen, setDetailsOpen] = useState(true)
+  const [localProject, setLocalProject] = useState(project)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  useEffect(() => { setWorkspacePath(project.workspace?.root ?? "") }, [project.workspace?.root])
   useEffect(() => { setContextValue(project.sharedContext) }, [project.sharedContext])
+  useEffect(() => { setLocalProject(project) }, [project])
 
   // Authoritative: projectId field wins, fallback to legacy conversationIds
   const projectConvos = useMemo(() => {
-    const ids = new Set(project.conversationIds)
-    const list = conversations.filter(c => (c as any).projectId === project.id || ids.has(c.id))
+    const ids = new Set(localProject.conversationIds)
+    const list = conversations.filter(c => c.projectId === localProject.id || ids.has(c.id))
     return [...list].sort((a,b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-  }, [project.conversationIds, project.id, conversations])
+  }, [localProject.conversationIds, localProject.id, conversations])
 
   const saveContext = () => {
-    onUpdate(project.id, { sharedContext: contextValue })
+    onUpdate(localProject.id, { sharedContext: contextValue })
     setEditingContext(false)
   }
 
-  const attachWorkspace = async () => {
-    if (!workspacePath.trim()) return
-    setWorkspaceBusy(true)
-    setWorkspaceError(null)
+  const pickAndAttachFolder = async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/projects/${project.id}/workspace`, {
+      const response = await fetch(`${API_BASE}/api/directory-picker`, { method: 'POST' })
+      const data = await response.json()
+      if (!response.ok || !data.path) {
+        if (!data.path && response.ok) return
+        setWorkspaceError(data.error || 'Could not select that folder')
+        return
+      }
+      const res = await fetch(`${API_BASE}/api/projects/${localProject.id}/sources`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ root: workspacePath.trim(), capability: 'READ' }),
+        body: JSON.stringify({ root: data.path, capability: 'READ' }),
       })
-      const data = await r.json()
-      if (!r.ok) setWorkspaceError(data.error || 'Could not attach that folder')
-      else {
-        onUpdate(project.id, { workspace: data.workspace } as any)
-        setEditingWorkspace(false)
+      if (res.ok) {
+        const result = await res.json()
+        setLocalProject(p => ({ ...p, sources: [...(p.sources || []), result.source] }))
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Failed to attach folder' }))
+        setWorkspaceError(err.error)
       }
-    } catch (e: any) {
-      setWorkspaceError(e?.message || 'Could not attach')
-    } finally {
-      setWorkspaceBusy(false)
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Could not attach')
     }
   }
 
-  const pickFolder = async () => {
+  const detachProjectSource = async (root: string) => {
     try {
-      const r = await fetch(`${API_BASE}/api/directory-picker`, { method: 'POST' })
-      const data = await r.json()
-      if (data.path) setWorkspacePath(data.path)
-    } catch {}
+      const res = await fetch(`${API_BASE}/api/projects/${localProject.id}/sources`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root }),
+      })
+      if (res.ok) {
+        setLocalProject(p => ({ ...p, sources: (p.sources || []).filter(s => s.root !== root) }))
+      }
+    } catch (e) {
+      console.error(e)
+    }
   }
 
   const handleSend = () => {
     const text = composer.trim()
     if (!text || generating) return
     if (onSendInProject) {
-      onSendInProject(project.id, text)
+      onSendInProject(localProject.id, text)
       setComposer('')
       textareaRef.current?.focus()
     } else if (onStartConversation) {
@@ -165,9 +173,9 @@ export function ProjectDetail({
           <span className="w-6 h-6 rounded-lg bg-accent/15 border border-accent/20 flex items-center justify-center text-accent shrink-0">
             <Folder size={12} />
           </span>
-          <h2 className="text-sm font-medium text-base-100 truncate">{project.name}</h2>
+          <h2 className="text-sm font-medium text-base-100 truncate">{localProject.name}</h2>
           <span className="hidden sm:inline text-xs text-base-500 truncate">
-            · {project.description || `${projectConvos.length} conversation${projectConvos.length !== 1 ? 's' : ''}`}
+            · {localProject.description || `${projectConvos.length} conversation${projectConvos.length !== 1 ? 's' : ''}`}
           </span>
         </div>
         {onStartConversation && (
@@ -321,62 +329,39 @@ export function ProjectDetail({
               <div className="rounded-xl border border-base-800/40 bg-base-900 p-3.5">
                 <div className="flex items-center justify-between mb-2.5">
                   <h3 className="text-xs font-medium text-base-200 flex items-center gap-1.5">
-                    <HardDrive size={12} className="text-base-500" /> Workspace
+                    <Folder size={12} className="text-base-500" /> Source folders
                   </h3>
                   <span className="text-[11px] text-base-500">read-only</span>
                 </div>
 
-                {project.workspace?.root && !editingWorkspace ? (
-                  <div className="space-y-2.5">
-                    <div className="rounded-lg bg-base-950/50 border border-base-800/30 px-3 py-2.5">
-                      <div className="flex items-center gap-2 text-xs text-base-300">
-                        <Folder size={12} className="text-base-500 shrink-0" />
-                        <span className="truncate flex-1 font-mono text-[12px]">{project.workspace.root}</span>
-                        <button onClick={() => setEditingWorkspace(true)} className={iconBtn} aria-label="Change workspace">
-                          <Edit3 size={11} />
+                {(localProject.sources || []).length > 0 ? (
+                  <div className="space-y-2">
+                    {(localProject.sources || []).map((src, idx) => (
+                      <div key={idx} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-base-950/50 border border-base-800/30 group">
+                        <Folder size={12} className="text-accent shrink-0" />
+                        <span className="truncate flex-1 font-mono text-[12px] text-base-300">{src.root}</span>
+                        <button
+                          onClick={() => detachProjectSource(src.root)}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded text-base-500 hover:text-err"
+                          aria-label={`Remove source folder ${src.root}`}
+                        >
+                          <X size={11} />
                         </button>
                       </div>
-                      <div className="flex items-center gap-2 text-[11px] text-base-500 mt-2">
-                        <span>{project.workspace.stats?.total ?? '—'} files</span>
-                        <span className="text-base-700">·</span>
-                        <span className="truncate">{project.workspace.indexedAt ? new Date(project.workspace.indexedAt).toLocaleDateString() : '—'}</span>
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-base-600 leading-relaxed">I can list, search, and read files here — skipping .git, node_modules, venv, build.</p>
+                    ))}
+                    {(localProject.sources || []).length < 3 && (
+                      <button onClick={pickAndAttachFolder} className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-base-850 border border-base-700 text-xs text-base-300 hover:bg-base-800 transition-colors">
+                        <Plus size={12} /> Add folder
+                      </button>
+                    )}
+                    <p className="text-[11px] text-base-600">I can list, search, and read files here — skipping .git, node_modules, venv, build.</p>
                   </div>
                 ) : (
-                  <div className="space-y-2.5">
-                    {!project.workspace?.root && (
-                      <p className="text-xs text-base-500 leading-relaxed">Attach a local folder and I can answer things like "where is model routing implemented?"</p>
-                    )}
-                    <div className="flex gap-1.5">
-                      <input
-                        value={workspacePath}
-                        onChange={(e) => setWorkspacePath(e.target.value)}
-                        placeholder="D:\Projects\MyApp"
-                        className="flex-1 min-w-0 bg-base-850 border border-base-700 rounded-lg px-2.5 py-2 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/30 font-mono"
-                      />
-                      <button onClick={pickFolder} className="px-2.5 py-2 rounded-lg bg-base-850 border border-base-700 text-xs text-base-300 hover:bg-base-800 transition-colors">
-                        Browse
-                      </button>
-                    </div>
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={attachWorkspace}
-                        disabled={!workspacePath.trim() || workspaceBusy}
-                        className="flex-1 py-2 rounded-lg bg-accent hover:bg-accent/90 text-white text-xs font-medium disabled:opacity-40 transition-colors"
-                      >
-                        {workspaceBusy ? 'Attaching…' : project.workspace?.root ? 'Update' : 'Attach'}
-                      </button>
-                      {editingWorkspace && (
-                        <button onClick={() => { setEditingWorkspace(false); setWorkspaceError(null) }} className="px-2 py-2 rounded-lg bg-base-850 border border-base-700 text-base-400">
-                          <X size={13} />
-                        </button>
-                      )}
-                    </div>
-                    {workspaceError && <p className="text-xs text-err">{workspaceError}</p>}
-                  </div>
+                  <button onClick={pickAndAttachFolder} className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-base-850 border border-base-700 text-xs text-base-300 hover:bg-base-800 transition-colors">
+                    <Plus size={12} /> Add folder
+                  </button>
                 )}
+                {workspaceError && <p className="text-xs text-err mt-2">{workspaceError}</p>}
               </div>
 
               <p className="text-[11px] text-center text-base-600">

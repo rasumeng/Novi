@@ -121,5 +121,8 @@ bench_*.log
 *.tmp
 *.temp
 
+# Disposable local application profile used for manual verification
+/.live-home/
+
 # Local archives
 novi.zip

@@ -5,7 +5,7 @@ Thin by design: classifies intent, estimates complexity, resolves capabilities,
 and produces a plan for the Runtime to execute. Does NOT execute anything itself.
 
 Architecture:
-  user_input → Orchestrator → ExecutionPlan → Runtime.run_stream(plan)
+  user_input → Orchestrator → RunService.start(RunRequest)
 """
 
 from __future__ import annotations

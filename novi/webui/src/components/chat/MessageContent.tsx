@@ -288,16 +288,21 @@ interface MessageContentProps {
   content: string
   // For future streaming optimization: hint that content is still streaming
   streaming?: boolean
+  /** Use muted typography for reasoning, tool output, and other supporting traces. */
+  tone?: 'default' | 'muted'
 }
 
 export const MessageContent = memo(function MessageContent({
   content,
   streaming: _streaming,
+  tone = 'default',
 }: MessageContentProps) {
   const processed = useMemo(() => preprocessContent(content), [content])
 
   return (
-    <div className="novi-markdown min-w-0 max-w-full break-words">
+    <div className={`novi-markdown min-w-0 max-w-full break-words ${tone === 'muted'
+      ? '[&_p]:!text-base-500 [&_h1]:!text-base-400 [&_h2]:!text-base-400 [&_h3]:!text-base-400 [&_h4]:!text-base-400 [&_strong]:!text-base-400 [&_em]:!text-base-500 [&_li]:!text-base-500 [&_th]:!text-base-400 [&_td]:!text-base-500'
+      : ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false }]]}

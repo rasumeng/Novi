@@ -3,11 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-
-from novi.jobs.job import Checkpoint
-from novi.runtime.execution_context import ExecutionContext
-
+from typing import Optional, Any
 
 class AgentRunStatus(Enum):
     RUNNING = "running"
@@ -22,8 +18,8 @@ class AgentRun:
     conversation_id: str
     goal: str
     status: AgentRunStatus
-    context: ExecutionContext
-    checkpoint: Optional[Checkpoint] = None
+    context: dict[str, Any] = field(default_factory=dict)
+    checkpoint: Optional[Any] = None
     iteration: int = 0
     token_usage: Optional[int] = None
     message_seq: int = 0

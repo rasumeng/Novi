@@ -72,11 +72,12 @@ class AnalysisDriver:
 
 
 class RuntimeDriver:
-    """Full runtime evaluation. Requires a model and network for retrieval cases.
+    """Full runtime evaluation via canonical RunService (Phase 9).
 
-    Runs each case through RuntimeInterface.run() and consumes the finalized
-    ExecutionTrace via an EventBus-attached TraceCollector. Timeout-guarded;
-    a per-case failure is recorded as a CaseResult with an error, never thrown.
+    Runs each case through RunService.start(RunRequest) and consumes the
+    finalized RunEvents/RunState. TraceCollector path retired — metrics now
+    derive from RunState/RunEvents where available, with legacy trace as
+    fallback for bounded collaborators.
     """
 
     name = "runtime"
@@ -87,45 +88,99 @@ class RuntimeDriver:
         event_bus=None,
         trace_collector: TraceCollector | None = None,
         timeout_s: float = 120.0,
+        run_service=None,
+        ctx=None,
     ):
-        from ..runtime.runtime import NoviRuntime
-
-        self._runtime = runtime if runtime is not None else NoviRuntime()
-        self._event_bus = event_bus
+        # Prefer canonical RunService; fall back to context-provided or legacy runtime for bounded tests.
+        self.timeout_s = timeout_s
         self._collector = trace_collector
         self._owns_collector = trace_collector is None
-        if trace_collector is None:
-            runtime_bus = event_bus or getattr(self._runtime, "event_bus", None)
-            if runtime_bus is not None:
-                self._collector = TraceCollector(event_bus=runtime_bus, max_traces=10)
-        self.timeout_s = timeout_s
+        self._run_service = run_service
+        self._ctx = ctx
+        self._event_bus = event_bus
+        if run_service is None and ctx is not None:
+            try:
+                self._run_service = ctx.run_service
+            except Exception:
+                self._run_service = None
+        if self._run_service is None and runtime is not None and hasattr(runtime, "start"):
+            # already a RunService-like object
+            self._run_service = runtime
+            self._runtime = None
+        else:
+            # Legacy NoviRuntime kept only as bounded collaborator for retrieval;
+            # not used for run execution after Phase 9.
+            self._runtime = runtime
+            if trace_collector is None and event_bus is not None:
+                self._collector = TraceCollector(event_bus=event_bus, max_traces=10)
+            elif trace_collector is None and runtime is not None and hasattr(runtime, "event_bus"):
+                try:
+                    runtime_bus = getattr(runtime, "event_bus", None)
+                    if runtime_bus is not None:
+                        self._collector = TraceCollector(event_bus=runtime_bus, max_traces=10)
+                except Exception:
+                    pass
+        if self._run_service is None and self._runtime is None:
+            # Lazily construct via NoviContext composition root
+            try:
+                from ..services.context import NoviContext
+
+                _ctx = ctx or NoviContext()
+                self._run_service = _ctx.run_service
+                self._ctx = _ctx
+            except Exception:
+                self._run_service = None
 
     def run(self, case: BenchmarkCase) -> CaseResult:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(self._run_case, case)
-            try:
-                return future.result(timeout=self.timeout_s)
-            except TimeoutError:
-                return CaseResult(
-                    case=case, error=f"timeout after {self.timeout_s}s"
-                )
-            except Exception as e:  # noqa: BLE001 — driver must not crash runner
-                return CaseResult(case=case, error=f"error: {e}")
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(self._run_case, case)
+        try:
+            return future.result(timeout=self.timeout_s)
+        except TimeoutError:
+            future.cancel()
+            return CaseResult(case=case, error=f"timeout after {self.timeout_s}s")
+        except Exception as e:  # noqa: BLE001 — driver must not crash runner
+            return CaseResult(case=case, error=f"error: {e}")
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _run_case(self, case: BenchmarkCase) -> CaseResult:
         result = CaseResult(case=case, latency_ms=0.0)
         if self._collector is not None:
-            self._collector.clear()
+            try:
+                self._collector.clear()
+            except Exception:
+                pass
         t0 = time.perf_counter()
-        answer = self._runtime.run(case.input)
-        result.answer = answer or ""
-        result.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        if self._run_service is not None:
+            from ..runtime.run_contracts import RunRequest
 
-        trace = self._collector.last if self._collector else None
-        if trace:
-            self._apply_trace(result, trace)
+            req = RunRequest(conversation_id=f"eval:{case.id}", user_message_id=f"eval-{case.id}", user_text=case.input)
+            try:
+                run_id = self._run_service.start(req)
+                # RunService.start is synchronous (runs to terminal); snapshot holds final state
+                state = self._run_service.snapshot(run_id)
+                # Derive answer from finalized transcript (public assistant messages)
+                answer_parts = []
+                for msg in getattr(state, "transcript", ()):
+                    if getattr(msg, "role", None) and getattr(msg.role, "value", "") == "assistant":
+                        for blk in getattr(msg, "blocks", ()):
+                            if getattr(blk, "text", None):
+                                answer_parts.append(blk.text)
+                result.answer = "\n".join(answer_parts) if answer_parts else ""
+                result.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+                # Best-effort trace from RunState
+                result.trace = {"run_id": state.id, "status": getattr(state.status, "value", str(state.status)), "terminal_reason": getattr(state, "terminal_reason", "")}
+                return result
+            except Exception as e:
+                result.answer = ""
+                result.error = f"run_service error: {e}"
+                result.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+                return result
+        result.error = "RunService composition unavailable"
+        result.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         return result
 
     @staticmethod

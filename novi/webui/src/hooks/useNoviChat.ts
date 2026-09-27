@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo, TimelineEntry } from '@/types'
+import { Conversation, InlineStep, Attachment, Project, PlanData, BackgroundRunInfo, AgentStateInfo, ProgressInfo, TimelineEntry, SourceFolder } from '@/types'
 import { NoviClient, ConnectionState, ServerEvent, saveConversation, deleteConversationApi, createProject, updateProject, deleteProjectApi, fetchProjectConversations, fetchTimeline } from '@/services/novi'
 import { fetchConversationsDeduped, fetchProjectsDeduped, fetchTimelineEnvelopeDeduped, getConversationsCache, getProjectsCache, getTimelineEnvelopeCache } from '@/hooks/bootCache'
 import { useToast } from '@/hooks/useToast'
@@ -69,6 +69,7 @@ export function useNoviChat() {
   const [conversations, setConversations] = useState<Conversation[]>(() => getConversationsCache() ?? [])
   const [conversationsHydrated, setConversationsHydrated] = useState(() => getConversationsCache() !== null)
   const [activeId, setActiveId] = useState(() => '')
+  const [draftSources, setDraftSources] = useState<SourceFolder[]>([])
 
   // The single generation owner. null when nothing is in flight. This is the
   // only thing that decides where streaming events land — see module comment.
@@ -77,11 +78,6 @@ export function useNoviChat() {
   const runProjectionsRef = useRef<Record<string, RunProjection>>({})
 
   const [inlineSteps, setInlineSteps] = useState<InlineStep[]>([])
-  // In-conversation reasoning state: `thinking` is true while the model is
-  // emitting a reasoning trace before the first answer token; `liveThought`
-  // holds the accumulated trace text so the conversation can render it live.
-  const [thinking, setThinking] = useState(false)
-  const [liveThought, setLiveThought] = useState('')
   const [permission, setPermission] = useState<PermissionRequest | null>(null)
   // Ref mirror of the pending permission prompt. `handleEvent` runs through a
   // ref (`handleEventRef`) so its closure can go stale; the ref keeps the
@@ -148,6 +144,7 @@ export function useNoviChat() {
   // boolean: persistence must save the conversation that actually changed
   // (the generation owner), not whatever is currently on screen.
   const dirtyIdRef = useRef<string | null>(null)
+  const pendingTitleIdsRef = useRef(new Set<string>())
 
   const clearStopFallback = () => {
     if (stopTimeoutRef.current != null) {
@@ -258,82 +255,6 @@ export function useNoviChat() {
     },
     []
   )
-
-  // Appends a token to the conversation that OWNS the current generation,
-  // not to `resolvedActiveId`. If there is no owner (e.g. a stray event after
-  // stop/reset), the token is dropped rather than misattributed.
-  // Reasoning trace buffer. `reasoning` events stream in before the first
-  // token; the accumulated text is attached to the assistant message on first
-  // token (and drained again on done for token-less edge cases).
-  const thoughtRef = useRef('')
-  const thoughtStartedAtRef = useRef(0)
-
-  const attachThought = useCallback((ownerId: string) => {
-    const text = thoughtRef.current
-    if (!text) return
-    const elapsed = Date.now() - thoughtStartedAtRef.current
-    thoughtRef.current = ''
-    updateConversation(ownerId, (c) => {
-      const msgs = [...c.messages]
-      const last = msgs[msgs.length - 1]
-      if (last && last.role === 'assistant') {
-        msgs[msgs.length - 1] = { ...last, thought: text, thoughtElapsedMs: Math.max(0, elapsed) }
-      }
-      return { ...c, messages: msgs }
-    })
-  }, [updateConversation])
-
-  const appendToken = useCallback(
-    (text: string) => {
-      const ownerId = owner?.conversationId
-      if (!ownerId) return
-      // Attach the accumulated reasoning trace to the assistant message being
-      // created/streamed (drain once, on the first token).
-      const thought = thoughtRef.current
-      const thoughtElapsed = thoughtStartedAtRef.current
-        ? Math.max(0, Date.now() - thoughtStartedAtRef.current)
-        : undefined
-      if (thought) {
-        thoughtRef.current = ''
-        setThinking(false)
-        setLiveThought('')
-      }
-      updateConversation(ownerId, (c) => {
-        const msgs = [...c.messages]
-        const last = msgs[msgs.length - 1]
-        if (last && last.role === 'assistant' && last.streaming) {
-          const base = thought ? { ...last, thought, thoughtElapsedMs: thoughtElapsed } : last
-          msgs[msgs.length - 1] = { ...base, content: last.content + text }
-        } else {
-          msgs.push({
-            id: nextId(),
-            role: 'assistant',
-            content: text,
-            createdAt: now(),
-            streaming: true,
-            model: currentModelRef.current || undefined,
-            ...(thought ? { thought, thoughtElapsedMs: thoughtElapsed } : {}),
-          })
-        }
-        return { ...c, messages: msgs, updatedAt: 'Just now' }
-      })
-    },
-    [owner, updateConversation]
-  )
-
-  const finishStreaming = useCallback(() => {
-    const ownerId = owner?.conversationId
-    currentModelRef.current = ''
-    setThinking(false)
-    setLiveThought('')
-    if (!ownerId) return
-    attachThought(ownerId)
-    updateConversation(ownerId, (c) => ({
-      ...c,
-      messages: c.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-    }))
-    dirtyIdRef.current = ownerId
-  }, [owner, updateConversation, attachThought])
 
   const toolLabel = (tool: string, args: Record<string, unknown>): string => {
     const p = args['path'] as string | undefined
@@ -454,19 +375,9 @@ export function useNoviChat() {
     })
   }, [])
 
-  const pushReasoning = useCallback((text: string) => {
-    // Accumulate the live reasoning trace. It streams into the in-conversation
-    // thinking panel while the model is thinking, then is attached to the
-    // assistant message on the first token (see attachThought). Reasoning is
-    // deliberately NOT an inline step — tool/agent steps own the sidebar.
-    if (!thoughtStartedAtRef.current) thoughtStartedAtRef.current = Date.now()
-    thoughtRef.current += text
-    setThinking(true)
-    setLiveThought(prev => prev + text)
-  }, [])
-
   const handleEvent = useCallback(
     (ev: ServerEvent) => {
+      // Run events (with runId/conversationId/sequence) go through runReducer
       if (isRunWireEvent(ev)) {
         const current = runProjectionsRef.current[ev.conversationId]
           ?? createRunProjection(ev.conversationId)
@@ -483,10 +394,9 @@ export function useNoviChat() {
           }
           return
         }
-        if (ev.type === 'run_state' && ['queued', 'running', 'awaiting_permission'].includes(next.status)) {
-          setOwner({ conversationId: ev.conversationId })
-        }
-        if (ev.type === 'message_start' || ev.type === 'token' || ev.type === 'message_end') {
+
+        // Sync projected messages from runReducer to conversations state
+        if (['message_start', 'reasoning', 'token', 'message_end'].includes(ev.type)) {
           const messageId = ev.messageId ?? ''
           if (messageId) {
             const projected = next.messages[messageId]
@@ -496,6 +406,7 @@ export function useNoviChat() {
                 id: messageId,
                 role: 'assistant' as const,
                 content: projected?.content ?? '',
+                thought: projected?.thought || undefined,
                 createdAt: now(),
                 streaming: projected?.status === 'streaming',
               }
@@ -507,113 +418,45 @@ export function useNoviChat() {
               messages[existing] = { ...messages[existing], ...message }
               return { ...conversation, updatedAt: 'Just now', messages }
             })
-            dirtyIdRef.current = ev.conversationId
+            if (ev.type === 'message_end') dirtyIdRef.current = ev.conversationId
           }
         }
+
+        if (ev.type === 'run_state' && ['queued', 'running', 'awaiting_permission'].includes(next.status)) {
+          setOwner({ conversationId: ev.conversationId })
+        }
         if (['done', 'error', 'cancelled'].includes(ev.type)) {
+          clearStopFallback()
+          dirtyIdRef.current = ev.conversationId
+          if (ev.type === 'done' && ev.conversationId !== resolvedActiveId) {
+            const title = conversations.find(c => c.id === ev.conversationId)?.title ?? 'Conversation'
+            const notice = notifyPolicy.responseReady(title, ev.conversationId)
+            pushNotification(notice.draft)
+            if (notice.native) notifyIfUnfocused(notice.native.title, notice.native.body)
+          }
           updateConversation(ev.conversationId, (conversation) => ({
             ...conversation,
             messages: conversation.messages.map(message =>
               message.streaming ? { ...message, streaming: false } : message),
           }))
-          setOwner(current => current?.conversationId === ev.conversationId ? null : current)
-          setThinking(false)
-          setLiveThought('')
-          setPlan(null)
-          setProgress(null)
-        }
-        // Canonical events are fully projected above. The switch below exists
-        // only for unrelated/legacy application messages during migration.
-        return
-      }
-      switch (ev.type) {
-        // Task 6 compat shim: handle both legacy token/done and new AgentRun events for one release.
-        // TODO(cleanup): remove legacy token-only branch after backend requires message_start/message_end.
-        case 'message_start': {
-          // Start a new streaming message for this messageId; token will append to it.
-          // No-op if token already created the message — just ensure streaming state.
-          break
-        }
-        case 'message_end': {
-          // Progressive message finished but run continues — finalize current streaming bubble without clearing owner.
-          // Mirrors finishStreaming without owner cleanup so next token starts a new bubble.
-          const ownerId = owner?.conversationId
-          if (!ownerId) break
-          // Attach any pending thought to this message chunk
-          const text = thoughtRef.current
-          if (text) {
-            const elapsed = Date.now() - thoughtStartedAtRef.current
-            thoughtRef.current = ''
-            updateConversation(ownerId, (c) => {
-              const msgs = [...c.messages]
-              const last = msgs[msgs.length - 1]
-              if (last && last.role === 'assistant') {
-                msgs[msgs.length - 1] = { ...last, thought: text, thoughtElapsedMs: Math.max(0, elapsed) }
-              }
-              return { ...c, messages: msgs }
+          if (ev.type === 'done' && pendingTitleIdsRef.current.delete(ev.conversationId)) {
+            void requestConversationTitle(ev.conversationId).then(title => {
+              if (!title) return
+              updateConversation(ev.conversationId, conversation => ({ ...conversation, title }))
+              dirtyIdRef.current = ev.conversationId
             })
           }
-          updateConversation(ownerId, (c) => ({
-            ...c,
-            messages: c.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-          }))
-          setThinking(false)
-          setLiveThought('')
-          dirtyIdRef.current = ownerId
-          break
-        }
-        case 'cancelled': {
-          const finishedId = owner?.conversationId
-          clearStopFallback()
-          // Finalize any streaming message then clear owner like done
-          if (finishedId) {
-            updateConversation(finishedId, (c) => ({
-              ...c,
-              messages: c.messages.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
-            }))
-            dirtyIdRef.current = finishedId
-          }
-          currentModelRef.current = ''
-          setThinking(false)
-          setLiveThought('')
-          setOwner(null)
-          setPermission(null)
+          setOwner(current => current?.conversationId === ev.conversationId ? null : current)
           setPlan(null)
           setProgress(null)
-          setInlineSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'completed' as const, durationMs: Date.now() - s.startedAt } : s))
-          break
         }
-        case 'token':
-          appendToken(ev.text ?? '')
-          break
-        // Compat: new tool event names from AgentRun map to same handling as legacy
-        case 'tool.started': {
-          const e = ev as unknown as { tool: string; args: Record<string, unknown> }
-          pushStep({
-            type: 'tool_call',
-            icon: toolIcon(e.tool),
-            label: toolLabel(e.tool, e.args ?? {}),
-            toolCallId: (e as any).id ?? e.tool,
-            toolName: e.tool,
-            toolSummary: toolSummary(e.tool, e.args ?? {}),
-            status: 'running',
-          })
-          break
-        }
-        case 'tool.completed': {
-          const e = ev as unknown as { tool: string; result: string }
-          setInlineSteps(prev => prev.map(s =>
-            s.toolName === e.tool && s.status === 'running'
-              ? { ...s, status: 'completed' as const, durationMs: Date.now() - s.startedAt, result: e.result }
-              : s.toolCallId === (e as any).id
-                ? { ...s, status: 'completed' as const, durationMs: Date.now() - s.startedAt, result: e.result }
-                : s
-          ))
-          break
-        }
+        return
+      }
+
+      // Non-run events (no runId/conversationId/sequence) handled directly
+      switch (ev.type) {
         case 'thinking':
         case 'status': {
-          // Honest search state: surface distinct icons per grounding_status
           const txt = (ev as any).text || ''
           let icon = 'Brain'
           let st: 'running' | 'error' = 'running'
@@ -636,9 +479,6 @@ export function useNoviChat() {
           })
           break
         }
-        case 'reasoning':
-          pushReasoning(ev.text)
-          break
         case 'model':
           currentModelRef.current = ev.text
           break
@@ -675,47 +515,31 @@ export function useNoviChat() {
         case 'plan':
           setPlan({ plan: ev.plan, status: 'pending' })
           break
-        case 'tool_call': {
-          const toolEvent = ev as { id: string; tool: string; args: Record<string, unknown>; category?: string }
-          pushStep({
-            type: 'tool_call',
-            icon: toolIcon(toolEvent.tool),
-            label: toolLabel(toolEvent.tool, toolEvent.args),
-            toolCallId: toolEvent.id,
-            toolName: toolEvent.tool,
-            toolCategory: toolEvent.category,
-            toolSummary: toolSummary(toolEvent.tool, toolEvent.args),
-            status: 'running',
+        case 'permission_request':
+          setPermission({ tool: ev.tool ?? '', args: ev.args ?? {}, id: ev.id ?? '', timeoutMs: (ev as any).timeoutMs, expiresAt: (ev as any).expiresAt })
+          try {
+            pushNotification({ severity: 'info', title: 'Permission required', message: `Novi wants to run ${ev.tool ?? 'a tool'} — approve or deny` })
+          } catch {}
+          break
+        case 'progress':
+          setProgress({ current: ev.current, total: ev.total, label: ev.label })
+          break
+        case 'agent_state':
+          setAgentState({
+            current_goal: ev.current_goal,
+            status: ev.status,
+            tools_used: ev.tools_used,
+            error: ev.error,
           })
           break
-        }
-        case 'tool_result': {
-          const toolEvent = ev as { id: string; result: string; diff?: InlineStep['diff'] }
-          setInlineSteps(prev => prev.map(s =>
-            s.toolCallId === toolEvent.id
-              ? { ...s, status: 'completed' as const, durationMs: Date.now() - s.startedAt, result: toolEvent.result, diff: toolEvent.diff }
-              : s
-          ))
+        case 'assistant_event':
+          pushTimelineEntry(ev.entry)
           break
-        }
-        case 'directory_set':
-          break
-        case 'projects_list':
-          setProjects(ev.projects)
-          break
-        case 'recent_conversations':
-          break
-        case 'project_created':
-          setProjects(prev => [ev.project, ...prev])
-          break
-        case 'project_selected':
+        case 'memory_activity':
+          receiveMemory(ev.activity)
           break
         case 'background_run_update': {
           const isTerminal = ev.status === 'done' || ev.status === 'error' || ev.status === 'cancelled'
-          // Computed from the current committed state (not the setState updater's
-          // `prev`) so the transition check is a plain value, not a variable
-          // mutated inside a closure — only notify on the transition into
-          // done/error, never on repeated updates that are already terminal.
           const existing = backgroundRuns.find(r => r.run_id === ev.run_id)
           const wasTerminal = !!existing && ['done', 'error', 'cancelled'].includes(existing.status)
           const justFinished = isTerminal && !wasTerminal
@@ -759,95 +583,15 @@ export function useNoviChat() {
         case 'schedule_deleted':
         case 'schedule_toggled':
           break
-        case 'progress':
-          setProgress({ current: ev.current, total: ev.total, label: ev.label })
+        case 'directory_set':
+        case 'projects_list':
+        case 'recent_conversations':
+        case 'project_created':
+        case 'project_selected':
           break
-        case 'agent_state':
-          setAgentState({
-            current_goal: ev.current_goal,
-            status: ev.status,
-            tools_used: ev.tools_used,
-            error: ev.error,
-          })
-          break
-        case 'assistant_event':
-          pushTimelineEntry(ev.entry)
-          break
-        case 'memory_activity':
-          receiveMemory(ev.activity)
-          break
-        case 'permission_request': {
-          setPermission({ tool: ev.tool ?? '', args: ev.args ?? {}, id: ev.id ?? '', timeoutMs: (ev as any).timeoutMs, expiresAt: (ev as any).expiresAt })
-          // Notification on pending — honest expiry visible even when user is elsewhere
-          try {
-            pushNotification({ severity: 'info', title: 'Permission required', message: `Novi wants to run ${ev.tool ?? 'a tool'} — approve or deny` })
-          } catch {}
-          break
-        }
-        case 'permission_timeout': {
-          // Honest expiry: the backend resolved the request as timed out and
-          // did NOT perform the action. Distinct from deny (user decision)
-          // and cancel (user stopped the run). Only clear the prompt when it
-          // is the request that actually expired — never a newer prompt.
-          const current = permissionRef.current
-          if (current && current.id !== ev.id) break
-          setPermission(null)
-          const ownerId = owner?.conversationId
-          if (ownerId) {
-            const msg = 'Permission request expired — action not performed.'
-            updateConversation(ownerId, (c) => ({
-              ...c,
-              updatedAt: 'Just now',
-              messages: [...c.messages, { id: nextId(), role: 'assistant', content: msg, createdAt: now() }],
-            }))
-            dirtyIdRef.current = ownerId
-          }
-          break
-        }
-        case 'done': {
-          const finishedId = owner?.conversationId
-          const wasViewing = !!finishedId && finishedId === resolvedActiveId
-          clearStopFallback()
-          finishStreaming()
-          setOwner(null)
-          setPermission(null)
-          setPlan(null)
-          setProgress(null)
-          setInlineSteps(prev => prev.map(s =>
-            s.status === 'running' ? { ...s, status: 'completed' as const, durationMs: Date.now() - s.startedAt } : s
-          ))
-          if (finishedId) {
-            const title = conversations.find(c => c.id === finishedId)?.title || 'a conversation'
-            const r = notifyPolicy.responseReady(title, finishedId)
-            // In-app history only matters for what you didn't already see happen live.
-            if (!wasViewing) pushNotification(r.draft)
-            // Native OS notification is keyed on window focus, not which conversation
-            // was active — a minimized window still deserves a ping either way.
-            if (r.native) notifyIfUnfocused(r.native.title, r.native.body)
-          }
-          break
-        }
-        case 'error': {
-          const finishedId = owner?.conversationId
-          const wasViewing = !!finishedId && finishedId === resolvedActiveId
-          clearStopFallback()
-          currentModelRef.current = ''
-          setThinking(false)
-          setLiveThought('')
-          setOwner(null)
-          setProgress(null)
-          if (finishedId) {
-            const title = conversations.find(c => c.id === finishedId)?.title || 'a conversation'
-            const r = notifyPolicy.responseFailed(title, finishedId)
-            if (!wasViewing) pushNotification(r.draft)
-            if (r.native) notifyIfUnfocused(r.native.title, r.native.body)
-          }
-          break
-        }
       }
     },
-    [appendToken, pushStep, pushReasoning, finishStreaming, owner, resolvedActiveId, conversations, pushNotification, backgroundRuns, pushTimelineEntry, updateConversation]
-  )
+    [pushStep, pushTimelineEntry, receiveMemory, pushNotification, backgroundRuns, updateConversation, owner, conversations, resolvedActiveId])
 
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
@@ -882,7 +626,8 @@ export function useNoviChat() {
   }, [connection, pushNotification])
 
   const sendMessage = useCallback(
-    (content: string, attachments?: Attachment[], deepResearch?: boolean, projectIdOverride?: string | null) => {
+    (content: string, attachments?: Attachment[], deepResearch?: boolean,
+     projectIdOverride?: string | null, forceNewConversation = false) => {
       const client = clientRef.current
       // Single-flight: refuse a new generation while one is already owned.
       if (!client || owner) return
@@ -901,17 +646,21 @@ export function useNoviChat() {
       }
       const projectId = effectiveProjectId ?? undefined
 
-      if (resolvedActiveId === DRAFT_ID) {
+      if (resolvedActiveId === DRAFT_ID || forceNewConversation) {
         const newId = nextId()
+        const inheritedSources = effectiveProjectId
+          ? projects.find(project => project.id === effectiveProjectId)?.sources ?? []
+          : []
+        const sourcesToPromote = resolvedActiveId === DRAFT_ID ? draftSources : []
         const newConv: Conversation = {
           id: newId,
           title: trimmed.slice(0, 48) || 'Attachments',
           updatedAt: 'Just now',
           pinned: false,
           projectId: effectiveProjectId,
+          sources: [...inheritedSources],
           messages: [{ id: nextId(), role: 'user', content: textToSend, createdAt: now(), attachments }],
         } as Conversation
-        if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
         setConversations((convs) => [newConv, ...convs])
         setActiveId(newId)
         if (effectiveProjectId) {
@@ -919,12 +668,37 @@ export function useNoviChat() {
         }
         setOwner({ conversationId: newId })
         setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
-        dirtyIdRef.current = newId
-        thoughtRef.current = ''
-        thoughtStartedAtRef.current = 0
-        setThinking(false)
-        setLiveThought('')
         setInlineSteps([])
+        void (async () => {
+          try {
+            await saveConversation(newConv)
+            const sources: SourceFolder[] = []
+            for (let index = 0; index < sourcesToPromote.length; index += 1) {
+              try {
+                sources.push(await requestSourceAttachment(newId, sourcesToPromote[index].root))
+              } catch (error) {
+                if (sources.length) {
+                  updateConversation(newId, conversation => ({ ...conversation, sources }))
+                }
+                setDraftSources(sourcesToPromote.slice(index))
+                throw error
+              }
+            }
+            if (sources.length) {
+              updateConversation(newId, conversation => ({ ...conversation, sources }))
+            }
+            if (resolvedActiveId === DRAFT_ID) setDraftSources([])
+            pendingTitleIdsRef.current.add(newId)
+            if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) {
+              pendingTitleIdsRef.current.delete(newId)
+              throw new Error('Novi is not connected. Try again once it reconnects.')
+            }
+            dirtyIdRef.current = newId
+          } catch (error) {
+            setOwner(null)
+            showError(error instanceof Error ? error.message : "Couldn't start this conversation.")
+          }
+        })()
       } else {
         // If caller explicitly scoped this send to a project that the current
         // conversation doesn't belong to, fork a NEW conversation in that
@@ -944,7 +718,11 @@ export function useNoviChat() {
             projectId: projectIdOverride as string,
             messages: [{ id: nextId(), role: 'user', content: textToSend, createdAt: now(), attachments }],
           } as Conversation
-          if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) return
+          pendingTitleIdsRef.current.add(newId)
+          if (!client.sendChat(textToSend, newId, attachments, projectId, deepResearch)) {
+            pendingTitleIdsRef.current.delete(newId)
+            return
+          }
           setConversations((convs) => [newConv, ...convs])
           setActiveId(newId)
           if (projectIdOverride) {
@@ -953,14 +731,16 @@ export function useNoviChat() {
           setOwner({ conversationId: newId })
           setDeepResearchByConv((prev) => ({ ...prev, [newId]: !!deepResearch }))
           dirtyIdRef.current = newId
-          thoughtRef.current = ''
-          thoughtStartedAtRef.current = 0
-          setThinking(false)
-          setLiveThought('')
+
           setInlineSteps([])
           return
         }
-        if (!client.sendChat(textToSend, resolvedActiveId, attachments, projectId, deepResearch)) return
+        const isFirstMessage = conversations.find(c => c.id === resolvedActiveId)?.messages.length === 0
+        if (isFirstMessage) pendingTitleIdsRef.current.add(resolvedActiveId)
+        if (!client.sendChat(textToSend, resolvedActiveId, attachments, projectId, deepResearch)) {
+          if (isFirstMessage) pendingTitleIdsRef.current.delete(resolvedActiveId)
+          return
+        }
         const targetId = resolvedActiveId
         updateConversation(targetId, (c) => ({
           ...c,
@@ -974,14 +754,11 @@ export function useNoviChat() {
         setOwner({ conversationId: targetId })
         setDeepResearchByConv((prev) => ({ ...prev, [targetId]: !!deepResearch }))
         dirtyIdRef.current = targetId
-        thoughtRef.current = ''
-        thoughtStartedAtRef.current = 0
-        setThinking(false)
-        setLiveThought('')
+
         setInlineSteps([])
       }
     },
-    [owner, updateConversation, resolvedActiveId, projects, conversations, activeProjectId]
+    [owner, updateConversation, resolvedActiveId, projects, conversations, activeProjectId, draftSources, showError]
   )
 
   const stop = useCallback(() => {
@@ -992,6 +769,100 @@ export function useNoviChat() {
   // the selected path locally; no files are sent through the attachment API.
   const attachFolder = useCallback((path: string) => {
     return clientRef.current?.setDirectory(path) ?? false
+  }, [])
+
+  // Source folders — attach/detach folders for conversation/project context
+  const attachConversationSource = useCallback(async (convId: string, path: string) => {
+    if (convId === DRAFT_ID) {
+      if (draftSources.some(source => source.root === path)) throw new Error('Folder already attached')
+      if (draftSources.length >= 3) throw new Error('Maximum 3 source folders allowed')
+      const source: SourceFolder = { root: path, capability: 'READ' }
+      setDraftSources(prev => [...prev, source])
+      return source
+    }
+    const source = await requestSourceAttachment(convId, path)
+    // Update local conversation state
+    setConversations(prev => prev.map(c => {
+      if (c.id !== convId) return c
+      const sources = c.sources ? [...c.sources] : []
+      sources.unshift(source)
+      return { ...c, sources, updatedAt: new Date().toISOString() }
+    }))
+    return source
+  }, [draftSources])
+
+  const detachConversationSource = useCallback(async (convId: string, path: string) => {
+    if (convId === DRAFT_ID) {
+      setDraftSources(prev => prev.filter(source => source.root !== path))
+      return
+    }
+    const res = await fetch(`${API_BASE}/api/conversations/${convId}/sources`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to detach folder' }))
+      throw new Error(err.error)
+    }
+    // Update local conversation state
+    setConversations(prev => prev.map(c => {
+      if (c.id !== convId) return c
+      return { ...c, sources: (c.sources || []).filter(s => s.root !== path), updatedAt: new Date().toISOString() }
+    }))
+  }, [])
+
+  const attachProjectSource = useCallback(async (projId: string, path: string) => {
+    const res = await fetch(`${API_BASE}/api/projects/${projId}/sources`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: path, capability: 'READ' }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to attach folder' }))
+      throw new Error(err.error)
+    }
+    const data = await res.json()
+    const source = sourceFromResponse(data.source)
+    // Update local project state
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projId) return p
+      const sources = p.sources ? [...p.sources] : []
+      sources.unshift(source)
+      return { ...p, sources, updatedAt: new Date().toISOString() }
+    }))
+    return source
+  }, [])
+
+  const detachProjectSource = useCallback(async (projId: string, path: string) => {
+    const res = await fetch(`${API_BASE}/api/projects/${projId}/sources`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: path }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to detach folder' }))
+      throw new Error(err.error)
+    }
+    // Update local project state
+    setProjects(prev => prev.map(p => {
+      if (p.id !== projId) return p
+      return { ...p, sources: (p.sources || []).filter(s => s.root !== path), updatedAt: new Date().toISOString() }
+    }))
+  }, [])
+
+  const fetchConversationSources = useCallback(async (convId: string): Promise<SourceFolder[]> => {
+    const res = await fetch(`${API_BASE}/api/conversations/${convId}/sources`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.sources || []
+  }, [])
+
+  const fetchProjectSources = useCallback(async (projId: string): Promise<SourceFolder[]> => {
+    const res = await fetch(`${API_BASE}/api/projects/${projId}/sources`)
+    if (!res.ok) return []
+    const data = await res.json()
+    return data.sources || []
   }, [])
 
   const answerPermission = useCallback((allowed: boolean, requestId?: string) => {
@@ -1034,6 +905,7 @@ export function useNoviChat() {
     if (owner) return
     clientRef.current?.reset()
     setActiveId(DRAFT_ID)
+    setDraftSources([])
     // Explicit project scope: set to that project, else clear for global unassigned chat
     if (projectId === undefined) {
       // legacy call without arg — clear global project scope so new chat is unassigned
@@ -1047,8 +919,7 @@ export function useNoviChat() {
       try { localStorage.setItem('novi_active_project_id', projectId) } catch {}
     }
     setInlineSteps([])
-    setThinking(false)
-    setLiveThought('')
+
     setAgentState(null)
     setProgress(null)
   }, [owner])
@@ -1147,7 +1018,7 @@ export function useNoviChat() {
   }, [activeProjectId, showError])
 
   const active: Conversation = resolvedActiveId === DRAFT_ID
-    ? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
+    ? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [], sources: draftSources } as Conversation
     : conversations.find((c) => c.id === resolvedActiveId) ?? { id: DRAFT_ID, title: 'New chat', updatedAt: '', pinned: false, messages: [] } as Conversation
 
   // Project for active conversation — single source: conversation's projectId OR conversationIds membership, fallback to selected project for draft
@@ -1172,6 +1043,10 @@ export function useNoviChat() {
     ['queued', 'running', 'awaiting_permission'].includes(activeRunProjection.status)
   const activeIsGenerating = projectionIsActive ||
     (owner !== null && owner.conversationId === resolvedActiveId)
+
+  const lastMessage = activeRunProjection?.messages[activeRunProjection.messageOrder.slice(-1)[0]]
+  const liveThinking = activeIsGenerating && lastMessage?.status === 'streaming' &&
+    lastMessage.thought && !lastMessage.content ? lastMessage : null
 
   const projectedPermission: PermissionRequest | null =
     activeRunProjection?.permission?.status === 'pending'
@@ -1220,7 +1095,7 @@ export function useNoviChat() {
     ? conversations.find(c => c.id === generatingConversationId)?.title ?? null
     : null
 
-  return {
+return {
     connection,
     memoryActivity,
     conversationsHydrated,
@@ -1237,13 +1112,13 @@ export function useNoviChat() {
     inlineSteps: activeRunProjection
       ? projectedSteps
       : activeIsGenerating ? inlineSteps : [],
-    thinking: activeIsGenerating ? thinking : false,
-    liveThought: activeIsGenerating ? liveThought : '',
+    thinking: !!liveThinking,
+    liveThought: liveThinking?.thought ?? '',
     agentState: activeIsGenerating ? agentState : null,
     progress: activeIsGenerating ? progress : null,
     plan: activeIsGenerating ? plan : null,
     permission: activeIsGenerating ? (projectedPermission ?? permission) : null,
-backgroundRuns,
+    backgroundRuns,
     jobsError,
     jobsLoading,
     timeline,
@@ -1262,6 +1137,12 @@ backgroundRuns,
     refreshBackgroundRuns: handleRefreshBackgroundRuns,
     stop,
     attachFolder,
+    attachConversationSource,
+    detachConversationSource,
+    attachProjectSource,
+    detachProjectSource,
+    fetchConversationSources,
+    fetchProjectSources,
     answerPermission,
     answerPlan,
     newChat,
@@ -1277,5 +1158,44 @@ backgroundRuns,
     createProject: handleCreateProject,
     updateProject: handleUpdateProject,
     deleteProject: handleDeleteProject,
+  }
+}
+function sourceFromResponse(value: unknown): SourceFolder {
+  if (!value || typeof value !== 'object') throw new Error('Novi returned an invalid source folder')
+  const source = value as Partial<SourceFolder>
+  if (typeof source.root !== 'string' || !source.root.trim()) {
+    throw new Error('Novi returned an invalid source folder')
+  }
+  return {
+    root: source.root,
+    capability: typeof source.capability === 'string' ? source.capability : 'READ',
+    indexedAt: typeof source.indexedAt === 'string' ? source.indexedAt : undefined,
+    stats: source.stats,
+    hash: typeof source.hash === 'string' ? source.hash : undefined,
+  }
+}
+
+async function requestSourceAttachment(conversationId: string, path: string): Promise<SourceFolder> {
+  const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/sources`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ root: path, capability: 'READ' }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Failed to attach folder' }))
+    throw new Error(error.error || 'Failed to attach folder')
+  }
+  const data = await response.json()
+  return sourceFromResponse(data.source)
+}
+
+async function requestConversationTitle(conversationId: string): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE}/api/conversations/${conversationId}/title`, { method: 'POST' })
+    if (!response.ok) return null
+    const data = await response.json()
+    return typeof data.title === 'string' && data.title.trim() ? data.title.trim() : null
+  } catch {
+    return null
   }
 }
