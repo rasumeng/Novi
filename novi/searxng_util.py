@@ -1,28 +1,91 @@
 """SearXNG auto-setup and management utilities."""
 
 import os
+import json
+import secrets
 import subprocess
 import sys
 import time
 import urllib.request
 import urllib.error
+import shutil
+from pathlib import Path, PureWindowsPath
 
 
 SEARXNG_CONTAINER = "novi-searxng"
 SEARXNG_IMAGE = "searxng/searxng"
 SEARXNG_PORT = 8080
+SEARXNG_CONFIG_DIR = Path.home() / ".novi" / "searxng"
 
-DOCKER_DESKTOP_PATHS = [
-    r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
-    r"C:\Program Files\Docker\Docker\resources\Docker Desktop.exe",
-    os.path.expanduser(r"~\AppData\Local\Docker\Docker Desktop\Docker Desktop.exe"),
-]
+SEARXNG_SETTINGS_TEMPLATE = """\
+use_default_settings: true
+search:
+  formats:
+    - html
+    - json
+server:
+  secret_key: "{secret_key}"
+"""
+
+def _docker_cli_paths() -> list[str]:
+    """Return common Docker CLI locations for GUI apps with a minimal PATH."""
+    if sys.platform == "win32":
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        paths = [
+            str(PureWindowsPath(program_files) / "Docker" / "Docker" / "resources" / "bin" / "docker.exe"),
+        ]
+        if local_app_data:
+            paths.append(str(PureWindowsPath(local_app_data) / "Programs" / "DockerDesktop" / "resources" / "bin" / "docker.exe"))
+        return paths
+    if sys.platform == "darwin":
+        return [
+            "/Applications/Docker.app/Contents/Resources/bin/docker",
+            "/usr/local/bin/docker",
+            "/opt/homebrew/bin/docker",
+        ]
+    return [
+        "/usr/bin/docker",
+        "/usr/local/bin/docker",
+        "/snap/bin/docker",
+        str(Path.home() / ".docker" / "bin" / "docker"),
+    ]
+
+
+def _docker_desktop_paths() -> list[str]:
+    if sys.platform == "win32":
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        paths = [
+            str(PureWindowsPath(program_files) / "Docker" / "Docker" / "Docker Desktop.exe"),
+            str(PureWindowsPath(program_files) / "Docker" / "Docker" / "resources" / "Docker Desktop.exe"),
+        ]
+        if local_app_data:
+            paths.extend([
+                str(PureWindowsPath(local_app_data) / "Docker" / "Docker Desktop" / "Docker Desktop.exe"),
+                str(PureWindowsPath(local_app_data) / "Programs" / "DockerDesktop" / "Docker Desktop.exe"),
+            ])
+        return paths
+    if sys.platform == "darwin":
+        return ["/Applications/Docker.app/Contents/MacOS/Docker"]
+    return []
+
+
+def _docker_executable() -> str | None:
+    """Find Docker even when a per-user install is absent from PATH."""
+    command = shutil.which("docker")
+    if command:
+        return command
+    return next((path for path in _docker_cli_paths() if os.path.isfile(path)), None)
 
 
 def is_docker_available() -> bool:
+    docker = _docker_executable()
+    if not docker:
+        return False
     try:
         result = subprocess.run(
-            ["docker", "--version"],
+            [docker, "--version"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -33,9 +96,12 @@ def is_docker_available() -> bool:
 
 
 def is_docker_daemon_reachable() -> bool:
+    docker = _docker_executable()
+    if not docker:
+        return False
     try:
         result = subprocess.run(
-            ["docker", "ps"],
+            [docker, "ps"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -46,11 +112,11 @@ def is_docker_daemon_reachable() -> bool:
 
 
 def _launch_docker_desktop() -> bool:
-    for path in DOCKER_DESKTOP_PATHS:
+    for path in _docker_desktop_paths():
         if os.path.isfile(path):
             print("Docker Desktop not running. Launching...")
             try:
-                subprocess.Popen([path], shell=True)
+                subprocess.Popen([path])
                 return True
             except Exception:
                 pass
@@ -68,7 +134,7 @@ def _wait_for_docker_daemon(timeout: int = 60) -> bool:
 def ensure_docker_daemon() -> bool:
     if is_docker_daemon_reachable():
         return True
-    if sys.platform == "win32" and _launch_docker_desktop():
+    if sys.platform in {"win32", "darwin"} and _launch_docker_desktop():
         print("Waiting for Docker Desktop to start...")
         return _wait_for_docker_daemon(120)
     return False
@@ -78,8 +144,9 @@ def is_searxng_running(port: int = SEARXNG_PORT, timeout: float = 2) -> bool:
     """Check if SearXNG is running on the specified port."""
     try:
         req = urllib.request.Request(f"http://localhost:{port}/search?q=test&format=json")
-        urllib.request.urlopen(req, timeout=timeout)
-        return True
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.load(response)
+        return isinstance(payload, dict) and isinstance(payload.get("results"), list)
     except Exception:
         return False
 
@@ -100,8 +167,19 @@ def start_searxng(port: int = SEARXNG_PORT) -> bool:
     print(f"Starting SearXNG on port {port}...")
 
     try:
+        docker = _docker_executable()
+        if not docker:
+            print("Docker CLI not found. Install Docker to enable web search (SearXNG).")
+            return False
+        SEARXNG_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        settings_path = SEARXNG_CONFIG_DIR / "settings.yml"
+        settings_path.write_text(
+            SEARXNG_SETTINGS_TEMPLATE.format(secret_key=secrets.token_hex(32)),
+            encoding="utf-8",
+        )
+
         existing = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={SEARXNG_CONTAINER}", "--format", "{{.Names}}"],
+            [docker, "ps", "-a", "--filter", f"name={SEARXNG_CONTAINER}", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -109,26 +187,33 @@ def start_searxng(port: int = SEARXNG_PORT) -> bool:
         container_exists = SEARXNG_CONTAINER in existing.stdout.splitlines()
 
         if container_exists:
-            result = subprocess.run(
-                ["docker", "start", SEARXNG_CONTAINER],
+            # Containers created by older Novi releases did not enable JSON,
+            # so they answered our API requests with HTTP 403. Recreate the
+            # managed container to apply the mounted settings below.
+            removed = subprocess.run(
+                [docker, "rm", "-f", SEARXNG_CONTAINER],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
-        else:
-            result = subprocess.run(
-                [
-                    "docker", "run", "-d",
-                    "--name", SEARXNG_CONTAINER,
-                    "-p", f"{port}:8080",
-                    "-e", "SEARXNG_BASE_URL=http://localhost:8080/",
-                    "--restart", "unless-stopped",
-                    SEARXNG_IMAGE,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            if removed.returncode != 0:
+                _print_docker_error(removed.stderr)
+                return False
+
+        result = subprocess.run(
+            [
+                docker, "run", "-d",
+                "--name", SEARXNG_CONTAINER,
+                "-p", f"127.0.0.1:{port}:8080",
+                "-v", f"{SEARXNG_CONFIG_DIR.resolve()}:/etc/searxng:rw",
+                "-e", "SEARXNG_BASE_URL=http://localhost:8080/",
+                "--restart", "unless-stopped",
+                SEARXNG_IMAGE,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
         if result.returncode != 0:
             _print_docker_error(result.stderr)
@@ -167,14 +252,18 @@ def _print_docker_error(stderr: str):
 def stop_searxng():
     """Stop SearXNG container."""
     try:
+        docker = _docker_executable()
+        if not docker:
+            print("Docker CLI not found.")
+            return
         subprocess.run(
-            ["docker", "stop", SEARXNG_CONTAINER],
+            [docker, "stop", SEARXNG_CONTAINER],
             capture_output=True,
             text=True,
             timeout=10,
         )
         subprocess.run(
-            ["docker", "rm", SEARXNG_CONTAINER],
+            [docker, "rm", SEARXNG_CONTAINER],
             capture_output=True,
             text=True,
             timeout=10,
@@ -206,3 +295,39 @@ def ensure_searxng(port: int = SEARXNG_PORT) -> str:
             return f"http://localhost:{port}"
 
     return ""
+
+
+def setup_searxng(port: int = SEARXNG_PORT) -> dict:
+    """Start or reuse Novi's local SearXNG and return a UI-friendly result."""
+    url = f"http://localhost:{port}"
+    if is_searxng_running(port):
+        return {
+            "ok": True,
+            "state": "connected",
+            "url": url,
+            "message": "SearXNG is ready and web search is enabled.",
+        }
+    if not is_docker_available():
+        return {
+            "ok": False,
+            "state": "docker_missing",
+            "message": "Install Docker, then try again.",
+        }
+    if not ensure_docker_daemon():
+        return {
+            "ok": False,
+            "state": "docker_unavailable",
+            "message": "Docker is installed but its daemon is unavailable. Start Docker, then try again.",
+        }
+    if not start_searxng(port):
+        return {
+            "ok": False,
+            "state": "setup_failed",
+            "message": "SearXNG could not be started. Check Docker and make sure port 8080 is free.",
+        }
+    return {
+        "ok": True,
+        "state": "connected",
+        "url": url,
+        "message": "SearXNG is ready and web search is enabled.",
+    }

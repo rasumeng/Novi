@@ -18,6 +18,7 @@ import {
   Check,
   Layers,
   Filter,
+  Download,
 } from 'lucide-react'
 import { fetchMcpCatalog, fetchMcpStatus, fetchServerDetail } from '@/services/novi'
 import type { McpCatalogEntry, McpStatusResponse, McpServerTool, McpServerDetail } from '@/types'
@@ -55,6 +56,9 @@ const SEARCH_STATE_STYLE: Record<string, { pill: string; label: string }> = {
   rate_limited: { pill: 'text-amber-300 bg-amber-500/10 border border-amber-500/20', label: 'Rate limited' },
   not_configured: { pill: 'text-base-400 bg-base-800 border border-base-600', label: 'Not configured' },
   unknown_error: { pill: 'text-red-300 bg-red-500/10 border border-red-500/20', label: 'Unknown error' },
+  docker_missing: { pill: 'text-amber-300 bg-amber-500/10 border border-amber-500/20', label: 'Docker needed' },
+  docker_unavailable: { pill: 'text-amber-300 bg-amber-500/10 border border-amber-500/20', label: 'Docker unavailable' },
+  setup_failed: { pill: 'text-red-300 bg-red-500/10 border border-red-500/20', label: 'Setup failed' },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,6 +71,7 @@ export function WebSearchCard({ framework }: Props) {
     url: (framework.values['search.url'] as string) ?? '',
   } as SearchConfigShape
   const [testing, setTesting] = useState(false)
+  const [settingUp, setSettingUp] = useState(false)
   const [result, setResult] = useState<SearchTestState | null>(null)
 
   const setSearchField = (key: keyof SearchConfigShape, value: string) => {
@@ -83,6 +88,21 @@ export function WebSearchCard({ framework }: Props) {
       setResult({ state: 'unknown_error', message: 'Could not reach the Novi server.' })
     } finally {
       setTesting(false)
+    }
+  }
+
+  const setupSearxng = async () => {
+    setSettingUp(true)
+    setResult(null)
+    try {
+      const r = await fetch(`${API_BASE}/api/search/setup/searxng`, { method: 'POST' })
+      const setupResult = await r.json() as SearchTestState & { ok?: boolean }
+      setResult(setupResult)
+      if (setupResult.ok) await framework.reload()
+    } catch {
+      setResult({ state: 'unknown_error', message: 'Could not reach the Novi server.' })
+    } finally {
+      setSettingUp(false)
     }
   }
 
@@ -110,6 +130,21 @@ export function WebSearchCard({ framework }: Props) {
       </div>
 
       <div className="p-4 space-y-3">
+        {!search.backend && (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-accent/20 bg-accent/5 px-3.5 py-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-base-200">Enable private web search on this computer</p>
+              <p className="text-[11px] leading-relaxed text-base-500 mt-0.5">Novi will download and run SearXNG with Docker. The first setup may take a few minutes.</p>
+            </div>
+            <button
+              onClick={setupSearxng}
+              disabled={settingUp}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium bg-accent hover:bg-accent/90 text-white disabled:opacity-50 disabled:cursor-wait transition-colors focus:outline-none focus:ring-2 focus:ring-accent/30 shrink-0"
+            >
+              <Download size={13} /> {settingUp ? 'Setting up…' : 'Enable with SearXNG'}
+            </button>
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="block">
             <span className="block text-[10px] font-medium tracking-wider uppercase text-base-400 mb-1.5">Provider</span>
@@ -153,9 +188,16 @@ export function WebSearchCard({ framework }: Props) {
         </div>
 
         {search.backend === 'searxng' && (
-          <p className="text-[11px] leading-relaxed text-base-500 bg-base-800/50 border border-base-700/30 rounded-xl px-3 py-2">
-            Requires Docker or an existing SearXNG instance with JSON format enabled.
-          </p>
+          <div className="flex items-center gap-3 text-[11px] leading-relaxed text-base-500 bg-base-800/50 border border-base-700/30 rounded-xl px-3 py-2">
+            <span className="flex-1">Use an existing endpoint, or let Novi start a local Docker container.</span>
+            <button
+              onClick={setupSearxng}
+              disabled={settingUp}
+              className="shrink-0 text-accent hover:text-accent/80 font-medium disabled:opacity-50 disabled:cursor-wait"
+            >
+              {settingUp ? 'Setting up…' : 'Set up automatically'}
+            </button>
+          </div>
         )}
         {search.backend === 'brave' && !search.brave_api_key && (
           <p className="text-[11px] leading-relaxed text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">

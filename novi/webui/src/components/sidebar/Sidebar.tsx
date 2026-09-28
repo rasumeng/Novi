@@ -269,8 +269,9 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                   >
                     <span className="text-[10px] uppercase tracking-widest text-base-500 font-medium">Projects</span>
                     <span className="flex items-center gap-1.5 text-base-500">
-                      {isProjectsLoading && <Loader2 size={10} className="novi-sidebar-spinner text-accent shrink-0" aria-label="Loading projects" />}
+                     
                       <span className={`transition-opacity ${projectsExpanded ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>{projectsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
+                      {isProjectsLoading && <Loader2 size={10} className="novi-sidebar-spinner text-accent shrink-0" aria-label="Loading projects" />}
                     </span>
                   </button>
                   <button
@@ -499,10 +500,10 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                   aria-expanded={chatsExpanded}
                   className="group w-full flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-base-400 hover:text-base-200 hover:bg-base-800/40 transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 text-left"
                 >
-                  <span className="text-[10px] uppercase tracking-widest font-medium">Chat</span>
+                  <span className="text-[10px] uppercase tracking-widest font-medium">Recents</span>
                   <span className="flex items-center gap-1.5 text-base-500">
-                    {isChatLoading && <Loader2 size={10} className="novi-sidebar-spinner text-accent shrink-0" aria-label="Loading chats" />}
                     <span className={`transition-opacity ${chatsExpanded ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>{chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
+                    {isChatLoading && <Loader2 size={10} className="ml-auto novi-sidebar-spinner text-accent shrink-0" aria-label="Loading chats" />}
                   </span>
                 </button>
                 {chatsExpanded && (

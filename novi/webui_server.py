@@ -2283,6 +2283,26 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     # ── Web Search Test ─────────────────────────────────────────
 
+    @app.post("/api/search/setup/searxng")
+    def setup_local_searxng():
+        """Start Novi's local SearXNG and enable it only after it is healthy."""
+        from .searxng_util import setup_searxng
+
+        try:
+            result = setup_searxng()
+            if result.get("ok"):
+                url = result.get("url", "http://localhost:8080")
+                configuration.set("search.url", url, by="webui")
+                configuration.set("search.backend", "searxng", by="webui")
+            return result
+        except Exception as e:
+            print(f"[novi] SearXNG setup failed: {e!r}")
+            return {
+                "ok": False,
+                "state": "setup_failed",
+                "message": "SearXNG setup failed unexpectedly. Check Docker Desktop and try again.",
+            }
+
     @app.post("/api/search/test")
     def test_search_connection():
         """Probe the configured web-search provider for Settings → Connectors."""
