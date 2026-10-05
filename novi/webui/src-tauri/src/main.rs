@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
-mod splash;
 mod tray;
 
 use std::path::{Path, PathBuf};
@@ -83,15 +82,14 @@ fn main() {
             app_handle.manage(AppState { launcher });
             let state = app_handle.state::<AppState>();
 
-            let boot = splash::boot_url().ok_or_else(|| "failed to prepare boot screen".to_string())?;
+// Load the React app immediately — boot screen is now handled by the web UI
             let initial_url = if dev {
-                // In dev, Vite serves the frontend; still show boot briefly until wait_until_ready
-                boot
+                "http://localhost:5173".to_string()
             } else {
-                boot
+                format!("http://127.0.0.1:{}", port)
             };
 
-            let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(initial_url))
+            let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(initial_url.parse().unwrap()))
                 .title("Novi — AI Agent")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(960.0, 640.0)
@@ -104,53 +102,24 @@ fn main() {
                 .disable_drag_drop_handler()
                 .build()?;
 
-            // Close-to-tray: closing the window hides it instead of quitting.
-            // The tray menu's "Quit Novi" (or the OS killing the process) is
-            // the only way out, same as most tray-resident desktop apps.
-            
-
             tray::setup(&app_handle.handle().clone())?;
 
             state.launcher.start()?;
 
-            let launcher = state.launcher.clone();
-            let window_for_thread = window.clone();
+            // In dev, the backend is already running on the port. In prod, the launcher
+            // starts the backend. The web UI connects via WebSocket and shows real progress.
+            if !dev {
+                let launcher = state.launcher.clone();
+                let _window_for_thread = window.clone();
 
-            std::thread::spawn(move || {
-                match launcher.wait_until_ready() {
-                    Ok(()) => {
-                        let url = if dev {
-                            "http://localhost:5173".to_string()
-                        } else {
-                            format!("http://{}:{}", launcher.host(), launcher.port())
-                        };
-                        match tauri::Url::parse(&url) {
-                            Ok(parsed) => {
-                                if let Err(e) = window_for_thread.navigate(parsed) {
-                                    eprintln!("[novi-desktop] failed to load app: {e}");
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[novi-desktop] invalid frontend url '{url}': {e}");
-                                if let Some(err_url) =
-                                    splash::error_url(&format!("Internal error: invalid app URL.\n\n{e}"))
-                                {
-                                    let _ = window_for_thread.navigate(err_url);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
+                std::thread::spawn(move || {
+                    if let Err(e) = launcher.wait_until_ready() {
                         eprintln!("[novi-desktop] backend did not become ready: {e}");
                         launcher.stop();
-                        if let Some(err_url) = splash::error_url(&format!(
-                            "The Novi backend didn't respond in time.\n\n{e}"
-                        )) {
-                            let _ = window_for_thread.navigate(err_url);
-                        }
+                        // The web UI will handle error display via WebSocket connection failure
                     }
-                }
-            });
+                });
+            }
 
             Ok(())
         })

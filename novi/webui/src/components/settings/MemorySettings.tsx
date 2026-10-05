@@ -5,18 +5,20 @@ import { useToast } from '@/hooks/useToast'
 import { useConfirm } from '@/hooks/useConfirm'
 import { KnowledgeOverview } from '@/components/knowledge/KnowledgeOverview'
 import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 interface Props {
   framework: ReturnType<typeof useFrameworkSettings>
+  loading?: boolean
 }
 
-export function MemorySettings({ framework }: Props) {
+export function MemorySettings({ framework, loading }: Props) {
   const { showError } = useToast()
   const { confirm, dialog } = useConfirm()
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [allMemory, setAllMemory] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
   const [tab, setTab] = useState<'overview' | 'preferences' | 'dev'>('overview')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
@@ -24,16 +26,25 @@ export function MemorySettings({ framework }: Props) {
   const [memoryStatus, setMemoryStatus] = useState<'ok' | 'disabled' | 'unavailable'>('ok')
   const memoryEnabled = (framework.values['memory.enabled'] as boolean) ?? true
   const automaticUpdates = (framework.values['memory.automatic_updates'] as boolean) ?? true
-  const unwrap = (j: any): { data: any[]; error?: string; status?: string } => {
-    if (Array.isArray(j)) return { data: j, status: 'ok' }
-    if (j && Array.isArray(j.data)) return { data: j.data, error: j.error, status: j.status }
-    return { data: [], error: j?.error, status: j?.status }
+
+  const unwrap = (payload: unknown): { data: any[]; error?: string; status?: string } => {
+    if (Array.isArray(payload)) return { data: payload, status: 'ok' }
+    if (payload && typeof payload === 'object') {
+      const envelope = payload as { data?: unknown; error?: string; status?: string }
+      return {
+        data: Array.isArray(envelope.data) ? envelope.data : [],
+        error: envelope.error,
+        status: envelope.status,
+      }
+    }
+    return { data: [] }
   }
+
   const fetchAll = async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/memory/list`)
-      const j = await r.json()
-      const { data, error, status } = unwrap(j)
+      const response = await fetch(`${API_BASE}/api/memory/list`)
+      if (!response.ok) throw new Error('request failed')
+      const { data, error, status } = unwrap(await response.json())
       if (status === 'disabled') {
         setMemoryStatus('disabled')
         setMemoryError(null)
@@ -57,17 +68,18 @@ export function MemorySettings({ framework }: Props) {
       setSearchResults([])
       return
     }
-    setLoading(true)
+    setIsLoading(true)
     try {
-      const r = await fetch(`${API_BASE}/api/memory/search?q=${encodeURIComponent(searchQuery)}`)
-      const j = await r.json()
-      const { data, error, status } = unwrap(j)
+      const response = await fetch(`${API_BASE}/api/memory/search?q=${encodeURIComponent(searchQuery)}`)
+      if (!response.ok) throw new Error('request failed')
+      const { data, error, status } = unwrap(await response.json())
       if (status === 'unavailable') setMemoryError(error || 'Brain store unavailable — check logs')
       setSearchResults(data)
     } catch {
       showError('Memory search failed.')
+    } finally {
+      setIsLoading(false)
     }
-    setLoading(false)
   }
 
   const handleDelete = async (id: string) => {
@@ -111,6 +123,8 @@ export function MemorySettings({ framework }: Props) {
   useEffect(() => {
     fetchAll()
   }, [])
+
+  if (loading) return <LoadingSkeleton rows={5} compact />
 
   return (
     <div className="space-y-4">
@@ -237,10 +251,10 @@ export function MemorySettings({ framework }: Props) {
             />
             <button
               onClick={handleSearch}
-              disabled={loading}
+              disabled={isLoading}
               className="px-3 py-2 text-xs font-medium rounded-lg bg-base-700 text-base-200 hover:bg-base-600 transition-colors disabled:opacity-50"
             >
-              {loading ? '...' : 'Search'}
+              {isLoading ? '...' : 'Search'}
             </button>
           </div>
 

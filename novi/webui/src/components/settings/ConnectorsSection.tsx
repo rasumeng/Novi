@@ -19,6 +19,7 @@ import {
   Layers,
   Filter,
   Download,
+  Loader2,
 } from 'lucide-react'
 import { fetchMcpCatalog, fetchMcpStatus, fetchServerDetail } from '@/services/novi'
 import type { McpCatalogEntry, McpStatusResponse, McpServerTool, McpServerDetail } from '@/types'
@@ -27,6 +28,7 @@ import { CAPABILITY_DEFS, PERMISSION_DEFS } from './constants'
 import { useConfirm } from '@/hooks/useConfirm'
 import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
 import { CapabilityBadge } from '@/components/common/CapabilityBadge'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 function formatTimeAgo(ms: number): string {
   const sec = Math.round(ms / 1000)
@@ -39,6 +41,7 @@ function formatTimeAgo(ms: number): string {
 
 interface Props {
   framework: ReturnType<typeof useFrameworkSettings>
+  loading?: boolean
 }
 
 interface SearchConfigShape {
@@ -110,26 +113,26 @@ export function WebSearchCard({ framework }: Props) {
   const hasProvider = !!search.backend
 
   return (
-    <div className="rounded-2xl border border-base-700/60 bg-base-900/40 overflow-hidden">
+    <div className="rounded-card border border-base-700/50 bg-base-900/40 overflow-hidden">
       {/* header rail */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-base-700/40 bg-base-800/20">
+      <div className="flex items-center gap-3 p-card border-b border-base-700/30 bg-base-800/20">
         <div className="w-8 h-8 rounded-xl bg-accent/10 border border-accent/15 flex items-center justify-center shrink-0">
           <Globe size={15} className="text-accent" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-semibold tracking-tight text-base-100 leading-none">Web Search</p>
-          <p className="text-[11px] text-base-500 mt-0.5">Novi uses this when it needs current information</p>
+          <p className="text-body font-semibold tracking-tight text-base-100 leading-none">Web Search</p>
+          <p className="text-caption text-base-500 mt-0.5">Novi uses this when it needs current information</p>
         </div>
         {stateStyle ? (
-          <span className={`shrink-0 text-[10px] font-medium px-2.5 py-1 rounded-full ${stateStyle.pill}`}>{stateStyle.label}</span>
+          <span className={`shrink-0 text-label font-medium px-2.5 py-1 rounded-full ${stateStyle.pill}`}>{stateStyle.label}</span>
         ) : (
-          <span className={`shrink-0 text-[10px] font-medium px-2.5 py-1 rounded-full ${hasProvider ? 'text-amber-300 bg-amber-500/10 border border-amber-500/20' : 'text-base-400 bg-base-800 border border-base-600'}`}>
+          <span className={`shrink-0 text-label font-medium px-2.5 py-1 rounded-full ${hasProvider ? 'text-amber-300 bg-amber-500/10 border border-amber-500/20' : 'text-base-400 bg-base-800 border border-base-600'}`}>
             {hasProvider ? 'Not tested' : 'Not configured'}
           </span>
         )}
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-card space-y-3">
         {!search.backend && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-accent/20 bg-accent/5 px-3.5 py-3">
             <div className="flex-1 min-w-0">
@@ -243,64 +246,72 @@ function PatchbayHeader({
   tools,
   capabilities,
   searchReady,
+  isPolling,
 }: {
   connected: number
   total: number
   tools: number
   capabilities: number
   searchReady: boolean
+  isPolling: boolean
 }) {
   const allOk = total > 0 && connected === total
+
   return (
-    <div className="rounded-2xl border border-base-700/60 bg-base-900/30 overflow-hidden">
+    <div className="rounded-card border border-base-700/50 bg-base-900/30 overflow-hidden">
       {/* top bar */}
-      <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-base-700/40">
+      <div className="flex items-center justify-between p-card border-b border-base-700/30">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center">
             <Cable size={16} className="text-accent" />
           </div>
           <div>
-            <p className="text-[13px] font-semibold tracking-tight text-base-100">Connectors</p>
-            <p className="text-[11px] text-base-500">External tools and services Novi can use</p>
+            <p className="text-body font-semibold tracking-tight text-base-100">Connectors</p>
+            <p className="text-caption text-base-500">External tools and services Novi can use</p>
           </div>
         </div>
-        <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] font-medium tracking-wider uppercase px-2.5 py-1 rounded-full border bg-base-800 text-base-400 border-base-600">
+        <span className="hidden sm:inline-flex items-center gap-1.5 text-label font-medium px-2.5 py-1 rounded-full border bg-base-800 text-base-400 border-base-600">
           <span className={`w-1.5 h-1.5 rounded-full ${allOk ? 'bg-emerald-400' : 'bg-amber-400'} ${allOk ? 'animate-pulse' : ''}`} />
           {allOk ? 'All systems patched' : total === 0 ? 'No patches yet' : `${connected}/${total} live`}
         </span>
       </div>
 
       {/* metrics rail + patch visual */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-base-700/40">
-        <div className="bg-base-900/50 px-4 py-3.5">
-          <p className="text-[10px] font-semibold tracking-widest uppercase text-base-500 mb-1">Live</p>
-          <p className="text-xl font-semibold tracking-tight text-base-100 leading-none">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-base-700/30">
+        <div className="bg-base-900/50 p-card relative">
+          <p className="text-label font-semibold text-base-500 mb-1">Live</p>
+          <p className="text-xl font-semibold tracking-tight text-base-100 leading-none flex items-center gap-1.5">
             {connected}
             <span className="text-base-500 font-normal"> / {total}</span>
+            {isPolling && <Loader2 size={12} className="novi-loading-spinner text-accent" aria-label="Polling connector status" />}
           </p>
-          <p className="text-[11px] text-base-500 mt-1">connectors online</p>
+          <p className="text-caption text-base-500 mt-1">connectors online</p>
         </div>
-        <div className="bg-base-900/50 px-4 py-3.5">
-          <p className="text-[10px] font-semibold tracking-widest uppercase text-base-500 mb-1">Tools</p>
-          <p className="text-xl font-semibold tracking-tight text-base-100 leading-none">{tools}</p>
-          <p className="text-[11px] text-base-500 mt-1">exposed to Novi</p>
+        <div className="bg-base-900/50 p-card relative">
+          <p className="text-label font-semibold text-base-500 mb-1">Tools</p>
+          <p className="text-xl font-semibold tracking-tight text-base-100 leading-none flex items-center gap-1.5">
+            {tools}
+          </p>
+          <p className="text-caption text-base-500 mt-1">exposed to Novi</p>
         </div>
-        <div className="bg-base-900/50 px-4 py-3.5">
-          <p className="text-[10px] font-semibold tracking-widest uppercase text-base-500 mb-1">Capabilities</p>
-          <p className="text-xl font-semibold tracking-tight text-base-100 leading-none">{capabilities}</p>
-          <p className="text-[11px] text-base-500 mt-1">distinct abilities</p>
+        <div className="bg-base-900/50 p-card relative">
+          <p className="text-label font-semibold text-base-500 mb-1">Capabilities</p>
+          <p className="text-xl font-semibold tracking-tight text-base-100 leading-none flex items-center gap-1.5">
+            {capabilities}
+          </p>
+          <p className="text-caption text-base-500 mt-1">distinct abilities</p>
         </div>
-        <div className="bg-base-900/50 px-4 py-3.5">
-          <p className="text-[10px] font-semibold tracking-widest uppercase text-base-500 mb-1">Web search</p>
-          <p className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full border mt-0.5 ${searchReady ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' : 'text-base-400 bg-base-800 border-base-600'}`}>
+        <div className="bg-base-900/50 p-card relative">
+          <p className="text-label font-semibold text-base-500 mb-1">Web search</p>
+          <p className={`inline-flex items-center gap-1 text-bodySmall font-medium px-2 py-1 rounded-full border mt-0.5 ${searchReady ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' : 'text-base-400 bg-base-800 border-base-600'}`}>
             {searchReady ? <Check size={12} /> : <AlertTriangle size={12} />} {searchReady ? 'Ready' : 'Not set'}
           </p>
         </div>
       </div>
 
       {/* subtle socket row — signature patch-bay */}
-      <div className="px-4 sm:px-5 py-3 bg-base-950/40 flex items-center gap-2 overflow-x-auto">
-        <span className="text-[10px] font-medium tracking-wider uppercase text-base-500 shrink-0 mr-1">Patch bay</span>
+      <div className="p-card bg-base-950/40 flex items-center gap-2 overflow-x-auto">
+        <span className="text-label font-medium text-base-500 shrink-0 mr-1">Patch bay</span>
         <div className="flex items-center gap-2">
           {Array.from({ length: Math.max(6, Math.min(12, total + 4)) }).map((_, i) => {
             const isLive = i < connected
@@ -332,7 +343,7 @@ function PatchbayHeader({
   )
 }
 
-export function ConnectorsSection({ framework }: Props) {
+export function ConnectorsSection({ framework, loading }: Props) {
   const { confirm, dialog } = useConfirm()
   const [addOpen, setAddOpen] = useState(false)
   const [addName, setAddName] = useState('')
@@ -346,6 +357,7 @@ export function ConnectorsSection({ framework }: Props) {
   const [selectedCatalog, setSelectedCatalog] = useState<McpCatalogEntry | null>(null)
   const [catalogEnvVars, setCatalogEnvVars] = useState<Record<string, string>>({})
   const [serverStatus, setServerStatus] = useState<McpStatusResponse | null>(null)
+  const [isPolling, setIsPolling] = useState(false)
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
   const [detailName, setDetailName] = useState<string | null>(null)
   const [serverDetail, setServerDetail] = useState<McpServerDetail | null>(null)
@@ -358,7 +370,12 @@ export function ConnectorsSection({ framework }: Props) {
 
   useEffect(() => {
     const poll = async () => {
-      setServerStatus(await fetchMcpStatus())
+      setIsPolling(true)
+      try {
+        setServerStatus(await fetchMcpStatus())
+      } finally {
+        setIsPolling(false)
+      }
     }
     poll()
     const id = setInterval(poll, 5000)
@@ -560,6 +577,7 @@ export function ConnectorsSection({ framework }: Props) {
         tools={totalTools}
         capabilities={activeCapabilities.size}
         searchReady={searchReady}
+        isPolling={isPolling}
       />
 
       {/* Web Search — distinct module */}

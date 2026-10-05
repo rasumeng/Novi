@@ -10,9 +10,10 @@ the payloads the Brain already published. Each surfaced event becomes:
     - a WebSocket ``assistant_event`` (via an optional ``on_entry`` callback
       wired by the WebUI server layer).
 
-Only three Brain events are surfaced — no new Brain events are introduced:
+Conversation and knowledge events surfaced by the application include:
 
     conversation.observed -> "Conversation logged"
+    conversation.deleted  -> "Conversation deleted"
     knowledge.extracted  -> "Memory updated"
     knowledge.promoted   -> "Knowledge refined"
 
@@ -32,6 +33,7 @@ from .timeline_store import TimelineStore
 log = logging.getLogger("novi.timeline.service")
 
 CONVERSATION_OBSERVED = "conversation.observed"
+CONVERSATION_DELETED = "conversation.deleted"
 KNOWLEDGE_EXTRACTED = "knowledge.extracted"
 KNOWLEDGE_PROMOTED = "knowledge.promoted"
 
@@ -44,7 +46,8 @@ JOB_CHECKPOINTED = "job.checkpointed"
 JOB_INTERRUPTED = "job.interrupted"
 
 SURFACED_EVENTS = {
-    CONVERSATION_OBSERVED, KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED,
+    CONVERSATION_OBSERVED, CONVERSATION_DELETED,
+    KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED,
     JOB_CREATED, JOB_STARTED, JOB_COMPLETED, JOB_FAILED,
     JOB_CHECKPOINTED, JOB_INTERRUPTED,
 }
@@ -85,6 +88,15 @@ def _entry_for(event) -> dict:
             # A conversation is a user-facing app entity (not an internal /
             # vector id) — carried so timeline rows can deep-link to the thread.
             "conversation_id": (data.get("conversation_id") or ""),
+        }
+    if t == CONVERSATION_DELETED:
+        title = _truncate(data.get("title", ""))
+        detail = f'"{title}" was deleted.' if title else "A conversation was deleted."
+        return {
+            "kind": t,
+            "title": "Conversation deleted",
+            "detail": detail,
+            "timestamp": timestamp,
         }
     if t == KNOWLEDGE_EXTRACTED:
         detail = _truncate(data.get("summary", ""))

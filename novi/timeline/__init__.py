@@ -6,6 +6,7 @@ bus and persists user-facing TimelineEntries. No Brain internals are touched.
 
 from .timeline_service import (
     CONVERSATION_OBSERVED,
+    CONVERSATION_DELETED,
     KNOWLEDGE_EXTRACTED,
     KNOWLEDGE_PROMOTED,
     JOB_CREATED,
@@ -22,6 +23,7 @@ from .timeline_store import TimelineStore
 
 __all__ = [
     "CONVERSATION_OBSERVED",
+    "CONVERSATION_DELETED",
     "KNOWLEDGE_EXTRACTED",
     "KNOWLEDGE_PROMOTED",
     "JOB_CREATED",

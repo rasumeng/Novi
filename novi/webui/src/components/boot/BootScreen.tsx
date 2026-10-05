@@ -1,46 +1,85 @@
-import { BOOT_COPY, type BootState } from '@/hooks/useBoot'
+import { useEffect, useState } from 'react'
+import { NoviMascot } from '@/components/brand/NoviMascot'
+import { useBoot } from '@/hooks/useBoot'
 
-const STEPS = ['conversations', 'projects', 'timeline', 'presets'] as const
+export const BOOT_REMARKS = [
+  "Hey, I'll be right there.",
+  "I guess it's time to wake up.",
+  'THE ONE PIECE... THE ONE PIECE IS REALLL!',
+  'Just finding my other sock.',
+  'Warming up the thinking circuits.',
+  'One moment—I am assembling the vibes.',
+  'Booting up with dramatic flair.',
+  'Coffee would help, but electrons will do.',
+  'Stretching my virtual legs.',
+  'Almost awake. Probably.',
+  'Putting the last few thoughts in order.',
+  'Hold that thought—I am on my way.',
+  'Checking whether the internet is still there.',
+  'Summoning the helpful version of me.',
+  'A tiny bit of patience, please.',
+  'Dusting off the neural pathways.',
+  'Loading wit, wisdom, and questionable jokes.',
+  'Getting everything nice and Novi-shaped.',
+  'I have not forgotten about us.',
+  'Making sure all the buttons know their jobs.',
+  'The gears are turning. Very stylishly.',
+  'Preparing to look much more awake than I feel.',
+  'Nearly there—cue the entrance music.',
+  'Doing one last systems wiggle.',
+  'Ready in a moment. Scout’s honor.',
+] as const
 
-export function BootScreen({ state, embedded = false }: { state: BootState; embedded?: boolean }) {
-  const copy = state.phase === 'connecting' ? BOOT_COPY.connecting : BOOT_COPY[state.step]
+function randomRemarkIndex(currentIndex?: number): number {
+  if (currentIndex === undefined) {
+    return Math.floor(Math.random() * BOOT_REMARKS.length)
+  }
+  const offset = 1 + Math.floor(Math.random() * (BOOT_REMARKS.length - 1))
+  return (currentIndex + offset) % BOOT_REMARKS.length
+}
+
+export function BootScreen({ embedded = false }: { embedded?: boolean }) {
+  const boot = useBoot()
+  const [remarkIndex, setRemarkIndex] = useState(() => randomRemarkIndex())
+
+  const isError = boot.phase === 'error'
+
+  useEffect(() => {
+    if (isError) return
+    const interval = window.setInterval(() => {
+      setRemarkIndex((current) => randomRemarkIndex(current))
+    }, 10_000)
+    return () => window.clearInterval(interval)
+  }, [isError])
 
   return (
-    <main className={embedded ? 'novi-boot novi-boot--embedded' : 'novi-boot'} aria-live="polite">
+    <main
+      className={embedded ? 'novi-boot novi-boot--embedded' : 'novi-boot'}
+      aria-live="polite"
+    >
       <section className="novi-boot__card">
         <div className="novi-boot__brand">
-          <span className="novi-boot__mark">✦</span>NOVI DESKTOP
+          <NoviMascot size={96} alt="Novi" />
         </div>
-        <div className="novi-boot__heading">
-          <span className="novi-boot__spinner" aria-hidden="true" />
-          <h1>Starting Novi</h1>
+
+        <p className="novi-boot__status" style={{ minHeight: '1.5em' }}>
+          {isError ? 'Failed to start' : BOOT_REMARKS[remarkIndex]}
+        </p>
+
+        <div className="novi-boot__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-busy="true">
+          <div className="novi-boot__progress-fill" />
         </div>
-        <p className="novi-boot__status">{copy}</p>
-        {state.detail && <p className="text-xs text-base-400">{state.detail}</p>}
-        <div className="novi-boot__progress" />
-        <ul className="novi-boot__steps">
-          {STEPS.map((k) => {
-            const idx = STEPS.indexOf(k)
-            const isDone = state.loaded > idx
-            const isActive = !isDone && state.step === k
-            const cls = isDone ? 'done' : isActive ? 'active' : ''
-            return (
-              <li key={k} className={cls}>
-                <i className="novi-boot__dot" aria-hidden="true" />
-                <span>{BOOT_COPY[k]}</span>
-              </li>
-            )
-          })}
-        </ul>
-        {state.phase === 'error' && state.error && (
-          <div className="mt-4">
-            <p className="text-sm text-red-400">{state.error}</p>
-            <button onClick={state.retry} className="mt-2 px-3 py-1 bg-accent rounded">
-              Retry
+
+        {isError && boot.error && (
+          <div className="novi-boot__error">
+            <p>{boot.error}</p>
+            <button onClick={boot.retry} className="novi-boot__retry">
+              Try again
             </button>
           </div>
         )}
-        <p className="novi-boot__foot">Everything is running locally on your device.</p>
+
+        <p className="novi-boot__foot">Everything runs locally on your device.</p>
       </section>
     </main>
   )

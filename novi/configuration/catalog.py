@@ -281,15 +281,35 @@ def build_catalog_payload(installed_models: list) -> dict:
     }
 
 
-def _seed_advisory_records() -> list[ModelRecord]:
+def _seed_advisory_records(
+    hardware: Optional[HardwareProfile] = None,
+) -> list[ModelRecord]:
     """Seed-only advisory candidate records.
 
     Curated suggestions for models not currently discovered. Each is an
     ordinary ``ModelRecord`` whose evidence is labeled ``seed``; the generic
     engine evaluates them exactly like installed or future-remote records.
     """
+    tiered = [
+        fact for fact in SEED_MODEL_FACTS.values()
+        if fact.beta_min_vram_gb is not None
+    ]
+    vram = hardware.gpu.vram_total_gb if hardware is not None else None
+    if not tiered:
+        return []
+    if vram is None:
+        selected = min(tiered, key=lambda fact: fact.beta_min_vram_gb or 0.0)
+    else:
+        fitting = [fact for fact in tiered if (fact.beta_min_vram_gb or 0.0) <= vram]
+        selected = (
+            max(fitting, key=lambda fact: fact.beta_min_vram_gb or 0.0)
+            if fitting
+            else min(tiered, key=lambda fact: fact.beta_min_vram_gb or 0.0)
+        )
+
     records: list[ModelRecord] = []
-    for name, fact in SEED_MODEL_FACTS.items():
+    for fact in [selected]:
+        name = fact.name
         note = "curated seed metadata (non-authoritative)"
         caps = [
             CapabilityEvidence(c, True, "seed", 0.9, note)
@@ -345,7 +365,7 @@ def build_available_recommendations(
     installed = set(installed_names or ())
     candidates = (
         candidate_records if candidate_records is not None
-        else _seed_advisory_records()
+        else _seed_advisory_records(engine.hardware)
     )
     out = []
     for record in candidates:

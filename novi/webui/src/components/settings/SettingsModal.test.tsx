@@ -110,6 +110,7 @@ describe('SettingsModal navigation (M4 IA)', () => {
     render(<SettingsModal open onClose={vi.fn()} />)
     fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === 'Models')!)
     expect(screen.getByText('Model library')).toBeTruthy()
+    expect(document.querySelector('[data-settings-section="models"]')).toBeTruthy()
   })
 
   it('has exactly five destinations (Developer asserted separately)', () => {

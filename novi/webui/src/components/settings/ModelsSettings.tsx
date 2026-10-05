@@ -54,8 +54,11 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
 
   const refresh = async () => {
     setRefreshing(true)
-    await onRefresh()
-    setRefreshing(false)
+    try {
+      await onRefresh()
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const primary = primaryModelFromDiscovery(discovery)
@@ -138,7 +141,7 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
             disabled={refreshing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors disabled:opacity-50 shrink-0"
           >
-            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Retry
+            <RefreshCw size={12} className={refreshing ? 'novi-loading-spinner' : ''} /> Retry
           </button>
         </div>
       )}
@@ -211,7 +214,7 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
             className="p-2 rounded-lg border border-base-700 text-base-400 hover:text-base-200 transition-colors disabled:opacity-50"
             title="Rescan"
           >
-            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            <RefreshCw size={14} className={refreshing ? 'novi-loading-spinner' : ''} />
           </button>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-base-500 mb-3">
@@ -228,7 +231,7 @@ export function ModelsSettings({ discovery, schema, embeddingModel, installing, 
           {rows.map((m) => (
             <ModelRow key={m.name} model={m} install={installing[m.name]} onInstall={onInstall} onDelete={onDelete} />
           ))}
-          {rows.length === 0 && (
+          {rows.length === 0 && !refreshing && (
             <p className="text-xs text-base-500 py-6 text-center">
               {query
                 ? `No models match "${query}".`
@@ -280,7 +283,7 @@ function HardwareBar({ hardware, provisional, onRefresh, refreshing }: {
           title="Re-detect hardware and rescan models"
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border border-base-700 text-base-400 hover:text-base-200 hover:border-base-600 transition-colors disabled:opacity-50 shrink-0"
         >
-          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+          <RefreshCw size={12} className={refreshing ? 'novi-loading-spinner' : ''} />
           Rescan
         </button>
       </div>
@@ -367,7 +370,7 @@ function RecommendedSetup({ models, installing, onInstall, onDismiss }: {
                       disabled={!!busy}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-60"
                     >
-                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                      {busy ? <Loader2 size={13} className="novi-loading-spinner" /> : <Download size={13} />}
                       {busy ? 'Installing…' : 'Install & use'}
                     </button>
                   </div>
@@ -470,7 +473,7 @@ function SelectionRow({ label, desc, model, entry, installedModels, missing, cap
               title="Use the recommended model"
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-accent/10 border border-accent/30 text-accent hover:bg-accent/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {applying ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+              {applying ? <Loader2 size={11} className="novi-loading-spinner" /> : <Sparkles size={11} />}
               {applying ? 'Applying…' : 'Use Recommended'}
             </button>
           )}
@@ -725,7 +728,7 @@ function ModelRow({ model, install, onInstall, onDelete }: {
           disabled={busy}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-60 shrink-0"
         >
-          {busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+          {busy ? <Loader2 size={13} className="novi-loading-spinner" /> : <Download size={13} />}
           {busy ? (install.phase === 'done' ? 'Installed' : 'Installing…') : 'Install'}
         </button>
       )}
@@ -758,7 +761,7 @@ function ModelRow({ model, install, onInstall, onDelete }: {
               title={`Confirm remove ${model.name}`}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-red-500/15 border border-red-500/40 text-red-400 hover:bg-red-500/25 transition-colors disabled:opacity-50"
             >
-              {deleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+              {deleting ? <Loader2 size={13} className="novi-loading-spinner" /> : <Trash2 size={13} />}
               {deleting ? 'Removing…' : 'Remove'}
             </button>
           </div>

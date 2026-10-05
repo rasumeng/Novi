@@ -83,15 +83,13 @@ def test_discovery_reports_missing_recommended_models(monkeypatch):
 
     available = {m["name"]: m for m in payload["models"]
                  if m["status"] == "available"}
-    # Trusted chat+vision model that is NOT installed shows as available.
-    assert "qwen2.5vl:7b" in available
-    entry = available["qwen2.5vl:7b"]
+    # The single beta tier for this hardware shows as available.
+    assert set(available) == {"gemma4:e4b"}
+    entry = available["gemma4:e4b"]
     assert entry["recommended"] is True
     assert entry["reasons"]
-    assert entry["approxRamGb"] == 8.0
-    assert entry["displayName"] == "Qwen 2.5 VL 7B"
-    # Vision-capable supported model is offered too.
-    assert "llava:7b" in available
+    assert entry["approxRamGb"] == 4.0
+    assert entry["displayName"] == "Gemma 4 E4B"
     # Installed models are NOT reported as available.
     assert "llama3.1:8b" not in available
 
@@ -102,7 +100,7 @@ def test_seam_available_recommendations_is_pure_catalog_evidence(monkeypatch):
         installed_names={"llama3.1:8b"}, hardware=BIG_HARDWARE)
     names = {r["name"] for r in recs}
     assert "llama3.1:8b" not in names
-    assert "qwen2.5vl:7b" in names
+    assert names == {"gemma4:e4b"}
     for r in recs:
         assert r["status"] == "available"
         assert r["recommended"] is True
@@ -133,8 +131,7 @@ def test_hardware_mismatch_models_are_not_recommended(monkeypatch):
     tiny = HardwareProfile(ram_gb=2.0, confidence=DetectionConfidence.LOW)
     recs = build_available_recommendations(installed_names=set(),
                                            hardware=tiny)
-    # No user-facing model fits a 2 GB machine, so nothing is recommended.
-    assert recs == []
+    assert [r["name"] for r in recs] == ["qwen3.5:0.8b"]
 
 
 # ── consent / no-silent-install ───────────────────────────────────────────
@@ -150,7 +147,7 @@ def test_no_install_without_explicit_consent(monkeypatch):
     # Startup + discovery + explicit recommendation refresh all mention the
     # missing model…
     payload = client.get("/api/models/discovery").json()
-    assert "qwen2.5vl:7b" in _available_names(payload)
+    assert "gemma4:e4b" in _available_names(payload)
     client.post("/api/configuration/models/recommend", json={})
     # …but none of them install anything.
     assert calls == []
@@ -163,9 +160,9 @@ def test_explicit_consent_starts_installation(monkeypatch):
                         lambda self, name, on_progress=None: calls.append(name))
     client, holder = _make_app(monkeypatch, ["llama3.1:8b"])
 
-    resp = client.post("/api/models/install", json={"name": "qwen2.5vl:7b"}).json()
+    resp = client.post("/api/models/install", json={"name": "gemma4:e4b"}).json()
     assert resp["ok"] is True
-    assert calls == ["qwen2.5vl:7b"]
+    assert calls == ["gemma4:e4b"]
 
 
 def test_no_duplicate_install_requests(monkeypatch):
@@ -180,13 +177,13 @@ def test_no_duplicate_install_requests(monkeypatch):
     monkeypatch.setattr(ModelInstaller, "pull", slow_pull)
     client, holder = _make_app(monkeypatch, ["llama3.1:8b"])
 
-    first = client.post("/api/models/install", json={"name": "qwen2.5vl:7b"}).json()
+    first = client.post("/api/models/install", json={"name": "gemma4:e4b"}).json()
     assert first["ok"] is True
     # Second consent while the first pull is in flight is coalesced.
-    second = client.post("/api/models/install", json={"name": "qwen2.5vl:7b"}).json()
+    second = client.post("/api/models/install", json={"name": "gemma4:e4b"}).json()
     assert second["ok"] is True
     assert second["already_installing"] is True
-    assert calls == ["qwen2.5vl:7b"]
+    assert calls == ["gemma4:e4b"]
 
     gate.set()  # release the in-flight pull
 
@@ -209,18 +206,17 @@ def test_successful_install_refreshes_recommendations(monkeypatch):
         "model": "llama3.1:8b"}).json()
     assert _config().get("llm.primary_model") == "llama3.1:8b"
 
-    # Explicit consent installs the recommended vision model.
-    client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
+    # Explicit consent installs the recommended beta-tier model.
+    client.post("/api/models/install", json={"name": "gemma4:e4b"})
 
     deadline = time.time() + 5
     while time.time() < deadline:
         payload = client.get("/api/models/discovery").json()
-        if "qwen2.5vl:7b" in payload["installedNames"]:
+        if "gemma4:e4b" in payload["installedNames"]:
             break
         time.sleep(0.05)
-    # The model-set lifecycle refresh ran: the newly installed vision-capable
-    # model now appears as installed and its derived vision flag is present.
-    assert "qwen2.5vl:7b" in payload["installedNames"]
+    # The model-set lifecycle refresh ran and the new model is installed.
+    assert "gemma4:e4b" in payload["installedNames"]
     rec = payload["recommended"]["primary"]
     assert "visionCapable" in rec
     # …but the user's selection was never rewritten.
@@ -241,7 +237,7 @@ def test_failed_install_preserves_configuration(monkeypatch):
         monkeypatch, ["qwen3:8b", "llama3.1:8b", "nomic-embed-text"])
 
     before = _config().snapshot()
-    client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
+    client.post("/api/models/install", json={"name": "gemma4:e4b"})
     time.sleep(0.5)
 
     after = _config().snapshot()
@@ -249,7 +245,7 @@ def test_failed_install_preserves_configuration(monkeypatch):
     assert _config().get("llm.primary_model") == ""
     # The failed model never became a recommendation source.
     payload = client.get("/api/models/discovery").json()
-    assert payload["recommended"]["primary"]["model"] != "qwen2.5vl:7b"
+    assert payload["recommended"]["primary"]["model"] != "gemma4:e4b"
 
 
 def test_cancelled_install_preserves_configuration(monkeypatch):
@@ -266,7 +262,7 @@ def test_cancelled_install_preserves_configuration(monkeypatch):
     }
     # User declines the recommended install ("not now").
     resp = client.post("/api/configuration/models/setup/dismiss",
-                       json={"name": "qwen2.5vl:7b"}).json()
+                       json={"name": "gemma4:e4b"}).json()
     assert resp["ok"] is True
 
     assert calls == []  # cancelling never installs
@@ -274,13 +270,13 @@ def test_cancelled_install_preserves_configuration(monkeypatch):
     # (primary / custom assignments) is untouched.
     assert _config().get("llm.primary_model") == before["primary"]
     assert _config().get("models.custom.assign", {}) == before["assign"]
-    assert _config().get("llm.primary_model") != "qwen2.5vl:7b"
+    assert _config().get("llm.primary_model") != "gemma4:e4b"
 
     # The choice is persisted so the setup card stops asking.
     payload = client.get("/api/models/discovery").json()
-    assert "qwen2.5vl:7b" in payload["dismissedRecommended"]
+    assert "gemma4:e4b" in payload["dismissedRecommended"]
     # The model stays in the library as "available" for a later explicit install.
-    assert "qwen2.5vl:7b" in _available_names(payload)
+    assert "gemma4:e4b" in _available_names(payload)
 
 
 def test_dismiss_requires_a_model_name(monkeypatch):
@@ -308,7 +304,7 @@ def test_install_never_touches_user_selection(monkeypatch):
         "model": "llama3.1:8b"}).json()
 
     # An install of a recommended model completes while the selection is set.
-    client.post("/api/models/install", json={"name": "qwen2.5vl:7b"})
+    client.post("/api/models/install", json={"name": "gemma4:e4b"})
     time.sleep(0.5)
 
     assert _config().get("llm.primary_model") == "llama3.1:8b"

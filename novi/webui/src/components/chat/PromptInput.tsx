@@ -307,7 +307,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
           const d = await r.json()
           if (!cancelled) setPrimaryCaps(d.capabilities ?? null)
         }
-      } catch { /* ignore */ }
+      } catch { /* background capability awareness is best-effort */ }
     }
     fetchCaps()
     const id = window.setInterval(fetchCaps, 15000)
@@ -554,7 +554,7 @@ export const PromptInput = forwardRef<PromptInputHandle, Props>(function PromptI
         </div>
       )}
       {incompatibilities.length > 0 && (
-        <div className="mx-2 mb-2 p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-1.5">
+        <div className="mx-2 mb-2 p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-1.5 transition-opacity duration-200">
           {incompatibilities.map((c) => (
             <div key={c.key} className="flex items-start gap-2 text-[11px] leading-relaxed">
               <AlertTriangle size={12} className={`shrink-0 mt-0.5 ${c.key === 'tools' ? 'text-base-400' : 'text-amber-400'}`} />

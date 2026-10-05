@@ -48,7 +48,7 @@ const DRAFT_ID = '__draft__'
 const STOP_FALLBACK_MS = 8000
 // Startup hydration timeout removed — fresh loading design will decide policy.
 
-export function useNoviChat() {
+export function useNoviChat(enabled = true) {
   const { showError } = useToast()
   const { push: pushNotification } = useNotificationCenter()
   const clientRef = useRef<NoviClient | null>(null)
@@ -155,6 +155,7 @@ export function useNoviChat() {
 
   // Load conversations on mount — deduped via bootCache to avoid double fetch with useBoot
   useEffect(() => {
+    if (!enabled) return
     let active = true
     const convCached = getConversationsCache()
     if (convCached !== null) {
@@ -199,7 +200,7 @@ export function useNoviChat() {
     return () => {
       active = false
     }
-  }, [showError])
+  }, [enabled, showError])
 
   useEffect(() => clearStopFallback, [])
 
@@ -217,6 +218,7 @@ export function useNoviChat() {
 
   // Milestone 4: hydrate the persisted assistant timeline on mount — reuse bootCache if already hydrated
   useEffect(() => {
+    if (!enabled) return
     const env = getTimelineEnvelopeCache()
     if (env !== null) {
       setTimelineStatus(env.status)
@@ -226,7 +228,7 @@ export function useNoviChat() {
       return
     }
     refreshTimeline()
-  }, [refreshTimeline])
+  }, [enabled, refreshTimeline])
 
   // Persist whichever conversation was last marked dirty (never "the active one" —
   // the active one may not be the conversation that actually changed).
@@ -597,6 +599,7 @@ export function useNoviChat() {
   handleEventRef.current = handleEvent
 
   useEffect(() => {
+    if (!enabled) return
     const client = new NoviClient()
     client.onEvent = (ev) => handleEventRef.current(ev)
     client.onConnectionChange = setConnection
@@ -606,7 +609,7 @@ export function useNoviChat() {
       client.disconnect()
       if (clientRef.current === client) clientRef.current = null
     }
-  }, [])
+  }, [enabled])
 
   // Reconnection awareness: surfacing a closed→open transition instead of
   // silently resuming. This does not touch the owner/streaming model — in-flight

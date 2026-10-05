@@ -43,13 +43,29 @@ class ModelSnapshot:
 
 
 @dataclass(frozen=True)
+class RunImage:
+    """One validated image supplied to a model run."""
+
+    id: str
+    name: str
+    media_type: str
+    path: str
+
+    def __post_init__(self) -> None:
+        if not self.id.strip() or not self.name.strip() or not self.path.strip():
+            raise ValueError("image id, name and path are required")
+        if not self.media_type.startswith("image/"):
+            raise ValueError("image media type is required")
+
+
+@dataclass(frozen=True)
 class RunRequest:
     conversation_id: str
     user_message_id: str
     user_text: str
     project_id: str = ""
     workspace: str = ""
-    attachments: tuple[dict[str, Any], ...] = ()
+    images: tuple[RunImage, ...] = ()
     research_selected: bool = False
     model: ModelSnapshot | None = None
 
@@ -60,6 +76,10 @@ class RunRequest:
             raise ValueError("user_message_id is required")
         if not self.user_text.strip():
             raise ValueError("user_text is required")
+        if any(not isinstance(image, RunImage) for image in self.images):
+            raise TypeError("images must contain RunImage values")
+        if any(not isinstance(image, RunImage) for image in self.images):
+            raise TypeError("images must contain RunImage values")
 
 
 @dataclass(frozen=True)

@@ -33,6 +33,43 @@ pub struct BackendLauncher {
     log_limit: usize,
 }
 
+#[cfg(target_os = "windows")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WindowsProcessInfo {
+    process_id: u32,
+    name: String,
+    command_line: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+fn is_novi_backend_process(process: &WindowsProcessInfo, port: u16) -> bool {
+    let name = process.name.to_ascii_lowercase();
+    let normalized_command_line = process
+        .command_line
+        .as_deref()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    let arguments: Vec<_> = normalized_command_line.split_whitespace().collect();
+    let port = port.to_string();
+    let port_equals = format!("--port={port}");
+    let has_port = arguments
+        .windows(2)
+        .any(|pair| pair == ["--port", port.as_str()])
+        || arguments.iter().any(|argument| *argument == port_equals);
+    let is_python = matches!(
+        name.as_str(),
+        "python" | "python.exe" | "pythonw" | "pythonw.exe"
+    ) && arguments
+        .windows(3)
+        .any(|parts| parts == ["-m", "novi", "webui"]);
+    let is_sidecar = name == "novi-backend.exe" || name == "novi-backend";
+    has_port && (is_python || is_sidecar)
+}
+
 fn resolve_python(repo_root: &Path) -> PathBuf {
     if let Ok(p) = std::env::var("NOVI_PYTHON") {
         return PathBuf::from(p);
@@ -62,11 +99,19 @@ fn resolve_python(repo_root: &Path) -> PathBuf {
 impl BackendLauncher {
     pub fn new(config: BackendConfig) -> Self {
         let command = if let Ok(exe) = std::env::var("NOVI_BACKEND_BIN") {
-            BackendCommand::Sidecar { executable: PathBuf::from(exe) }
-        } else if let Some(executable) = config.bundled_backend.as_ref().filter(|path| path.exists()) {
-            BackendCommand::Sidecar { executable: executable.clone() }
+            BackendCommand::Sidecar {
+                executable: PathBuf::from(exe),
+            }
+        } else if let Some(executable) =
+            config.bundled_backend.as_ref().filter(|path| path.exists())
+        {
+            BackendCommand::Sidecar {
+                executable: executable.clone(),
+            }
         } else if config.development_mode {
-            BackendCommand::Python { python: resolve_python(&config.working_dir) }
+            BackendCommand::Python {
+                python: resolve_python(&config.working_dir),
+            }
         } else {
             BackendCommand::MissingReleaseSidecar
         };
@@ -78,14 +123,6 @@ impl BackendLauncher {
             logs: Arc::new(Mutex::new(VecDeque::new())),
             log_limit: 200,
         }
-    }
-
-    pub fn host(&self) -> &str {
-        &self.config.host
-    }
-
-    pub fn port(&self) -> u16 {
-        self.config.port
     }
 
     fn command_parts(&self) -> (PathBuf, Vec<String>, PathBuf) {
@@ -113,7 +150,9 @@ impl BackendLauncher {
                 ],
                 self.config.working_dir.clone(),
             ),
-            BackendCommand::MissingReleaseSidecar => unreachable!("missing sidecar is handled before launch"),
+            BackendCommand::MissingReleaseSidecar => {
+                unreachable!("missing sidecar is handled before launch")
+            }
         }
     }
 
@@ -128,11 +167,13 @@ impl BackendLauncher {
         // Never mistake an orphaned process on Novi's port for the child we
         // are about to launch. Without this preflight, readiness can race the
         // new child's bind failure and silently connect the UI to stale code.
-        if self.is_ready() {
-            return Err(format!(
-                "Another Novi backend is already using {}:{}. Quit that process and reopen Novi.",
-                self.config.host, self.config.port
-            ));
+        if self.is_port_open() {
+            if !self.stop_stale_backend()? {
+                return Err(format!(
+                    "Another process is already using Novi's backend address {}:{}. Quit that process and reopen Novi.",
+                    self.config.host, self.config.port
+                ));
+            }
         }
         let (program, args, cwd) = self.command_parts();
 
@@ -169,6 +210,76 @@ impl BackendLauncher {
             args.join(" ")
         );
         Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn stop_stale_backend(&self) -> Result<bool, String> {
+        // A second desktop launch is intercepted by the single-instance plugin
+        // before setup reaches this point. Anything matching these exact backend
+        // command lines is therefore an orphan left by an interrupted prior run.
+        let script = format!(
+            r#"
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$connection = Get-NetTCPConnection -State Listen -LocalPort {port} -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.LocalAddress -eq '{host}' -or $_.LocalAddress -eq '0.0.0.0' }} |
+    Select-Object -First 1
+if (-not $connection) {{ exit 3 }}
+$process = Get-CimInstance Win32_Process -Filter "ProcessId = $($connection.OwningProcess)" -ErrorAction SilentlyContinue
+if (-not $process) {{ exit 4 }}
+$process | Select-Object ProcessId, Name, CommandLine | ConvertTo-Json -Compress
+"#,
+            host = self.config.host.replace('\'', "''"),
+            port = self.config.port,
+        );
+
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| format!("failed to inspect the existing Novi backend: {e}"))?;
+
+        if !output.status.success() {
+            return Ok(false);
+        }
+        let json = String::from_utf8(output.stdout)
+            .map_err(|e| format!("invalid process information for Novi's backend port: {e}"))?;
+        let process: WindowsProcessInfo = serde_json::from_str(json.trim())
+            .map_err(|e| format!("failed to read the process using Novi's backend port: {e}"))?;
+        if !is_novi_backend_process(&process, self.config.port) {
+            return Ok(false);
+        }
+
+        let status = Command::new("taskkill")
+            .args(["/PID", &process.process_id.to_string(), "/T", "/F"])
+            .status()
+            .map_err(|e| format!("failed to stop the stale Novi backend: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "failed to stop stale Novi backend process {}",
+                process.process_id
+            ));
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if !self.is_port_open() {
+                println!(
+                    "[novi-desktop] stopped stale backend on {}:{}",
+                    self.config.host, self.config.port
+                );
+                return Ok(true);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        Err(format!(
+            "stopped a stale Novi backend, but {}:{} did not become available",
+            self.config.host, self.config.port
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn stop_stale_backend(&self) -> Result<bool, String> {
+        Ok(false)
     }
 
     fn spawn_log_reader(&self, pipe: impl Read + Send + 'static) {
@@ -229,6 +340,13 @@ impl BackendLauncher {
         }
     }
 
+    fn is_port_open(&self) -> bool {
+        let addr: SocketAddr = format!("{}:{}", self.config.host, self.config.port)
+            .parse()
+            .unwrap();
+        TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    }
+
     pub fn recent_logs(&self) -> Vec<String> {
         self.logs
             .lock()
@@ -265,7 +383,11 @@ impl BackendLauncher {
             self.config.start_timeout.as_secs(),
             self.config.host,
             self.config.port,
-            if last_log.is_empty() { "<none>" } else { &last_log }
+            if last_log.is_empty() {
+                "<none>"
+            } else {
+                &last_log
+            }
         ))
     }
 
@@ -290,5 +412,44 @@ impl BackendLauncher {
             }
             println!("[novi-desktop] backend stopped (pid {})", pid.unwrap());
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_python_and_sidecar_backends_on_the_configured_port() {
+        let python = WindowsProcessInfo {
+            process_id: 10,
+            name: "python.exe".into(),
+            command_line: Some("python.exe -m novi webui --host 127.0.0.1 --port 8765".into()),
+        };
+        let sidecar = WindowsProcessInfo {
+            process_id: 11,
+            name: "novi-backend.exe".into(),
+            command_line: Some("novi-backend.exe --host 127.0.0.1 --port=8765".into()),
+        };
+
+        assert!(is_novi_backend_process(&python, 8765));
+        assert!(is_novi_backend_process(&sidecar, 8765));
+    }
+
+    #[test]
+    fn rejects_unrelated_processes_and_other_ports() {
+        let unrelated = WindowsProcessInfo {
+            process_id: 12,
+            name: "python.exe".into(),
+            command_line: Some("python.exe -m http.server --port 8765".into()),
+        };
+        let other_port = WindowsProcessInfo {
+            process_id: 13,
+            name: "novi-backend.exe".into(),
+            command_line: Some("novi-backend.exe --port 9000".into()),
+        };
+
+        assert!(!is_novi_backend_process(&unrelated, 8765));
+        assert!(!is_novi_backend_process(&other_port, 8765));
     }
 }

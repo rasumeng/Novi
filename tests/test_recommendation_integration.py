@@ -151,14 +151,37 @@ def test_available_recommendations_exclude_installed():
     assert all(e["name"] != "qwen3:8b" for e in out)
 
 
+def test_beta_recommendation_uses_smallest_model_below_4gb_vram():
+    out = build_available_recommendations(
+        installed_names=frozenset(), hardware=hw(vram=2.0, ram=8.0))
+    assert [entry["name"] for entry in out] == ["qwen3.5:0.8b"]
+
+
+def test_beta_recommendation_uses_gemma_e2b_at_4gb_vram():
+    out = build_available_recommendations(
+        installed_names=frozenset(), hardware=hw(vram=4.0, ram=16.0))
+    assert [entry["name"] for entry in out] == ["gemma4:e2b"]
+
+
+def test_beta_recommendation_uses_gemma_e4b_at_8gb_vram():
+    out = build_available_recommendations(
+        installed_names=frozenset(), hardware=hw(vram=8.0, ram=16.0))
+    assert [entry["name"] for entry in out] == ["gemma4:e4b"]
+
+
+def test_beta_recommendation_does_not_offer_a_fallback_when_tier_is_installed():
+    out = build_available_recommendations(
+        installed_names={"gemma4:e4b"}, hardware=hw(vram=8.0, ram=16.0))
+    assert out == []
+
+
 def test_available_recommendations_exclude_does_not_fit():
-    # gemma4 needs 12 GB VRAM; 8 GB VRAM must not be pushed.
+    # The old 12 GB Gemma variant is not part of the compact beta tiers.
     out = build_available_recommendations(
         installed_names=frozenset(), hardware=hw(vram=8.0, ram=32.0))
     names = {e["name"] for e in out}
     assert "gemma4" not in names
-    # a fitting model IS suggested.
-    assert "qwen3:8b" in names
+    assert names == {"gemma4:e4b"}
 
 
 def test_available_recommendations_exclude_embedding_only():

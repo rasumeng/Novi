@@ -16,7 +16,7 @@ const baseProps = {
 describe('ProjectsPanel consistent states', () => {
   it('renders loading skeleton when loading', () => {
     const { container } = render(<ProjectsPanel {...baseProps} loading />)
-    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(container.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 
   it('renders error banner with retry', () => {
@@ -36,6 +36,6 @@ describe('ProjectsPanel consistent states', () => {
     const { rerender, container } = render(<ProjectsPanel {...baseProps} error="oops" onRetry={vi.fn()} />)
     expect(screen.getByText('Try again')).toBeTruthy()
     rerender(<ProjectsPanel {...baseProps} loading />)
-    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(container.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 })

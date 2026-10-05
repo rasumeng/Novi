@@ -13,10 +13,12 @@
 """
 
 import base64
+import io
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 from novi.tools import TOOL_REGISTRY
 
@@ -102,11 +104,12 @@ def test_analyze_image_uses_only_primary_model(tmp_path, prompt):
     assert sent["model"] == "qwen2.5vl:7b"
     assert fake_requests.post.call_args.args == ("http://localhost:11434/api/chat",)
     assert sent["stream"] is False
-    assert sent["messages"] == [{
-        "role": "user",
-        "content": prompt if prompt is not None else "Describe this image in detail.",
-        "images": [base64.b64encode(img.read_bytes()).decode("ascii")],
-    }]
+    assert sent["messages"][0]["role"] == "user"
+    assert sent["messages"][0]["content"].startswith(
+        prompt if prompt is not None else "Describe this image in detail.")
+    assert "instead of guessing" in sent["messages"][0]["content"]
+    assert sent["messages"][0]["images"] == [
+        base64.b64encode(img.read_bytes()).decode("ascii")]
 
 
 def test_analyze_image_ignores_legacy_models_vision(tmp_path):
@@ -164,7 +167,54 @@ def test_analyze_image_primary_model_lacks_vision_returns_capability_error(tmp_p
         result = desktop.analyze_image(str(img))
 
     assert "doesn't support image input" in result
-    fake_requests.post.assert_not_called()
+    assert fake_requests.post.call_args.args == ("http://localhost:11434/api/show",)
+
+
+def test_analyze_image_honors_live_vision_capability_over_stale_seed(tmp_path):
+    from novi.tools import desktop
+
+    img = tmp_path / "shot.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 16)
+
+    with _patch_config(_config(primary_model="gemma4:e2b")), \
+         patch("novi.runtime.model_selector.model_capabilities",
+               return_value=_fake_caps(False)), \
+         patch.object(desktop, "requests") as fake_requests:
+        fake_requests.post.side_effect = [
+            FakeResponse(200, {"capabilities": ["completion", "vision", "tools"]}),
+            FakeResponse(200, {"message": {"content": "visible text"}}),
+        ]
+
+        result = desktop.analyze_image(str(img), "Transcribe it")
+
+    assert result == "visible text"
+    assert fake_requests.post.call_args_list[0].args == (
+        "http://localhost:11434/api/show",)
+    assert fake_requests.post.call_args_list[0].kwargs["json"] == {
+        "model": "gemma4:e2b"}
+    assert fake_requests.post.call_args_list[1].args == (
+        "http://localhost:11434/api/chat",)
+
+
+def test_analyze_image_enlarges_tiny_images_before_inference(tmp_path):
+    from novi.tools import desktop
+
+    img = tmp_path / "tiny.png"
+    Image.new("RGB", (128, 72), "black").save(img)
+
+    with _patch_config(_config(primary_model="qwen2.5vl:7b")), \
+         patch("novi.runtime.model_selector.model_capabilities",
+               return_value=_fake_caps(True)), \
+         patch.object(desktop, "requests") as fake_requests:
+        fake_requests.post.return_value = FakeResponse(
+            200, {"message": {"content": "text"}})
+
+        desktop.analyze_image(str(img), "What does this say?")
+
+    payload = fake_requests.post.call_args.kwargs["json"]
+    prepared = Image.open(io.BytesIO(base64.b64decode(
+        payload["messages"][0]["images"][0])))
+    assert prepared.size == (1024, 576)
 
 
 def test_analyze_image_model_not_installed_surfaces_model_unavailable(tmp_path):

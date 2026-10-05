@@ -5,17 +5,17 @@ from __future__ import annotations
 from uuid import uuid4
 import threading
 
-from novi.runtime.run_contracts import RunEventType, RunRequest
+from novi.runtime.run_contracts import RunEventType, RunImage, RunRequest
 from novi.services.run_composition import primary_model_snapshot
 
 
 def execute_text(service, ctx, text: str, conversation_id: str, *,
-                 attachments=(), project_id: str = "", workspace: str = "",
+                 images: tuple[RunImage, ...] = (), project_id: str = "", workspace: str = "",
                  research_selected: bool = False, on_event=None, stop_check=None):
     request = RunRequest(conversation_id=conversation_id,
         user_message_id=f"msg-{uuid4().hex}", user_text=text,
         project_id=project_id, workspace=workspace,
-        attachments=tuple(attachments or ()), research_selected=research_selected,
+        images=images, research_selected=research_selected,
         model=primary_model_snapshot(ctx))
     run_id = service.prepare(request)
     unsubscribe = service.listen(

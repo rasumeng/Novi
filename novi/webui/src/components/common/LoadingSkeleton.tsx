@@ -1,7 +1,5 @@
-// Shimmer loading placeholder. Uses the existing `animate-shimmer` tailwind
-// animation + base palette tokens so it matches the rest of the shell without
-// introducing new colors. Drop into any surface that hydrates asynchronously
-// to avoid blank screens.
+// Shared loading placeholder. Motion lives in globals.css so every async
+// surface uses the same timing and reduced-motion behavior.
 
 interface Props {
   rows?: number
@@ -16,8 +14,8 @@ export function LoadingSkeleton({ rows = 3, compact = false, className = '' }: P
       {Array.from({ length: rows }).map((_, i) => (
         <div
           key={i}
-          className="w-full h-9 rounded-xl bg-base-800 animate-shimmer"
-          style={{ opacity: 1 - i * 0.18 }}
+          className="novi-loading-skeleton w-full h-9 rounded-xl"
+          style={{ animationDelay: `${i * 140}ms` }}
         />
       ))}
     </div>

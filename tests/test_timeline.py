@@ -11,6 +11,7 @@ import pytest
 from novi.runtime.event_bus import EventBus
 from novi.timeline import (
     CONVERSATION_OBSERVED,
+    CONVERSATION_DELETED,
     JOB_CHECKPOINTED,
     JOB_COMPLETED,
     JOB_CREATED,
@@ -87,6 +88,20 @@ def test_bridge_surfaces_conversation_observed(tmp_path):
     assert len(captured) == 1
 
 
+def test_bridge_surfaces_conversation_deleted_without_dead_link(tmp_path):
+    bus = EventBus()
+    svc, store, captured = _service(tmp_path, bus)
+
+    bus.emit(CONVERSATION_DELETED, conversation_id="conv-1", title="Local AI notes")
+
+    entry = svc.recent()[0]
+    assert entry["kind"] == CONVERSATION_DELETED
+    assert entry["title"] == "Conversation deleted"
+    assert entry["detail"] == '"Local AI notes" was deleted.'
+    assert "conversation_id" not in entry
+    assert captured == [entry]
+
+
 def test_bridge_surfaces_knowledge_extracted(tmp_path):
     bus = EventBus()
     svc, store, captured = _service(tmp_path, bus)
@@ -138,9 +153,10 @@ def test_bridge_persists_to_disk(tmp_path):
     assert fresh.list()[0]["kind"] == CONVERSATION_OBSERVED
 
 
-def test_surfaced_events_set_is_exactly_three():
+def test_surfaced_events_set_is_complete():
     assert SURFACED_EVENTS == {
-        CONVERSATION_OBSERVED, KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED,
+        CONVERSATION_OBSERVED, CONVERSATION_DELETED,
+        KNOWLEDGE_EXTRACTED, KNOWLEDGE_PROMOTED,
         JOB_CREATED, JOB_STARTED, JOB_COMPLETED, JOB_FAILED,
         JOB_CHECKPOINTED, JOB_INTERRUPTED,
     }
@@ -185,6 +201,49 @@ def test_webui_bridge_wires_service_from_context(tmp_path, monkeypatch):
 def test_webui_bridge_disabled_without_context():
     from novi.webui_server import _build_timeline_bridge
     assert _build_timeline_bridge({}) is None
+
+
+def test_delete_endpoint_emits_timeline_event(tmp_path, monkeypatch):
+    import novi.paths as paths
+    import novi.webui_server as ws
+
+    fake_home = tmp_path / "home"
+    chats = fake_home / "chats"
+    bus = EventBus()
+
+    class _FakeContext:
+        @property
+        def brain_event_bus(self):
+            return bus
+
+        def close(self):
+            pass
+
+    service = TimelineService(
+        bus,
+        store=TimelineStore(persist_dir=tmp_path / "timeline"),
+    ).start()
+    monkeypatch.setattr(ws, "CHATS_DIR", chats)
+    monkeypatch.setattr(ws, "ATTACHMENTS_DIR", fake_home / "attachments")
+    monkeypatch.setattr(ws, "app_home", lambda: fake_home)
+    monkeypatch.setattr(paths, "home", lambda: fake_home)
+    monkeypatch.setattr(ws, "_shared_backend", {"context": _FakeContext()})
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(ws.create_app(cfg={})) as client:
+        created = client.put("/api/conversations", json={
+            "id": "conv-delete",
+            "title": "Disposable notes",
+            "messages": [],
+        })
+        assert created.status_code == 200
+        deleted = client.delete("/api/conversations/conv-delete")
+        assert deleted.status_code == 200
+
+    entry = service.recent()[0]
+    assert entry["kind"] == CONVERSATION_DELETED
+    assert entry["detail"] == '"Disposable notes" was deleted.'
 
 
 # ── Knowledge overview shape ──────────────────────────────────────────────

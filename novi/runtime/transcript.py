@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from novi.runtime.run_contracts import RunImage
 
 
 class MessageRole(str, Enum):
@@ -19,7 +22,7 @@ class ContentBlockType(str, Enum):
     TEXT = "text"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
-    ATTACHMENT = "attachment"
+    IMAGE = "image"
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,14 @@ class ContentBlock:
     arguments: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     artifact_id: str | None = None
+    name: str | None = None
+    media_type: str | None = None
+    path: str | None = None
+
+    @classmethod
+    def image(cls, image: "RunImage") -> "ContentBlock":
+        return cls(type=ContentBlockType.IMAGE, artifact_id=image.id,
+                   name=image.name, media_type=image.media_type, path=image.path)
 
     def to_dict(self) -> dict[str, Any]:
         return _json_value(asdict(self))
@@ -62,6 +73,9 @@ class TranscriptMessage:
                     arguments=block.get("arguments"),
                     result=block.get("result"),
                     artifact_id=block.get("artifact_id"),
+                    name=block.get("name"),
+                    media_type=block.get("media_type"),
+                    path=block.get("path"),
                 )
                 for block in value.get("blocks", ())
             ),

@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
-import { motion } from 'framer-motion'
-import { MessageSquare, Brain, Sparkles, History, RefreshCw, MoveRight } from 'lucide-react'
+import { MessageSquare, Brain, Sparkles, History, RefreshCw, MoveRight, Trash2 } from 'lucide-react'
 import { TimelineEntry } from '@/types'
 import { EmptyState } from '@/components/common/EmptyState'
 import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
@@ -19,6 +18,7 @@ interface Props {
 
 const KIND_META: Record<string, { icon: React.ElementType; color: string; iconBg: string }> = {
   'conversation.observed': { icon: MessageSquare, color: 'text-accent', iconBg: 'bg-accent/10 border-accent/20' },
+  'conversation.deleted': { icon: Trash2, color: 'text-rose-400', iconBg: 'bg-rose-500/10 border-rose-500/20' },
   'knowledge.extracted': { icon: Brain, color: 'text-emerald-400', iconBg: 'bg-emerald-500/10 border-emerald-500/20' },
   'knowledge.promoted': { icon: Sparkles, color: 'text-amber-400', iconBg: 'bg-amber-500/10 border-amber-500/20' },
 }
@@ -90,10 +90,7 @@ function TimelineRow({ entry, onOpenConversation }: { entry: TimelineEntry; onOp
   const clickable = !!conversationId && !!onOpenConversation
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.18 }}
+    <div
       role={clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
       aria-label={clickable ? `${entry.title}. ${entry.detail}. Open conversation.` : undefined}
@@ -123,6 +120,6 @@ function TimelineRow({ entry, onOpenConversation }: { entry: TimelineEntry; onOp
         </p>
       </div>
       {clickable && <MoveRight size={12} className="text-base-600 shrink-0 mt-1" aria-hidden="true" />}
-    </motion.div>
+    </div>
   )
 }

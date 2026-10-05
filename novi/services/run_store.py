@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from novi.runtime.run_contracts import (
-    ModelSnapshot, RunEvent, RunEventType, RunRequest, RunState, RunStatus,
+    ModelSnapshot, RunEvent, RunEventType, RunImage, RunRequest, RunState, RunStatus,
 )
 from novi.runtime.transcript import TranscriptMessage
 
@@ -216,7 +216,8 @@ def _run_from_dict(value: dict[str, Any]) -> RunState:
     request = RunRequest(
         conversation_id=rv["conversation_id"], user_message_id=rv["user_message_id"],
         user_text=rv["user_text"], project_id=rv.get("project_id", ""),
-        workspace=rv.get("workspace", ""), attachments=tuple(rv.get("attachments", ())),
+        workspace=rv.get("workspace", ""),
+        images=tuple(RunImage(**item) for item in rv.get("images", ())),
         research_selected=bool(rv.get("research_selected", False)),
         model=ModelSnapshot(**mv) if mv else None)
     return RunState(

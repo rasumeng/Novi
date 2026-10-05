@@ -63,7 +63,7 @@ from .runtime.retrieval_budget import ContextAllocation
 from .runtime.sources import MemoryRetrievalSource
 from .services.context import NoviContext
 from .runtime.tool_risk import get_tool_risk, risk_to_label
-from .timeline import TimelineService, build_knowledge_overview
+from .timeline import CONVERSATION_DELETED, TimelineService, build_knowledge_overview
 from .webui import WebUIBackend
 from .paths import home as app_home
 from .skills.catalog import SkillCatalog, SkillValidationError
@@ -73,6 +73,43 @@ CHATS_DIR = app_home() / "chats"
 ATTACHMENTS_DIR = app_home() / "attachments"
 SKILLS_DIR = app_home() / "skills"
 DEFAULT_SKILLS_DIR = Path(__file__).parent / "default_skills"
+
+
+def resolve_uploaded_images(attachments_meta: list[dict],
+                            attachments_dir: Path) -> tuple:
+    """Resolve client attachment ids to server-owned image files.
+
+    Client-provided paths and MIME types are intentionally ignored. The id is
+    resolved only inside Novi's upload directory and the media type is derived
+    from the stored filename.
+    """
+    from .runtime.run_contracts import RunImage
+
+    if not attachments_dir.exists():
+        if any(str(item.get("mime", "")).startswith("image/")
+               or item.get("type") == "image" for item in attachments_meta):
+            raise ValueError("attached image is no longer available")
+        return ()
+    stored = {path.stem: path for path in attachments_dir.iterdir()
+              if path.is_file()}
+    images = []
+    for item in attachments_meta:
+        if item.get("type") != "image" and not str(item.get("mime", "")).startswith("image/"):
+            continue
+        attachment_id = str(item.get("id") or "")
+        path = stored.get(attachment_id)
+        if path is None:
+            raise ValueError(f"attached image is no longer available: {item.get('name') or attachment_id}")
+        resolved_path = path.resolve()
+        if not resolved_path.is_relative_to(attachments_dir.resolve()):
+            raise ValueError("attached image resolved outside Novi's upload directory")
+        media_type, _ = mimetypes.guess_type(path.name)
+        if not media_type or not media_type.startswith("image/"):
+            raise ValueError(f"attachment is not a supported image: {item.get('name') or path.name}")
+        images.append(RunImage(id=attachment_id,
+                               name=str(item.get("name") or path.name),
+                               media_type=media_type, path=str(resolved_path)))
+    return tuple(images)
 
 
 def _memory_items_to_dicts(result) -> list[dict]:
@@ -186,6 +223,34 @@ def _broadcast_sync(payload: dict):
                 dead_ids.append(cid)
         for cid in dead_ids:
             _connection_senders.pop(cid, None)
+
+
+# ── Boot progress broadcasting ────────────────────────────────────────────
+# Tracks the last boot progress so late-joining WebSocket connections
+# receive the final state immediately.
+_last_boot_state: dict | None = None
+
+
+def broadcast_boot_progress(percent: int, message: str) -> None:
+    """Broadcast boot progress to all connected WebSocket clients."""
+    global _last_boot_state
+    percent = max(0, min(100, percent))
+    state = {"type": "boot_progress", "percent": percent, "message": message}
+    _last_boot_state = state
+    _broadcast_sync(state)
+
+
+def broadcast_boot_ready() -> None:
+    """Broadcast boot completion to all connected WebSocket clients."""
+    global _last_boot_state
+    state = {"type": "boot_ready", "percent": 100, "message": "Ready"}
+    _last_boot_state = state
+    _broadcast_sync(state)
+
+
+def get_last_boot_state() -> dict | None:
+    """Return the last boot state for late-joining connections."""
+    return _last_boot_state
 
 
 # ── Background run helpers ────────────────────────────────────────────────
@@ -349,9 +414,14 @@ def get_backend(cfg: dict | None = None) -> dict:
         if _shared_backend is not None:
             return _shared_backend
 
-        web_ui = WebUIBackend(cfg)
+        def _boot_progress(percent: int, message: str):
+            broadcast_boot_progress(percent, message)
+
+        web_ui = WebUIBackend(cfg, progress_callback=_boot_progress)
         _shared_backend = web_ui.build_backend()
         _shared_backend["timeline_service"] = _build_timeline_bridge(_shared_backend)
+        # Signal boot complete after backend is fully built
+        broadcast_boot_ready()
         return _shared_backend
 
 
@@ -510,18 +580,6 @@ class Session:
         """Disconnect this socket without cancelling process-owned work."""
         self.run_bridge.detach()
 
-    def _resolve_attachments(self, attachments_meta: list[dict]) -> list[dict]:
-        resolved = []
-        for a in attachments_meta:
-            entry = dict(a)
-            att_id = a.get("id", "")
-            for p in ATTACHMENTS_DIR.iterdir():
-                if p.stem == att_id and p.is_file():
-                    entry["path"] = str(p)
-                    break
-            resolved.append(entry)
-        return resolved
-
     def start_run(self, user_input: str, attachments_meta: list[dict] | None = None,
                   project_context: str | None = None,
                   project_id: str | None = None,
@@ -530,14 +588,14 @@ class Session:
         from .runtime.run_contracts import RunRequest
         from .services.run_composition import primary_model_snapshot
 
-        resolved = self._resolve_attachments(attachments_meta or [])
+        images = resolve_uploaded_images(attachments_meta or [], ATTACHMENTS_DIR)
         request = RunRequest(
             conversation_id=self.current_conv_id,
             user_message_id=f"msg-{uuid.uuid4().hex}",
             user_text=user_input or "Please inspect the attached files.",
             project_id=project_id or "",
             workspace=project_context or "",
-            attachments=tuple(resolved),
+            images=images,
             research_selected=deep_research,
             model=primary_model_snapshot(self._ctx),
         )
@@ -598,6 +656,14 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(app):
+        # Initialize backend early so boot progress is sent before frontend connects.
+        # This triggers NoviContext.warmup() which emits boot_progress events.
+        def _startup():
+            try:
+                get_backend()
+            except Exception as e:
+                print(f"[novi] early backend init failed: {e}")
+        await _asyncio.to_thread(_startup)
         yield
         await _asyncio.to_thread(_shutdown_backend)
 
@@ -933,6 +999,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             return JSONResponse({"error": "invalid id"}, status_code=400)
         with _CONVERSATIONS_LOCK:
             idx = _conversations_idx()
+            deleted = next((c for c in idx["conversations"] if c["id"] == conv_id), None)
             idx["conversations"] = [c for c in idx["conversations"] if c["id"] != conv_id]
             _save_idx(idx)
         # Canonical: no prune needed — project.conversationIds is derived from conversation.projectId.
@@ -948,6 +1015,14 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             sweep_orphan_attachments(ATTACHMENTS_DIR, CHATS_DIR)
         except Exception as e:
             log.warning("attachment GC after conversation delete failed: %s", e)
+        if deleted is not None and _shared_backend is not None:
+            try:
+                ctx = _shared_backend.get("context")
+                bus = ctx.brain_event_bus if ctx is not None else None
+                if bus is not None:
+                    bus.emit(CONVERSATION_DELETED, title=deleted.get("title", ""))
+            except Exception as e:
+                log.warning("timeline event after conversation delete failed: %s", e)
         return {"ok": True}
 
     def _conversation_by_id(conv_id: str) -> dict | None:
@@ -1085,6 +1160,15 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 # A model-set change invalidates cached runtime metadata so the
                 # refresh reads fresh tags/show data, never a stale cache.
                 invalidate_cache()
+                # Keep the execution registry in step with discovery.  Without
+                # this, a model installed after startup appears selectable in
+                # Settings but the first run rejects it as unavailable from the
+                # stale startup registry.
+                if _shared_backend is not None:
+                    runtime_ctx = _shared_backend.get("context")
+                    model_service = getattr(runtime_ctx, "_model_service", None)
+                    if model_service is not None:
+                        model_service.refresh()
                 installed = ModelDiscovery(url).installed()
                 recs = recommend(installed=installed)
                 _broadcast_sync({"type": "models_resolved",
@@ -1352,8 +1436,15 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 return {"ok": True, "name": name, "already_installing": True}
             _installing_models.add(name)
         url = configuration.get("ollama.url", "http://localhost:11434")
+        completed_progress: dict | None = None
 
         def progress(p):
+            nonlocal completed_progress
+            if p.get("status") == "done":
+                # Do not advertise the new model as ready until the execution
+                # registry has also been refreshed below.
+                completed_progress = dict(p)
+                return
             _broadcast_sync({"type": "install_progress", **p})
 
         def _install_and_recompute():
@@ -1367,6 +1458,8 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 # A completed install is a model-set change: refresh advisory
                 # recommendations. User selection is never rewritten.
                 _after_models_changed()
+                if completed_progress is not None:
+                    _broadcast_sync({"type": "install_progress", **completed_progress})
             finally:
                 with _installing_lock:
                     _installing_models.discard(name)
@@ -2515,6 +2608,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             await ws.close(code=4403)
             return
         await ws.accept()
+        # Send last boot state to late-joining connections so they get
+        # the final progress immediately (boot_progress or boot_ready).
+        last_boot = get_last_boot_state()
+        if last_boot:
+            await ws.send_text(json.dumps(last_boot))
         loop = asyncio.get_running_loop()
         conn_id = _register_sender(loop, ws)
         session = Session(loop=loop, ctx=get_backend().get("context"))
@@ -2556,9 +2654,20 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                     if msg.get("mode"):
                         log.warning("client sent 'mode' field — ignored in unified pipeline")
                     deep_research = bool(msg.get("deep_research"))
-                    session.start_run(content, attachments_meta, project_context,
-                                      project_id=project_id,
-                                      deep_research=deep_research)
+                    try:
+                        session.start_run(content, attachments_meta, project_context,
+                                          project_id=project_id,
+                                          deep_research=deep_research)
+                    except Exception as exc:
+                        # Startup failures happen before RunService can emit a
+                        # terminal event.  Report them without tearing down the
+                        # socket; otherwise the client remains in its optimistic
+                        # generating state and the failure looks like a stall.
+                        log.exception("failed to start chat run")
+                        await ws.send_text(json.dumps({
+                            "type": "error",
+                            "text": f"Couldn't start the selected model: {exc}",
+                        }))
                 elif mtype == "agent_config":
                     session.agent_config = {k: v for k, v in msg.items() if k not in ("type",)}
                     await ws.send_text(json.dumps({"type": "agent_config", **session.agent_config}))

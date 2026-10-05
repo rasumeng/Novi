@@ -15,7 +15,7 @@ describe('KnowledgeOverview consistent states', () => {
     const never = new Promise(() => {})
     vi.mocked(fetchKnowledgeOverview).mockReturnValue(never as any)
     const { container } = render(<KnowledgeOverview />)
-    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(container.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 
   it('shows error banner with Retry and retries to loading', async () => {
@@ -28,7 +28,7 @@ describe('KnowledgeOverview consistent states', () => {
     vi.mocked(fetchKnowledgeOverview).mockResolvedValueOnce({ categories: [], total: 0, updated: '' } as any)
     fireEvent.click(screen.getByText('Retry'))
     // immediately shows loading skeleton again
-    expect(document.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(document.querySelector('.novi-loading-skeleton')).toBeTruthy()
     await waitFor(() => expect(screen.getByText('No knowledge yet — start a conversation')).toBeTruthy())
   })
 

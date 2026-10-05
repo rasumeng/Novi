@@ -6,6 +6,8 @@ and other services. Eliminates duplicate initialization across CLI,
 WebUI, and other entry points.
 """
 
+from collections.abc import Callable
+
 from .services.context import NoviContext
 from .skills.catalog import SkillCatalog
 from .paths import home as app_home
@@ -14,11 +16,15 @@ from .paths import home as app_home
 class WebUIBackend:
     """Builds the shared backend for WebUI using NoviContext."""
 
-    def __init__(self, cfg: dict | None = None):
+    def __init__(
+        self,
+        cfg: dict | None = None,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ):
         import warnings
         warnings.filterwarnings("ignore")
         self._context = NoviContext(cfg)
-        self._context.warmup()
+        self._context.warmup(progress_callback=progress_callback)
 
     def build_backend(self) -> dict:
         """Build the shared backend using NoviContext services."""

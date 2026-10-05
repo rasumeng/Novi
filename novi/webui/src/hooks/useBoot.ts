@@ -2,15 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { NoviClient } from '@/services/novi'
 import { fetchConversationsDeduped, fetchProjectsDeduped, fetchTimelineEnvelopeDeduped } from '@/hooks/bootCache'
 
-export type BootStep = 'conversations' | 'projects' | 'timeline' | 'presets'
 export type BootPhase = 'connecting' | 'hydrating' | 'ready' | 'error'
 
-export const BOOT_COPY: Record<BootStep | 'connecting', string> = {
-  connecting: 'Waking up our workspace…',
-  conversations: 'Recalling our conversations…',
-  projects: 'Reopening our projects…',
-  timeline: 'Catching up on our memory…',
-  presets: 'Remembering our presets…',
+export interface BootState {
+  phase: BootPhase
+  percent: number
+  message: string
+  error?: string
+  retry: () => void
 }
 
 async function fetchPresets(): Promise<unknown> {
@@ -29,25 +28,16 @@ async function fetchPresets(): Promise<unknown> {
   }
 }
 
-export interface BootState {
-  phase: BootPhase
-  step: BootStep
-  loaded: number
-  total: number
-  detail?: string
-  error?: string
-  retry: () => void
-}
-
 export function useBoot(): BootState {
   const [phase, setPhase] = useState<BootPhase>('connecting')
-  const [step, setStep] = useState<BootStep>('conversations')
-  const [loaded, setLoaded] = useState(0)
-  const [detail, setDetail] = useState<string | undefined>(undefined)
+  const [percent, setPercent] = useState(0)
+  const [message, setMessage] = useState('Connecting to Novi…')
   const [error, setError] = useState<string | undefined>(undefined)
-  const wsOpenRef = useRef(false)
+  const wsRef = useRef<WebSocket | null>(null)
   const retryNonce = useRef(0)
   const [retryKey, setRetryKey] = useState(0)
+  const backendReadyRef = useRef(false)
+  const dataLoadedRef = useRef(false)
 
   const retry = useCallback(() => {
     retryNonce.current += 1
@@ -56,100 +46,127 @@ export function useBoot(): BootState {
 
   useEffect(() => {
     let cancelled = false
-    wsOpenRef.current = false
+    backendReadyRef.current = false
+    dataLoadedRef.current = false
     setPhase('connecting')
-    setStep('conversations')
-    setLoaded(0)
-    setDetail(undefined)
+    setPercent(0)
+    setMessage('Connecting to Novi…')
     setError(undefined)
 
-    const client = new NoviClient()
+    // Connect to WebSocket for boot progress
+    const proto = import.meta.env.DEV ? 'ws' : 'wss'
+    const host = import.meta.env.DEV ? 'localhost:8765' : window.location.host
+    const ws = new WebSocket(`${proto}://${host}/ws/chat`)
+    wsRef.current = ws
 
-    const wsPromise = new Promise<void>((resolve) => {
-      client.onConnectionChange = (s: string) => {
-        if (s === 'open') {
-          wsOpenRef.current = true
-          resolve()
-        }
-      }
+    ws.onopen = () => {
+      if (cancelled) return
+      setMessage('Connected, waiting for backend…')
+    }
+
+    ws.onmessage = (e) => {
+      if (cancelled) return
       try {
-        client.connect()
-      } catch {
-        resolve()
-      }
-      setTimeout(() => resolve(), 1500)
-    })
-
-    ;(async () => {
-      await wsPromise
-      if (cancelled) return
-      setPhase('hydrating')
-
-      const steps: Array<{ key: BootStep; fn: () => Promise<unknown>; detail: (v: unknown) => string | undefined }> = [
-        {
-          key: 'conversations',
-          fn: () => fetchConversationsDeduped({ force: true }),
-          detail: (v: unknown) => (Array.isArray(v) ? `${(v as unknown[]).length} conversations` : undefined),
-        },
-        {
-          key: 'projects',
-          fn: () => fetchProjectsDeduped({ force: true }),
-          detail: (v: unknown) => (Array.isArray(v) ? `${(v as unknown[]).length} projects` : undefined),
-        },
-        {
-          key: 'timeline',
-          fn: () => fetchTimelineEnvelopeDeduped({ force: true }).then((e) => e.data),
-          detail: (v: unknown) => (Array.isArray(v) ? `${(v as unknown[]).length} memories` : undefined),
-        },
-        {
-          key: 'presets',
-          fn: fetchPresets,
-          detail: () => 'settings ready',
-        },
-      ]
-
-      let ok = 0
-      for (const s of steps) {
-        if (cancelled) return
-        setStep(s.key)
-        setDetail(BOOT_COPY[s.key])
-        try {
-          const v = await s.fn()
-          if (cancelled) return
-          const d = s.detail(v)
-          if (d) setDetail(d)
-          ok += 1
-          setLoaded(ok)
-        } catch (e: unknown) {
-          if (cancelled) return
-          const msg = e instanceof Error ? e.message : `Failed loading ${s.key}`
-          setError(msg)
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'boot_progress') {
+          setPercent(Math.min(100, Math.max(0, msg.percent ?? 0)))
+          setMessage(msg.message ?? '')
+        } else if (msg.type === 'boot_ready') {
+          backendReadyRef.current = true
+          setPercent(100)
+          setMessage('Ready')
+          setPhase('hydrating')
+          // Start background data hydration
+          hydrateData()
+        } else if (msg.type === 'boot_error') {
+          setError(msg.error ?? 'Backend failed to start')
           setPhase('error')
-          return
+        }
+      } catch {
+        // ignore malformed
+      }
+    }
+
+    ws.onerror = () => {
+      if (cancelled) return
+      // WebSocket failed - fall back to polling health endpoint
+      pollHealth()
+    }
+
+    ws.onclose = () => {
+      if (cancelled) return
+      if (!backendReadyRef.current) {
+        // Connection closed before ready - retry
+        setTimeout(() => {
+          if (!cancelled) setRetryKey((k) => k + 1)
+        }, 2000)
+      }
+    }
+
+    // Fallback: poll health endpoint if WebSocket doesn't give boot events
+    async function pollHealth() {
+      let attempts = 0
+      while (!cancelled && !backendReadyRef.current && attempts < 60) {
+        await new Promise((r) => setTimeout(r, 1000))
+        attempts++
+        setPercent(Math.min(90, attempts * 1.5))
+        setMessage(`Waiting for backend… (${attempts}s)`)
+        try {
+          const r = await fetch(`${import.meta.env.DEV ? 'http://localhost:8765' : ''}/api/health`, {
+            signal: AbortSignal.timeout(2000)
+          })
+          if (r.ok) {
+            const health = await r.json()
+            if (health.ready) {
+              backendReadyRef.current = true
+              setPercent(100)
+              setMessage('Ready')
+              setPhase('hydrating')
+              hydrateData()
+              break
+            }
+          }
+        } catch {
+          // keep polling
         }
       }
-
       if (cancelled) return
-      if (wsOpenRef.current) {
-        setPhase('ready')
-      } else {
-        setTimeout(() => {
-          if (!cancelled && wsOpenRef.current) setPhase('ready')
-        }, 300)
+      if (!backendReadyRef.current) {
+        setError('Backend did not become ready in time')
+        setPhase('error')
       }
-    })()
+    }
+
+    async function hydrateData() {
+      if (cancelled) return
+      setMessage('Loading your data…')
+      try {
+        const [convs, projs, timeline] = await Promise.all([
+          fetchConversationsDeduped({ force: true }),
+          fetchProjectsDeduped({ force: true }),
+          fetchTimelineEnvelopeDeduped({ force: true }).then((e) => e.data),
+        ])
+        if (cancelled) return
+        dataLoadedRef.current = true
+        setPhase('ready')
+      } catch (e) {
+        if (cancelled) return
+        console.warn('Boot hydration failed:', e)
+        // Non-fatal - app can still work
+        dataLoadedRef.current = true
+        setPhase('ready')
+      }
+    }
+
+    // Start polling as backup in case WebSocket doesn't deliver boot events
+    const pollBackup = setTimeout(pollHealth, 3000)
 
     return () => {
       cancelled = true
-      try {
-        client.disconnect()
-      } catch {
-        /* ignore */
-      }
+      clearTimeout(pollBackup)
+      ws.close()
     }
   }, [retryKey])
 
-  const effectivePhase: BootPhase = phase === 'hydrating' && loaded === 4 && wsOpenRef.current ? 'ready' : phase
-
-  return { phase: effectivePhase, step, loaded, total: 4, detail, error, retry }
+  return { phase, percent, message, error, retry }
 }

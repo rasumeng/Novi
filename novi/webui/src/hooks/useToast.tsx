@@ -65,10 +65,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             return (
               <motion.div
                 key={t.id}
-                initial={{ opacity: 0, y: 8, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                transition={{ duration: 0.15 }}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
                 role={style.role}
                 className={`pointer-events-auto flex items-start gap-2.5 rounded-xl border p-3 shadow-panel text-xs text-base-100 ${style.box}`}
               >

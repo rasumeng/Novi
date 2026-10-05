@@ -83,7 +83,7 @@ vi.mock('@/services/novi', () => ({
 // Imported after the mock so the hook picks up MockNoviClient.
 const { useNoviChat } = await import('./useNoviChat')
 const { resetBootCache } = await import('./bootCache')
-const { fetchProjects } = await import('@/services/novi')
+const { fetchConversations, fetchProjects } = await import('@/services/novi')
 
 function findConv(list: Conversation[], id: string) {
   return list.find((c) => c.id === id)
@@ -102,11 +102,29 @@ function renderChatHook() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ state: 'idle', version: 0,
     instance_id: 'test', job_id: null, mode: 'shadow', reason: '', note_ids: [] }) })))
   MockNoviClient.instances = []
   vi.mocked(fetchProjects).mockResolvedValue([])
   resetBootCache()
+})
+
+describe('startup readiness', () => {
+  it('does not hydrate conversations until the backend is ready', async () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useNoviChat(enabled),
+      { initialProps: { enabled: false }, wrapper: Providers },
+    )
+
+    expect(fetchConversations).not.toHaveBeenCalled()
+    expect(result.current.conversations).toEqual([])
+
+    rerender({ enabled: true })
+
+    await waitFor(() => expect(result.current.conversations).toHaveLength(2))
+    expect(fetchConversations).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('generation ownership', () => {

@@ -64,10 +64,7 @@ class RunService:
             inherited = previous[-1].transcript if previous else ()
             blocks = [ContentBlock(type=ContentBlockType.TEXT,
                                    text=request.user_text)]
-            blocks.extend(ContentBlock(type=ContentBlockType.ATTACHMENT,
-                                       artifact_id=str(item.get("id") or item.get("name") or ""),
-                                       result=dict(item))
-                          for item in request.attachments)
+            blocks.extend(ContentBlock.image(image) for image in request.images)
             user_message = TranscriptMessage(id=request.user_message_id,
                 role=MessageRole.USER, source="user", trust="trusted",
                 blocks=tuple(blocks))

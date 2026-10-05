@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from novi.runtime.run_contracts import EVENT_TYPES, RunEvent, RunEventType, RunRequest, RunState, RunStatus
+from novi.runtime.run_contracts import EVENT_TYPES, RunEvent, RunEventType, RunImage, RunRequest, RunState, RunStatus
 from novi.runtime.transcript import ContentBlock, ContentBlockType, MessageRole, TranscriptMessage
 
 
@@ -11,6 +11,17 @@ def test_request_requires_explicit_conversation_and_message_identity():
         RunRequest(conversation_id="", user_message_id="m1", user_text="hello")
     with pytest.raises(ValueError):
         RunRequest(conversation_id="c1", user_message_id="", user_text="hello")
+
+
+def test_run_image_rejects_non_image_media_type():
+    with pytest.raises(ValueError, match="image media type"):
+        RunImage(id="a", name="notes.txt", media_type="text/plain", path="C:/notes.txt")
+
+
+def test_request_rejects_legacy_image_dicts():
+    with pytest.raises(TypeError, match="RunImage"):
+        RunRequest(conversation_id="c", user_message_id="u", user_text="see this",
+                   images=({"id": "legacy"},))  # type: ignore[arg-type]
 
 
 def test_run_has_all_honest_terminal_states():
@@ -46,4 +57,12 @@ def test_transcript_round_trip_keeps_call_identity_and_visibility():
         source="model", trust="untrusted",
         blocks=(ContentBlock(type=ContentBlockType.TOOL_CALL, call_id="call-1",
                              tool_name="read_file", arguments={"path": "a.py"}),))
+    assert TranscriptMessage.from_dict(message.to_dict()) == message
+
+
+def test_transcript_round_trip_keeps_typed_image():
+    image = RunImage(id="img", name="photo.png", media_type="image/png",
+                     path="C:/uploads/img.png")
+    message = TranscriptMessage(id="u", role=MessageRole.USER,
+                                blocks=(ContentBlock.image(image),))
     assert TranscriptMessage.from_dict(message.to_dict()) == message

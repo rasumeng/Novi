@@ -40,8 +40,11 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
   const [checking, setChecking] = useState(true)
   const refreshHealth = useCallback(async () => {
     setChecking(true)
-    setHealth(await fetchSystemHealth())
-    setChecking(false)
+    try {
+      setHealth(await fetchSystemHealth())
+    } finally {
+      setChecking(false)
+    }
   }, [])
   useEffect(() => { void refreshHealth() }, [refreshHealth])
   if (loading || !discovery) return <LoadingSkeleton rows={4} compact />
@@ -109,7 +112,7 @@ export function GeneralSettings({ discovery, schema, installing, onInstall, onNa
             <Monitor size={14} className="text-base-500" />
             <p className="text-sm font-medium text-base-100">Hardware</p>
           </div>
-          <button onClick={() => void onRefresh()} className="text-[11px] text-base-400 hover:text-base-200 transition-colors">Refresh</button>
+          <button onClick={() => void refreshHealth()} className="text-[11px] text-base-400 hover:text-base-200 transition-colors">Refresh</button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
           <HardwareFact label="GPU" value={hardware.gpu?.name || 'Not detected'} />
@@ -182,7 +185,7 @@ function SystemHealthCard({ health, checking, onRefresh, onNavigate }: {
         </p>
       </div>
       <button onClick={() => void onRefresh()} disabled={checking} className="p-2 rounded-lg border border-base-700 text-base-400 hover:text-base-100 disabled:opacity-50" title="Recheck local AI readiness">
-        <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />
+        <RefreshCw size={14} className={checking ? 'novi-loading-spinner' : ''} />
       </button>
     </div>
     {!checking && health && <>

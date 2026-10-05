@@ -7,7 +7,6 @@ import { NAV_ITEMS, NAV_ORDER, NavItemId } from './workspaceModes'
 import { ProjectForm } from '@/components/projects/ProjectForm'
 import { ProjectSettingsModal } from '@/components/projects/ProjectSettingsModal'
 import { useConfirm } from '@/hooks/useConfirm'
-import type { BootState } from '@/hooks/useBoot'
 
 interface Props {
   collapsed: boolean
@@ -29,12 +28,14 @@ interface Props {
   onSectionChange: (id: NavItemId) => void
   jobsCount?: number
   generatingConversationId?: string | null
-  boot?: BootState
   onAttachProjectSource?: (projId: string, path: string) => Promise<any>
   onDetachProjectSource?: (projId: string, path: string) => Promise<void>
+  projectsLoading?: boolean
+  timelineLoading?: boolean
+  jobsLoading?: boolean
 }
 
-export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null, boot, onAttachProjectSource, onDetachProjectSource }: Props) {
+export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewChat, onNewChatInProject, onPin, onRename, onDelete, projects, activeProjectId, onSelectProject, onCreateProject, onUpdateProject, onDeleteProject, activeSection, onSectionChange, jobsCount = 0, generatingConversationId = null, onAttachProjectSource, onDetachProjectSource, projectsLoading = false, timelineLoading = false, jobsLoading = false }: Props) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem('novi_sidebar_expanded_projects')
@@ -57,9 +58,6 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
   const { confirm: confirmDelete, dialog: deleteDialog } = useConfirm()
   const menuRef = useRef<HTMLDivElement>(null)
   const headerMenuRef = useRef<HTMLDivElement>(null)
-
-  const isChatLoading = boot ? boot.phase !== 'ready' && boot.loaded < 1 : false
-  const isProjectsLoading = boot ? boot.phase !== 'ready' && boot.loaded < 2 : false
 
   const pinnedConvos = useMemo(() => conversations.filter((c) => c.pinned), [conversations])
   const pinnedProjects = useMemo(() => (projects ?? []).filter((p) => (p as any).pinned).sort((a,b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")), [projects])
@@ -220,6 +218,7 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                 const item = NAV_ITEMS[id]
                 const Icon = item.icon
                 const active = activeSection === id
+                const isLoading = (id === 'timeline' && timelineLoading) || (id === 'jobs' && jobsLoading)
                 return (
                   <button
                     key={id}
@@ -233,6 +232,7 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                         {jobsCount}
                       </span>
                     )}
+                    {isLoading && <Loader2 size={12} className="novi-loading-spinner text-accent" aria-label={`Loading ${item.label}`} />}
                   </button>
                 )
               })}
@@ -269,9 +269,8 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                   >
                     <span className="text-[10px] uppercase tracking-widest text-base-500 font-medium">Projects</span>
                     <span className="flex items-center gap-1.5 text-base-500">
-                     
+                      {projectsLoading && <Loader2 size={12} className="novi-loading-spinner text-accent" aria-label="Loading projects" />}
                       <span className={`transition-opacity ${projectsExpanded ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>{projectsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
-                      {isProjectsLoading && <Loader2 size={10} className="novi-sidebar-spinner text-accent shrink-0" aria-label="Loading projects" />}
                     </span>
                   </button>
                   <button
@@ -503,7 +502,6 @@ export function Sidebar({ collapsed, conversations, activeId, onSelect, onNewCha
                   <span className="text-[10px] uppercase tracking-widest font-medium">Recents</span>
                   <span className="flex items-center gap-1.5 text-base-500">
                     <span className={`transition-opacity ${chatsExpanded ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : 'opacity-100'}`}>{chatsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
-                    {isChatLoading && <Loader2 size={10} className="ml-auto novi-sidebar-spinner text-accent shrink-0" aria-label="Loading chats" />}
                   </span>
                 </button>
                 {chatsExpanded && (

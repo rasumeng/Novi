@@ -58,7 +58,13 @@ def test_prose_containing_tool_json_stays_text():
 
 
 def test_reasoning_alone_does_not_count_as_a_final_answer():
-    model = StreamingModel([[SimpleNamespace(content="", additional_kwargs={"reasoning_content": "Thinking"})]])
+    # A reasoning-only turn is not an answer. With nothing gathered, the loop
+    # retries once and then fails with `empty_model_turn` -- so the scripted
+    # model must supply both turns (the retry is not optional).
+    model = StreamingModel([
+        [SimpleNamespace(content="", additional_kwargs={"reasoning_content": "Thinking"})],
+        [SimpleNamespace(content="", additional_kwargs={"reasoning_content": "Still thinking"})],
+    ])
     result = AgentLoop(LangChainTurnProvider(model), RecordingDispatcher()).run(state())
     assert result.state.status is RunStatus.FAILED
     assert result.state.terminal_reason == "empty_model_turn"

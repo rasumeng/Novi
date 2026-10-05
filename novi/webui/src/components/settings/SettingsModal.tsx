@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { X, Search, Settings, Server, SlidersHorizontal, Loader2 } from 'lucide-react'
+import { X, Search, Settings, Server, SlidersHorizontal } from 'lucide-react'
 import { fetchTools } from '@/services/novi'
 import type { SchemaResponse } from './api'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -99,72 +98,83 @@ export function SettingsModal({ open, onClose, initialSection, onSectionChange }
     onClose()
   }
 
+  const sectionContent = (() => {
+    if (framework.loading) return <LoadingSkeleton rows={5} compact />
+
+    switch (section) {
+      case 'general':
+        return <GeneralSettings discovery={framework.discovery} schema={framework.schema} installing={framework.installs} onInstall={framework.install} onNavigate={migrateSection} onRefresh={framework.refreshDiscovery} loading={false} />
+      case 'models':
+        return <ModelsSettings discovery={framework.discovery} schema={framework.schema} embeddingModel={(framework.values['embedding.model'] as string) ?? ''} installing={framework.installs} onInstall={framework.install} onDelete={framework.removeModel} onDismiss={framework.dismissRecommended} onRefresh={framework.refreshDiscovery} loading={false} onSaveSelection={framework.savePrimaryModel} onApplyRecommended={framework.applyRecommended} />
+      case 'memory':
+        return <MemorySettings framework={framework} loading={false} />
+      case 'connectors':
+        return <ConnectorsSection framework={framework} loading={false} />
+      case 'permissions':
+        return <PermissionsSettings tools={tools} framework={framework} loading={false} />
+      case 'developer':
+        return <DeveloperPage schema={schema} framework={framework} loading={false} />
+      default:
+        return null
+    }
+  })()
+
+  if (!open) return null
+
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-        >
-          <motion.div
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div
             ref={modalRef}
             role="dialog"
             aria-modal="true"
             aria-label="Settings"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="flex w-[75vw] h-[75vh] min-w-[700px] min-h-[500px] max-w-[1800px] max-h-[1600px] rounded-2xl border border-base-700 bg-base-900 shadow-panel overflow-hidden"
+            className="flex w-[75vw] h-[75vh] min-w-[700px] min-h-[500px] max-w-[1800px] max-h-[1600px] rounded-cardLarge border border-base-700 bg-base-900 shadow-panel overflow-hidden"
           >
             <div className="w-48 shrink-0 border-r border-base-800 flex flex-col bg-base-950/50">
-              <div className="p-3 border-b border-base-800">
-                <div className="flex items-center gap-2 mb-3">
-                  <Settings size={16} className="text-accent" />
-                  <span className="text-sm font-semibold text-base-100">Settings</span>
-                  {framework.loading && <Loader2 size={12} className="animate-spin text-accent ml-auto" aria-label="Loading settings" />}
-                </div>
-                <div className="relative">
-                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-500" />
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search settings..."
-                    aria-label="Search settings"
-                    className="w-full bg-base-800 border border-base-700 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/40 transition-colors"
-                  />
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto py-2">
-                {filteredSections.map((s, index) => (
-                  <div key={s.id}>
-                  {(index === 0 || NAV_GROUP[s.id] !== NAV_GROUP[filteredSections[index - 1].id]) && (
-                    <p className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-base-600">{NAV_GROUP[s.id]}</p>
-                  )}
-                  <button
-                    key={s.id}
-                    onClick={() => migrateSection(s.id as SectionId)}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors ${
-                      section === s.id
-                        ? 'bg-base-800 text-base-100 border-l-2 border-accent'
-                        : 'text-base-400 hover:text-base-200 hover:bg-base-850'
-                    }`}
-                  >
-                    <s.icon size={14} />
-                    {s.label}
-                  </button>
+                <div className="p-card border-b border-base-800">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Settings size={16} className="text-accent" />
+                    <span className="text-sm font-semibold text-base-100">Settings</span>
                   </div>
-                ))}
+                  <div className="relative">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-base-500" />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search settings..."
+                      aria-label="Search settings"
+                      className="w-full bg-base-800 border border-base-700 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-base-200 placeholder:text-base-500 outline-none focus:border-accent/40 transition-colors"
+                    />
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto py-2">
+                  {filteredSections.map((s, index) => (
+                    <div key={s.id}>
+                      {(index === 0 || NAV_GROUP[s.id] !== NAV_GROUP[filteredSections[index - 1].id]) && (
+                        <p className="px-card pt-3 pb-1 text-label text-base-600">{NAV_GROUP[s.id]}</p>
+                      )}
+                      <button
+                        key={s.id}
+                        onClick={() => migrateSection(s.id as SectionId)}
+                        className={`w-full flex items-center gap-2.5 px-card py-2 text-sm transition-colors ${
+                          section === s.id
+                            ? 'bg-base-800 text-base-100 border-l-2 border-accent'
+                            : 'text-base-400 hover:text-base-200 hover:bg-base-850'
+                        }`}
+                      >
+                        <s.icon size={14} />
+                        {s.label}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
 
             <div className="flex-1 flex flex-col min-w-0">
               <div className="flex items-center justify-between px-5 h-12 border-b border-base-800 shrink-0">
                 <h2 className="text-sm font-semibold text-base-100">{PAGE_LABEL[section]}</h2>
                 <div className="flex items-center gap-2">
-                  <span className="hidden text-[11px] text-base-500 sm:block">Changes save automatically</span>
+                  <span className="hidden text-caption text-base-500 sm:block">Changes save automatically</span>
                   <button
                     onClick={close}
                     aria-label="Close settings"
@@ -174,65 +184,23 @@ export function SettingsModal({ open, onClose, initialSection, onSectionChange }
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-4">
-                {framework.loading && <LoadingSkeleton rows={5} compact />}
-
-                {!framework.loading && section === 'general' && (
-                  <GeneralSettings
-                    discovery={framework.discovery}
-                    schema={framework.schema}
-                    installing={framework.installs}
-                    onInstall={framework.install}
-                    onNavigate={migrateSection}
-                    onRefresh={framework.refreshDiscovery}
-                    loading={false}
-                  />
-                )}
-
-                {!framework.loading && section === 'models' && (
-                  <ModelsSettings
-                    discovery={framework.discovery}
-                    schema={framework.schema}
-                    embeddingModel={(framework.values['embedding.model'] as string) ?? ''}
-                    installing={framework.installs}
-                    onInstall={framework.install}
-                    onDelete={framework.removeModel}
-                    onDismiss={framework.dismissRecommended}
-                    onRefresh={framework.refreshDiscovery}
-                    loading={false}
-                    onSaveSelection={framework.savePrimaryModel}
-                    onApplyRecommended={framework.applyRecommended}
-                  />
-                )}
-
-                {!framework.loading && section === 'memory' && (
-                  <MemorySettings framework={framework} />
-                )}
-
-                {!framework.loading && section === 'connectors' && (
-                  <ConnectorsSection framework={framework} />
-                )}
-
-                {!framework.loading && section === 'permissions' && (
-                  <PermissionsSettings tools={tools} framework={framework} />
-                )}
-
-                {!framework.loading && section === 'developer' && (
-                  <DeveloperPage schema={schema} framework={framework} />
-                )}
+              <div className="flex-1 overflow-y-auto p-card">
+                <div data-settings-section={section}>
+                  {sectionContent}
+                </div>
               </div>
             </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+          </div>
+        </div>
   )
 }
 
-function DeveloperPage({ schema, framework }: {
+function DeveloperPage({ schema, framework, loading }: {
   schema: SchemaResponse | null
   framework: ReturnType<typeof useFrameworkSettings>
+  loading?: boolean
 }) {
+  if (loading) return <LoadingSkeleton rows={5} compact />
   const developer = schema?.settings.filter((s) => s.category === 'developer') ?? []
   // Expert-owned memory fields only — embedding.model (category models) already
   // lives on the Models page (Task 4/5) and must not be duplicated here.

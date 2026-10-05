@@ -38,7 +38,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SectionId>('general')
   const [searchOpen, setSearchOpen] = useState(false)
-  const chat = useNoviChat()
+  const chat = useNoviChat(boot.phase === 'ready')
   const workspaceRef = useRef<WorkspaceLocation | null>(null)
 
   const applyWorkspace = useCallback((location: WorkspaceLocation) => {
@@ -95,7 +95,13 @@ export default function App() {
   }, [pushWorkspaceHistory])
 
   const handleOpenSettings = useCallback((section?: SectionId) => {
-    pushWorkspaceHistory({ settingsOpen: true, settingsSection: section ?? workspaceRef.current?.settingsSection ?? 'general', searchOpen: false })
+    const current = workspaceRef.current
+    const shouldOpen = section !== undefined || !current?.settingsOpen
+    pushWorkspaceHistory({
+      settingsOpen: shouldOpen,
+      settingsSection: section ?? current?.settingsSection ?? 'general',
+      searchOpen: false,
+    })
   }, [pushWorkspaceHistory])
 
   const handleSelectConversation = useCallback((id: string) => {
@@ -193,13 +199,14 @@ return (
     }
   }
 
-  // if (boot.phase !== 'ready') {
-  //   return (
-  //     <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
-  //       <BootScreen state={boot} />
-  //     </div>
-  //   )
-  // }
+  if (boot.phase !== 'ready') {
+    return (
+      <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
+        <TitleBar minimal={true} />
+        <BootScreen />
+      </div>
+    )
+  }
 
   return (
     <div className="h-screen w-screen flex flex-col bg-base-950 text-base-100 overflow-hidden relative">
@@ -241,9 +248,11 @@ return (
           onCreateProject={chat.createProject}
           onUpdateProject={chat.updateProject}
           onDeleteProject={chat.deleteProject}
-          boot={boot}
           onAttachProjectSource={chat.attachProjectSource}
           onDetachProjectSource={chat.detachProjectSource}
+          projectsLoading={chat.projectsLoading}
+          timelineLoading={chat.timelineLoading}
+          jobsLoading={chat.jobsLoading}
         />
 
         {renderSection()}

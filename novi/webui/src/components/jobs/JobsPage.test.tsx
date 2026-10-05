@@ -6,7 +6,7 @@ describe('JobsPage consistent states', () => {
   it('renders loading skeleton when loading', () => {
     const { container } = render(<JobsPage runs={[]} onStart={vi.fn()} onStop={vi.fn()} onRefresh={vi.fn()} loading />)
     // LoadingSkeleton renders shimmer divs
-    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(container.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 
   it('renders error banner with Retry', () => {
@@ -27,6 +27,6 @@ describe('JobsPage consistent states', () => {
     const { rerender } = render(<JobsPage runs={[]} onStart={vi.fn()} onStop={vi.fn()} onRefresh={vi.fn()} error="oops" />)
     expect(screen.getByText('Retry')).toBeTruthy()
     rerender(<JobsPage runs={[]} onStart={vi.fn()} onStop={vi.fn()} onRefresh={vi.fn()} loading />)
-    expect(document.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(document.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 })

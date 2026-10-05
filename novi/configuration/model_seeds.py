@@ -52,6 +52,10 @@ class ModelFact:
     quantization: Optional[str] = None
     license: Optional[str] = None
     source: str = "seed"
+    # Beta-only install recommendation tier. ``None`` keeps the model out of
+    # the compact first-run recommendation set. The largest threshold not
+    # exceeding detected VRAM wins; unknown VRAM uses the smallest tier.
+    beta_min_vram_gb: Optional[float] = None
 
     @property
     def tested_with_novi(self) -> bool:
@@ -79,6 +83,7 @@ class ModelFact:
             "quantization": self.quantization,
             "license": self.license,
             "source": self.source,
+            "betaMinVramGb": self.beta_min_vram_gb,
         }
 
 
@@ -89,9 +94,15 @@ SEED_MODEL_FACTS: dict[str, ModelFact] = {
     m.name: m
     for m in [
         # ── Trusted seed models (explicit evidence from real user testing) ──
+        ModelFact("qwen3.5:0.8b", "Qwen 3.5 0.8B", 1.0, Qualification.TRUSTED,
+                  capabilities=["chat", "reasoning", "tools"], supports_tools=True,
+                  family="qwen3.5", size_tier="0.8b", beta_min_vram_gb=0.0),
+        ModelFact("gemma4:e2b", "Gemma 4 E2B", 2.0, Qualification.TRUSTED,
+                  capabilities=["chat", "reasoning", "tools"], supports_tools=True,
+                  family="gemma4", variant="e2b", beta_min_vram_gb=4.0),
         ModelFact("gemma4:e4b", "Gemma 4 E4B", 4.0, Qualification.TRUSTED,
                   capabilities=["chat", "reasoning", "tools"], supports_tools=True,
-                  family="gemma4", variant="e4b"),
+                  family="gemma4", variant="e4b", beta_min_vram_gb=8.0),
         ModelFact("qwen3:8b", "Qwen 3 8B", 8.0, Qualification.TRUSTED,
                   capabilities=["chat", "reasoning", "coding", "tools"], supports_tools=True,
                   family="qwen3", size_tier="8b"),

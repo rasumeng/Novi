@@ -2,10 +2,12 @@ import { ShieldCheck } from 'lucide-react'
 import { ToolsSettings } from './ToolsSettings'
 import type { ToolInfo } from './types'
 import { useFrameworkSettings } from '@/hooks/useFrameworkSettings'
+import { LoadingSkeleton } from '@/components/common/LoadingSkeleton'
 
 interface Props {
   tools: ToolInfo[]
   framework: ReturnType<typeof useFrameworkSettings>
+  loading?: boolean
 }
 
 /**
@@ -16,7 +18,8 @@ interface Props {
  * Connectors: a connector is an external capability source, while a
  * permission decides whether and how Novi may act.
  */
-export function PermissionsSettings({ tools, framework }: Props) {
+export function PermissionsSettings({ tools, framework, loading }: Props) {
+  if (loading) return <LoadingSkeleton rows={5} compact />
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-3">

@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-from novi.runtime.run_contracts import RunEvent
+from novi.runtime.run_contracts import RunEvent, RunImage
 
 log = logging.getLogger("novi.services.background")
 
@@ -41,7 +41,7 @@ class BackgroundRunResult:
 def run_background(ctx, goal: str, *, conversation_id: str = "",
                    on_event: Optional[Callable[[RunEvent], None]] = None,
                    stop_check: Optional[Callable[[], bool]] = None,
-                   attachments: Optional[list] = None,
+                   images: tuple[RunImage, ...] = (),
                    metadata: Optional[dict] = None) -> BackgroundRunResult:
     """Execute one goal through the canonical headless RunService.
 
@@ -67,7 +67,7 @@ def run_background(ctx, goal: str, *, conversation_id: str = "",
                 except Exception as e:
                     log.warning("background on_event failed: %s", e)
         run_id, state, events = execute_text(service, ctx, goal,
-            conversation_id or f"background:{id(service)}", attachments=attachments or (),
+            conversation_id or f"background:{id(service)}", images=images,
             on_event=deliver, stop_check=stop_check)
 
         return BackgroundRunResult(

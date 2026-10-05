@@ -15,7 +15,7 @@ const entry = (over: Partial<TimelineEntry>): TimelineEntry => ({
 describe('TimelinePage consistent states', () => {
   it('shows loading skeleton when loading', () => {
     const { container } = render(<TimelinePage entries={[]} onRefresh={vi.fn()} loading />)
-    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(container.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 
   it('shows error banner with Retry and calls onRefresh', () => {
@@ -30,7 +30,7 @@ describe('TimelinePage consistent states', () => {
     const { rerender, container } = render(<TimelinePage entries={[]} onRefresh={vi.fn()} error="oops" status="unavailable" />)
     expect(screen.getByText('Retry')).toBeTruthy()
     rerender(<TimelinePage entries={[]} onRefresh={vi.fn()} loading />)
-    expect(container.querySelector('.animate-shimmer')).toBeTruthy()
+    expect(container.querySelector('.novi-loading-skeleton')).toBeTruthy()
   })
 })
 
