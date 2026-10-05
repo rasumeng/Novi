@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from novi.runtime.run_contracts import ModelSnapshot, RunRequest, RunStatus
+from novi.runtime.run_contracts import ModelSnapshot, RunImage, RunRequest, RunStatus
 from novi.services.run_composition import build_run_service
 
 
@@ -54,6 +54,31 @@ class SourceModel:
                 usage_metadata=None, response_metadata={})
 
 
+class InlineImageModel:
+    def stream(self, messages):
+        user = next(message for message in messages if message.type == "human")
+        text = user.content[0]["text"]
+        assert "What does this say?" in text
+        assert "image.png" in text
+        assert "Answer directly" in text
+        assert user.content[1]["type"] == "image_url"
+        assert user.content[1]["image_url"]["url"].startswith(
+            "data:image/png;base64,")
+        yield SimpleNamespace(content="It says hello.", tool_calls=[],
+                              usage_metadata=None, response_metadata={})
+
+
+class SystemPromptSpy:
+    def __init__(self):
+        self.system = ""
+
+    def stream(self, messages):
+        system = next((m for m in messages if m.type == "system"), None)
+        self.system = system.content if system else ""
+        yield SimpleNamespace(content="ok", tool_calls=[],
+                              usage_metadata=None, response_metadata={})
+
+
 class Sources:
     def __init__(self):
         self.listed_for = None
@@ -98,6 +123,119 @@ def test_conversation_sources_are_exposed_as_scoped_read_tools(tmp_path):
             "list_source_files", "search_source_files", "read_source_file"}
     finally:
         service.close()
+
+
+def test_attached_image_is_inline_and_legacy_image_tool_is_not_exposed(tmp_path):
+    image_path = tmp_path / "att-1.png"
+    image_path.write_bytes(b"image")
+    ctx = Context(InlineImageModel())
+    service = build_run_service(
+        ctx, persist_dir=tmp_path / "runs", skill_root=tmp_path / "skills",
+        registry={"analyze_image": lambda file_path, prompt="": "legacy"},
+    )
+    try:
+        run_id = service.start(RunRequest(
+            conversation_id="image-chat", user_message_id="u1",
+            user_text="What does this say?", images=(RunImage(
+                id="att-1", name="image.png", media_type="image/png",
+                path=str(image_path),
+            ),),
+        ))
+        assert service.snapshot(run_id).status is RunStatus.COMPLETED
+        assert "analyze_image" not in {
+            tool.name for tool in ctx.model_service.bound[1]
+        }
+    finally:
+        service.close()
+
+
+def test_system_prompt_forbids_tool_use_when_context_already_answers(tmp_path):
+    # Small models over-apply the tool-forward instructions and invent
+    # searches for content that is already in the conversation.
+    spy = SystemPromptSpy()
+    ctx = Context(spy)
+    service = build_run_service(ctx, persist_dir=tmp_path,
+        skill_root=tmp_path / "skills", registry={})
+    try:
+        run_id = service.start(RunRequest(conversation_id="direct",
+                                          user_message_id="u1",
+                                          user_text="what does this say?"))
+        assert service.snapshot(run_id).status is RunStatus.COMPLETED
+    finally:
+        service.close()
+    prompt = spy.system.lower()
+    assert "already have" in prompt
+    assert "directly" in prompt
+    assert "instead of" in prompt
+
+
+def test_memory_tools_are_hidden_when_memory_is_disabled(tmp_path):
+    ctx = Context(Model())
+    ctx.config["memory"] = {"enabled": False}
+    service = build_run_service(
+        ctx, persist_dir=tmp_path, skill_root=tmp_path / "skills",
+        registry={"echo": lambda value: value,
+                  "search_knowledge": lambda query, k=5: "notes",
+                  "search_memory": lambda query, k=5: "memories"})
+    try:
+        service.start(RunRequest(conversation_id="c", user_message_id="u1",
+                                 user_text="go"))
+        names = {tool.name for tool in ctx.model_service.bound[1]}
+        assert "echo" in names
+        assert "search_knowledge" not in names
+        assert "search_memory" not in names
+    finally:
+        service.close()
+
+
+def test_memory_tools_are_exposed_when_memory_is_enabled(tmp_path):
+    ctx = Context(Model())
+    ctx.config["memory"] = {"enabled": True}
+    service = build_run_service(
+        ctx, persist_dir=tmp_path, skill_root=tmp_path / "skills",
+        registry={"echo": lambda value: value,
+                  "search_knowledge": lambda query, k=5: "notes",
+                  "search_memory": lambda query, k=5: "memories"})
+    try:
+        service.start(RunRequest(conversation_id="c", user_message_id="u1",
+                                 user_text="go"))
+        names = {tool.name for tool in ctx.model_service.bound[1]}
+        assert {"search_knowledge", "search_memory"} <= names
+    finally:
+        service.close()
+
+
+def test_system_prompt_states_principles_not_search_recipes(tmp_path):
+    spy = SystemPromptSpy()
+    ctx = Context(spy)
+    service = build_run_service(ctx, persist_dir=tmp_path,
+        skill_root=tmp_path / "skills", registry={})
+    try:
+        service.start(RunRequest(conversation_id="p", user_message_id="u1",
+                                 user_text="hi"))
+    finally:
+        service.close()
+    prompt = spy.system
+    # The old recipe ordered a local-search-then-web-search sequence, which
+    # small models follow literally on every question.
+    assert "If local searches do not contain" not in prompt
+    assert "Do not repeatedly rephrase the same local search" not in prompt
+    assert "search_knowledge" not in prompt
+    assert "search_memory" not in prompt
+
+
+def test_system_prompt_keeps_the_native_tool_call_constraint(tmp_path):
+    # The dispatcher only accepts native tool_calls; this must survive.
+    spy = SystemPromptSpy()
+    ctx = Context(spy)
+    service = build_run_service(ctx, persist_dir=tmp_path,
+        skill_root=tmp_path / "skills", registry={})
+    try:
+        service.start(RunRequest(conversation_id="p", user_message_id="u1",
+                                 user_text="hi"))
+    finally:
+        service.close()
+    assert "native tool call" in spy.system
 
 
 def test_explicit_model_does_not_resolve_or_replace_primary(tmp_path):

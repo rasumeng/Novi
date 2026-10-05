@@ -15,6 +15,11 @@ from typing import Any
 
 log = logging.getLogger("novi.providers.llm")
 
+# How long to wait on a single provider read before treating it as stalled.
+# Generous enough for a long tool-driven turn, short enough that a wedged
+# provider surfaces an error instead of hanging the run indefinitely.
+DEFAULT_REQUEST_TIMEOUT = 180.0
+
 
 @dataclass
 class ModelInfo:
@@ -104,6 +109,10 @@ class OllamaProvider(LLMProvider):
                 temperature=key,
                 reasoning=reasoning,
             )
+            # Without an HTTP read timeout a stalled provider (e.g. Ollama busy
+            # loading another model) wedges the run forever with no tokens and
+            # no error. httpx raises instead, and the loop reports it honestly.
+            kwargs["client_kwargs"] = {"timeout": self._resolve_request_timeout()}
             if max_tokens is not None:
                 kwargs["num_predict"] = max_tokens
             try:
@@ -124,6 +133,14 @@ class OllamaProvider(LLMProvider):
                         temperature=key,
                     )
         return self._clients[key]
+
+    def _resolve_request_timeout(self) -> float:
+        """Seconds to wait on a provider read before declaring it stalled."""
+        try:
+            value = float(self.cfg.get("request_timeout", DEFAULT_REQUEST_TIMEOUT))
+        except (TypeError, ValueError):
+            return DEFAULT_REQUEST_TIMEOUT
+        return value if value > 0 else DEFAULT_REQUEST_TIMEOUT
 
     def _resolve_max_tokens(self) -> int | None:
         """Read llm.max_tokens from the framework if present."""

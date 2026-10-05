@@ -7,6 +7,7 @@ Runs:
   2. tsc --noEmit  (in novi/webui)
   3. npm --prefix novi/webui run build
   4. pytest on four targeted gate files -v
+  5. frontend unit tests (vitest)
 Prints manual matrix reminder. Exits non-zero if any step fails.
 """
 
@@ -102,6 +103,16 @@ def main() -> int:
     rc = run([py, "-m", "pytest", *TARGETED_TESTS, "-v"], cwd=REPO_ROOT)
     if rc != 0:
         failures.append("targeted gate tests")
+
+    # 5. frontend unit tests. `npm run build` only type-checks and bundles, so
+    # without this the gate never executes a single vitest assertion.
+    if npm:
+        rc = run([npm, "--prefix", str(WEBUI_DIR), "test", "--", "--run"],
+                 cwd=REPO_ROOT)
+        if rc != 0:
+            failures.append("frontend tests (vitest)")
+    else:
+        failures.append("frontend tests (npm not found)")
 
     print("\n" + "=" * 72, flush=True)
     if failures:

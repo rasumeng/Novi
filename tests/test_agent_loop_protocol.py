@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from novi.runtime.agent_loop import AgentLoop, AgentLoopLimits
 from novi.runtime.context_builder import ContextBuilder, ContextInputs, TranscriptCompactor
 from novi.runtime.run_contracts import (
-    ModelSnapshot, ModelTurn, RunRequest, RunState, RunStatus, ToolCall, ToolResult, ToolResultStatus,
+    ModelSnapshot, ModelTurn, RunImage, RunRequest, RunState, RunStatus, ToolCall, ToolResult, ToolResultStatus,
 )
 from novi.runtime.transcript import ContentBlock, ContentBlockType, MessageRole, TranscriptMessage
 from novi.services.permission_service import (
@@ -67,6 +67,22 @@ def test_natural_completion_no_tools():
     assert messages == ["Hello! I can help with that."]
 
 
+def test_initial_user_message_includes_request_attachments():
+    image = RunImage(id="att-1", name="image.png", media_type="image/png",
+                     path="C:/tmp/image.png")
+    initial = replace(state(), request=replace(
+        state().request, images=(image,)))
+    provider = ScriptedProvider([ModelTurn(text="I can see the image.")])
+
+    AgentLoop(provider, RecordingDispatcher({})).run(initial)
+
+    user_message = provider.transcripts[0][0]
+    assert user_message.blocks == (
+        ContentBlock(type=ContentBlockType.TEXT, text="do the work"),
+        ContentBlock.image(image),
+    )
+
+
 def test_natural_completion_after_tools():
     """A run with tools followed by final text response completes naturally."""
     provider = ScriptedProvider([
@@ -126,12 +142,101 @@ def test_mixed_control_tool_with_external_call():
 
 
 def test_empty_turn_and_provider_error_fail_honestly():
-    empty = AgentLoop(ScriptedProvider([ModelTurn()]), RecordingDispatcher({})).run(state())
+    empty_provider = ScriptedProvider([ModelTurn(), ModelTurn()])
+    empty = AgentLoop(empty_provider, RecordingDispatcher({})).run(state())
     assert empty.state.status is RunStatus.FAILED
     assert empty.state.terminal_reason == "empty_model_turn"
+    assert len(empty_provider.transcripts) == 2
     errored = AgentLoop(ScriptedProvider([RuntimeError("offline")]), RecordingDispatcher({})).run(state())
     assert errored.state.status is RunStatus.FAILED
     assert "offline" in (errored.state.terminal_reason or "")
+
+
+def test_empty_turn_retries_once_then_continues_normally():
+    provider = ScriptedProvider([
+        ModelTurn(),
+        ModelTurn(text="Recovered response."),
+    ])
+
+    result = AgentLoop(provider, RecordingDispatcher({})).run(state())
+
+    assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
+    assert len(provider.transcripts) == 2
+    statuses = [event.payload.get("text") for event in result.events
+                if event.type.value == "status"]
+    assert statuses == ["The model returned an empty response; retrying once…"]
+
+
+def test_empty_turn_after_tool_results_is_nudged_to_answer():
+    """Gathered tool output must not be discarded by an empty model turn."""
+    provider = ScriptedProvider([
+        ModelTurn(calls=(ToolCall(id="c1", name="web_search", arguments={"query": "q"}),)),
+        ModelTurn(),
+        ModelTurn(text="It is raining in Dallas."),
+    ])
+
+    result = AgentLoop(provider, RecordingDispatcher({})).run(state())
+
+    assert result.state.status is RunStatus.COMPLETED
+    assert result.state.terminal_reason == "natural_completion"
+    # The nudge must actually reach the provider, not just be logged.
+    nudge = [m for m in provider.transcripts[-1]
+             if m.role is MessageRole.USER][-1]
+    assert "answer" in " ".join(b.text or "" for b in nudge.blocks).lower()
+
+
+def test_empty_turn_after_tool_results_synthesizes_an_answer():
+    """A model that stays silent must not fail a run that already has evidence."""
+    provider = ScriptedProvider([
+        ModelTurn(calls=(ToolCall(id="c1", name="web_search", arguments={"query": "q"}),)),
+        ModelTurn(),
+        ModelTurn(),
+    ])
+
+    result = AgentLoop(provider, RecordingDispatcher({})).run(state())
+
+    assert result.state.status is RunStatus.COMPLETED
+    messages = [event.payload["content"] for event in result.events
+                if event.type.value == "message.completed"]
+    assert messages, "a synthesized answer should reach the user"
+    assert "result:web_search" in messages[-1]
+
+
+def test_empty_turn_without_tool_results_still_fails_honestly():
+    """With nothing gathered there is nothing to answer from; keep failing."""
+    provider = ScriptedProvider([
+        ModelTurn(),
+        ModelTurn(),
+    ])
+
+    result = AgentLoop(provider, RecordingDispatcher({})).run(state())
+
+    assert result.state.status is RunStatus.FAILED
+    assert result.state.terminal_reason == "empty_model_turn"
+
+
+def test_stalled_provider_reports_a_timeout_instead_of_a_generic_error():
+    import httpx
+
+    provider = ScriptedProvider([httpx.ReadTimeout("timed out")])
+
+    result = AgentLoop(provider, RecordingDispatcher({})).run(state())
+
+    assert result.state.status is RunStatus.FAILED
+    assert result.state.terminal_reason == "provider_timeout"
+    statuses = [event.payload.get("text") for event in result.events
+                if event.type.value == "status"]
+    assert any("stopped responding" in (text or "") for text in statuses)
+
+
+def test_non_timeout_provider_failure_keeps_its_generic_reason():
+    provider = ScriptedProvider([RuntimeError("connection refused")])
+
+    result = AgentLoop(provider, RecordingDispatcher({})).run(state())
+
+    assert result.state.status is RunStatus.FAILED
+    assert "connection refused" in (result.state.terminal_reason or "")
 
 
 def test_denial_results_in_blocked_status():
@@ -211,6 +316,33 @@ def test_identical_reads_can_repeat_after_state_changes():
     assert result.state.status is RunStatus.COMPLETED
     assert result.state.terminal_reason == "natural_completion"
     assert [call.id for call in dispatcher.calls] == ["c1", "c2"]
+
+
+def test_fourth_knowledge_search_is_redirected_without_stopping_agent():
+    provider = ScriptedProvider([
+        ModelTurn(calls=(ToolCall(id=f"k{i}", name="search_knowledge",
+                                  arguments={"query": f"query {i}"}),))
+        for i in range(1, 5)
+    ] + [
+        ModelTurn(calls=(ToolCall(id="w1", name="web_search",
+                                  arguments={"query": "current external information"}),)),
+        ModelTurn(text="Found the answer on the web."),
+    ])
+    dispatcher = RecordingDispatcher({})
+
+    result = AgentLoop(provider, dispatcher).run(state())
+
+    assert result.state.status is RunStatus.COMPLETED
+    assert [call.id for call in dispatcher.calls] == ["k1", "k2", "k3", "w1"]
+    fourth_input = provider.transcripts[4]
+    blocked_result = next(
+        block.result
+        for message in fourth_input
+        for block in message.blocks
+        if block.type is ContentBlockType.TOOL_RESULT and block.call_id == "k4"
+    )
+    assert blocked_result["status"] == "failed"
+    assert "web_search" in blocked_result["error"]
 
 
 def test_permission_wait_emits_requested_without_claiming_tool_started():

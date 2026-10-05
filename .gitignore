@@ -71,6 +71,21 @@ desktop/src-tauri/gen/
 /workspace/
 /knowledge/
 
+# Runtime data must never reach the repository. Novi keeps every mutable
+# artifact under the user profile dir (~/.novi, outside the install dir), so
+# anything matching these patterns appearing in the tree is a bug -- most often
+# a test that booted the app against the repo instead of a temp profile.
+# The repository ships Novi's base state only: code, docs, and test fixtures.
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.duckdb
+*.lance/
+*.parquet
+*.arrow
+
 
 # ============================================================
 # Tests / Tool Caches

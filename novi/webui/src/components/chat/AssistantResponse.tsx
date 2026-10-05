@@ -31,7 +31,7 @@ function ReasoningTrace({ content, thinking }: { content: string; thinking: bool
           className={`transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
-        <div className="mt-1 text-base-500">
+        <div className="novi-disclosure-content mt-1 text-base-500">
           <MessageContent content={content} tone="muted" />
         </div>
       )}
@@ -41,12 +41,15 @@ function ReasoningTrace({ content, thinking }: { content: string; thinking: bool
 
 /** Visible only until reasoning, text, or tool activity arrives. */
 export function WaitingBubble() {
+  // Three dots, no timer: the animation is the liveness signal. The dots are
+  // the direct children so `.novi-waiting > span` in globals.css drives them,
+  // and that rule is in the reduced-motion rescue list so a stalled provider
+  // can never be mistaken for a frozen one.
   return (
-    <div className="inline-flex gap-1.5 rounded-full bg-base-800 px-4 py-3"
+    <div className="novi-waiting inline-flex items-center gap-1.5 rounded-full bg-base-800 px-4 py-3 text-base-400"
       role="status" aria-label="Waiting for Novi" data-testid="waiting-bubble">
       {[0, 1, 2].map(index => (
         <span key={index} aria-hidden="true"
-          className="h-1.5 w-1.5 rounded-full bg-base-400 motion-safe:animate-pulse"
           style={{ animationDelay: `${index * 180}ms` }} />
       ))}
     </div>
@@ -64,10 +67,20 @@ export function ToolTrace({ tool }: { tool: ProjectedTool }) {
         <ChevronRight size={14} aria-hidden="true"
           className="transition-transform group-open:rotate-90" />
       </summary>
-      <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
-        {JSON.stringify(tool.arguments, null, 2)}
-      </pre>
-      {tool.result && <div className="mt-2"><MessageContent content={tool.result} tone="muted" /></div>}
+      <div className="novi-disclosure-content">
+        {tool.arguments && (
+          <div className="mt-2 overflow-hidden">
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
+              {JSON.stringify(tool.arguments, null, 2)}
+            </pre>
+          </div>
+        )}
+        {tool.result && (
+          <div className="mt-2">
+            <MessageContent content={tool.result} tone="muted" />
+          </div>
+        )}
+      </div>
     </details>
   )
 }

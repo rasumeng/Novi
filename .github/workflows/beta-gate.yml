@@ -12,7 +12,10 @@ jobs:
   verify:
     name: Verify desktop beta
     runs-on: windows-latest
-    timeout-minutes: 20
+    # The python suite alone runs ~25-40 min on a cold Windows runner: the
+    # TestClient-based tests boot the whole app (models, brain, scheduler) per
+    # test. The previous 20-minute cap killed the job before it could report.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,6 +33,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix novi/webui ci
       - name: Run beta verification gate
+        # --timeout bounds an individual hung test instead of letting it burn
+        # the whole job budget; pytest-timeout ships in the [test] extra.
         run: python scripts/verify_beta.py
       - name: Check desktop shell
         run: cargo check --manifest-path novi/webui/src-tauri/Cargo.toml

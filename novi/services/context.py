@@ -14,6 +14,7 @@ or model selection behavior.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,36 @@ from ..configuration.bootstrap import get_configuration
 from ..paths import home as app_home
 
 log = logging.getLogger("novi.context")
+
+
+def _memory_enabled(config: dict) -> bool:
+    """Honour the canonical ``memory.enabled`` flag for startup work.
+
+    Reads the same nested config shape used elsewhere in this module rather
+    than the global Configuration, so injected/test configs are respected.
+    """
+    try:
+        return bool((config.get("memory", {}) or {}).get("enabled", True))
+    except Exception:
+        return True
+
+
+def _brain_enabled(config: dict) -> bool:
+    """Whether the Brain may be constructed. Defaults to OFF.
+
+    The Brain owns the vector store, and building that embeds the entire
+    corpus through Ollama during startup -- roughly three minutes on a modest
+    corpus, paid on the first chat connection and on every app-booting test.
+
+    The beta ships a bare posture: no long-term recall, no corpus embeddings,
+    no curation worker. Everything is still present and one config flag away,
+    so the subsystem can be brought back for the post-beta rework.
+    """
+    try:
+        section = config.get("brain", {}) or {}
+        return bool(section.get("enabled", False))
+    except Exception:
+        return False
 
 
 class NoviContext:
@@ -199,6 +230,10 @@ class NoviContext:
         from ..runtime.event_bus import EventBus
 
         if self._brain is None:
+            if not _brain_enabled(self.config):
+                # Beta posture: leave the Brain unbuilt. Callers are all
+                # None-safe, so nothing downstream needs a half-built object.
+                return None
             from ..brain import Brain, set_brain
 
             self.init_knowledge_index()
@@ -477,15 +512,35 @@ class NoviContext:
     def _legacy_create_runtime(self, **overrides) -> object:
         raise RuntimeError("legacy runtime construction was removed; use run_service")
 
-    def warmup(self):
-        """Eagerly initialize all services. Called at startup."""
+    def warmup(
+        self, progress_callback: Callable[[int, str], None] | None = None
+    ) -> None:
+        """Eagerly initialize all services. Called at startup.
+
+        Args:
+            progress_callback: Optional callable(percent: int, message: str)
+                invoked at key initialization milestones for UI boot progress.
+        """
+        def report(pct: int, msg: str):
+            if progress_callback:
+                try:
+                    progress_callback(pct, msg)
+                except Exception:
+                    pass
+
+        report(10, "Waking up workspace…")
         _ = self.model_service
+        report(25, "Loading models…")
         _ = self.simple_llm
+        report(40, "Initializing memory…")
         _ = self.memory
+        report(55, "Building brain…")
         _ = self.project_index
         _ = self.embedding_service
-        self.init_knowledge_index()
+        if _memory_enabled(self.config):
+            self.init_knowledge_index()
         _ = self.brain
+        report(70, "Starting workers…")
         # Startup interruption recovery (Phase 6B): recognize executions
         # abandoned by a previous process BEFORE any new surface can start one.
         # Emits job.interrupted on the Brain bus (already built above) so the
@@ -493,5 +548,7 @@ class NoviContext:
         self.recover_jobs(
             bus=self._brain_event_bus if self._brain_event_bus is not None else None,
         )
+        report(85, "Starting scheduler…")
         _ = self.scheduler
+        report(100, "Ready")
         log.info("NoviContext: all services initialized")

@@ -61,6 +61,39 @@ def test_ws_allows_empty_origin():
         # no assertion failure means accepted
 
 
+def test_chat_startup_failure_is_reported_without_dropping_socket(monkeypatch):
+    from fastapi.testclient import TestClient
+    from novi.webui_server import Session, create_app
+
+    def fail_start(*args, **kwargs):
+        raise RuntimeError("selected model is unavailable")
+
+    monkeypatch.setattr(Session, "start_run", fail_start)
+    client = TestClient(create_app())
+
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_text(json.dumps({
+            "type": "chat",
+            "content": "hello",
+            "conversation_id": "startup-error",
+        }))
+        # The socket emits boot_progress frames before/around the reply, so
+        # read until the error actually arrives rather than assuming it is first.
+        error = None
+        for _ in range(20):
+            frame = json.loads(ws.receive_text())
+            if frame.get("type") == "error":
+                error = frame
+                break
+        assert error is not None, "no error frame arrived on the socket"
+        assert "selected model is unavailable" in error["text"]
+
+        # The same socket remains usable after the failed run startup.
+        ws.send_text(json.dumps({"type": "agent_config", "temperature": 0.2}))
+        response = json.loads(ws.receive_text())
+        assert response == {"type": "agent_config", "temperature": 0.2}
+
+
 def test_attachment_too_large_streaming(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from novi.webui_server import create_app

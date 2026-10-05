@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from novi.runtime.provider_adapter import LangChainTurnProvider, transcript_to_messages
-from novi.runtime.run_contracts import ToolCall
+from novi.runtime.run_contracts import RunImage, ToolCall
 from novi.runtime.transcript import ContentBlock, ContentBlockType, MessageRole, TranscriptMessage
 
 
@@ -10,14 +10,70 @@ def test_user_image_attachment_becomes_multimodal_message(tmp_path):
     image.write_bytes(b"image-bytes")
     transcript = (TranscriptMessage(id="u", role=MessageRole.USER, blocks=(
         ContentBlock(type=ContentBlockType.TEXT, text="describe this"),
-        ContentBlock(type=ContentBlockType.ATTACHMENT, artifact_id="pixel.png",
-                     result={"type": "image", "name": "pixel.png",
-                             "path": str(image), "mime": "image/png"}),
+        ContentBlock.image(RunImage(id="pixel", name="pixel.png",
+                                   media_type="image/png", path=str(image))),
     )),)
     (message,) = transcript_to_messages(transcript)
-    assert message.content[0] == {"type": "text", "text": "describe this"}
+    assert message.content[0]["text"].endswith("describe this")
     assert message.content[1]["type"] == "image_url"
     assert message.content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def _image_message(tmp_path, *names):
+    blocks = [ContentBlock(type=ContentBlockType.TEXT, text="what does this say?")]
+    for index, name in enumerate(names):
+        path = tmp_path / name
+        path.write_bytes(b"image-bytes")
+        blocks.append(ContentBlock.image(RunImage(
+            id=f"att-{index}", name=name, media_type="image/png", path=str(path))))
+    (message,) = transcript_to_messages((TranscriptMessage(
+        id="u", role=MessageRole.USER, blocks=tuple(blocks)),))
+    return message
+
+
+def test_image_message_tells_model_to_answer_from_what_it_sees(tmp_path):
+    text = _image_message(tmp_path, "image.png").content[0]["text"]
+    assert "what does this say?" in text
+    assert "image.png" in text
+    # It must forbid going off to look for the content elsewhere.
+    assert "directly" in text.lower()
+    assert "do not read files" in text.lower()
+    assert "search" in text.lower()
+
+
+def test_image_message_framing_names_every_attachment(tmp_path):
+    text = _image_message(tmp_path, "one.png", "two.png").content[0]["text"]
+    assert "2 images" in text
+    assert "one.png" in text and "two.png" in text
+
+
+def test_image_message_framing_survives_empty_user_text(tmp_path):
+    path = tmp_path / "solo.png"
+    path.write_bytes(b"image-bytes")
+    (message,) = transcript_to_messages((TranscriptMessage(
+        id="u", role=MessageRole.USER, blocks=(
+            ContentBlock.image(RunImage(id="a", name="solo.png",
+                                       media_type="image/png", path=str(path))),
+        )),))
+    assert "solo.png" in message.content[0]["text"]
+
+
+def test_text_only_message_gets_no_image_framing():
+    (message,) = transcript_to_messages((_user("just text"),))
+    assert message.content == "just text"
+
+
+def test_missing_image_fails_before_calling_provider(tmp_path):
+    missing = tmp_path / "missing.png"
+    transcript = (TranscriptMessage(id="u", role=MessageRole.USER, blocks=(
+        ContentBlock(type=ContentBlockType.TEXT, text="describe this"),
+        ContentBlock.image(RunImage(id="missing", name="missing.png",
+                                   media_type="image/png", path=str(missing))),
+    )),)
+
+    import pytest
+    with pytest.raises(FileNotFoundError, match="missing.png"):
+        transcript_to_messages(transcript)
 
 
 class StreamingModel:

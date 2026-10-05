@@ -191,6 +191,26 @@ class LangChainTurnProvider:
         )
 
 
+def _image_framing(images: list[ContentBlock], text: str) -> str:
+    """Ground an attached image for the model.
+
+    Image blocks reach the provider with no textual anchor, so the model reads
+    "question + some text I can see" and treats what it saw as a lead to
+    investigate -- it invents file reads and web searches for a phrase the user
+    pasted. Naming the attachment and stating that it is the answer stops that.
+    """
+    names = [block.name or block.artifact_id or "an image" for block in images]
+    count = len(names)
+    listed = ", ".join(names)
+    plural = "s" if count != 1 else ""
+    verb = "are" if count != 1 else "is"
+    return (f"[Attachment] The user attached {count} image{plural}: {listed}. "
+            f"Answer directly from what is visible in {listed}. Do not read files, "
+            "run searches, or call any other tool to describe or transcribe image "
+            f"content -- the image{plural} {verb} the evidence you need."
+            + (f"\n\nUser message: {text}" if text else ""))
+
+
 def transcript_to_messages(transcript: tuple[TranscriptMessage, ...]) -> list:
     messages = []
     for message in transcript:
@@ -199,22 +219,19 @@ def transcript_to_messages(transcript: tuple[TranscriptMessage, ...]) -> list:
         if message.role is MessageRole.SYSTEM:
             messages.append(SystemMessage(content=text))
         elif message.role is MessageRole.USER:
-            attachments = [block for block in message.blocks
-                           if block.type is ContentBlockType.ATTACHMENT]
-            if not attachments:
+            images = [block for block in message.blocks
+                      if block.type is ContentBlockType.IMAGE]
+            if not images:
                 messages.append(HumanMessage(content=text))
                 continue
-            content: list[dict] = [{"type": "text", "text": text}]
-            for block in attachments:
-                item = block.result or {}
-                if item.get("type") != "image":
-                    continue
-                path = Path(str(item.get("path") or ""))
+            content: list[dict] = [{"type": "text",
+                                    "text": _image_framing(images, text)}]
+            for block in images:
+                path = Path(block.path or "")
                 if not path.is_file():
-                    content.append({"type": "text", "text":
-                                    f"[Image {item.get('name') or block.artifact_id} could not be loaded]"})
-                    continue
-                mime = str(item.get("mime") or "image/png")
+                    raise FileNotFoundError(
+                        f"Attached image could not be loaded: {block.name or block.artifact_id}")
+                mime = block.media_type or "image/png"
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
                 content.append({"type": "image_url",
                                 "image_url": {"url": f"data:{mime};base64,{encoded}"}})

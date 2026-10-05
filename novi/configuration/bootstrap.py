@@ -39,8 +39,13 @@ DEFAULT_CONFIG: dict = {
         "ollama": {"url": "http://localhost:11434", "reasoning": True},
         "openai": {"api_key_env": "OPENAI_API_KEY"},
     },
-    "memory": {"enabled": True, "automatic_updates": True,
+    # Beta posture: a fresh install is deliberately bare. Long-term recall and
+    # the Brain's vector store both cost a full corpus re-embed at startup and
+    # are the least-verified subsystems, so they ship dormant. Both are one
+    # flag away for the post-beta rework.
+    "memory": {"enabled": False, "automatic_updates": True,
                "max_turns_before_summary": 5, "max_short_term_pairs": 10},
+    "brain": {"enabled": False},
     "workspace": {"path": "~/.novi/workspace", "knowledge": "~/.novi/knowledge", "git_repo": ""},
     "personality": "",
     # Web search is opt-in for beta: empty backend = "not configured". Novi

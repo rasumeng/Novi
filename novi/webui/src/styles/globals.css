@@ -28,11 +28,6 @@ body::before {
   z-index: 0;
 }
 
-.shimmer {
-  background: linear-gradient(90deg, #24262c 0%, #32343c 50%, #24262c 100%);
-  background-size: 800px 100%;
-}
-
 /* Novi markdown + KaTeX polish — Light Convo Path 6012a79 preserved 100% */
 .novi-markdown {
   overflow-wrap: anywhere;
@@ -80,39 +75,103 @@ body::before {
   outline-offset: 2px;
 }
 
-/* BootScreen — mirrors splash.rs STYLE, class names novi-boot__* */
-.novi-boot{min-height:100vh;box-sizing:border-box;display:grid;place-items:center;padding:32px;background:radial-gradient(circle at 50% 42%,#25223d 0,#17181f 39%,#111216 100%);color:#f3f2f7}
+/* BootScreen — simplified, mascot + real progress */
+.novi-boot{min-height:100vh;box-sizing:border-box;display:grid;place-items:center;padding:32px;background:#131418;color:#f3f2f7}
 .novi-boot--embedded{min-height:0;flex:1}
-.novi-boot__card{width:min(100%,440px);padding:32px;box-sizing:border-box;border:1px solid rgba(255,255,255,.09);border-radius:20px;background:rgba(25,26,33,.84);box-shadow:0 22px 64px rgba(0,0,0,.32);text-align:left}
-.novi-boot__brand{display:flex;align-items:center;gap:10px;margin-bottom:30px;color:#bcb7ff;font-size:11px;font-weight:700;letter-spacing:.13em}
-.novi-boot__mark{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:#7a6ee0;color:#fff;font-size:16px;letter-spacing:0}
-.novi-boot__heading{display:flex;align-items:center;gap:13px}
-.novi-boot__heading h1{margin:0;font-size:22px;line-height:1.2;letter-spacing:-.025em}
-.novi-boot__spinner{width:26px;height:26px;box-sizing:border-box;flex:none;border:3px solid rgba(142,130,255,.24);border-top-color:#a99fff;border-radius:50%;animation:spin .85s linear infinite}
-.novi-boot__status{min-height:22px;margin:10px 0 25px;color:#b4b5be;font-size:14px;line-height:1.55}
-.novi-boot__progress{height:4px;overflow:hidden;border-radius:99px;background:#30313a}
-.novi-boot__progress:after{content:"";display:block;width:42%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#7368dd,#b3aaff,#7368dd);animation:novi-boot-move 1.65s ease-in-out infinite}
-.novi-boot__steps{display:grid;gap:13px;margin:25px 0 0;padding:0;list-style:none}
-.novi-boot__steps li{display:flex;align-items:center;gap:10px;color:#777983;font-size:13px;transition:color .28s ease}
-.novi-boot__dot{display:block;width:7px;height:7px;border-radius:50%;background:#4a4b54;transition:background .28s ease,box-shadow .28s ease}
-.novi-boot__steps li.active{color:#dcdaeb}
-.novi-boot__steps li.active .novi-boot__dot{background:#9c91ff;box-shadow:0 0 0 4px rgba(156,145,255,.13)}
-.novi-boot__steps li.done{color:#a6a7b0}
-.novi-boot__steps li.done .novi-boot__dot{background:#7a6ee0}
-.novi-boot__foot{margin:26px 0 0;color:#777983;font-size:12px;line-height:1.5}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes novi-boot-move{0%{transform:translateX(-100%)}50%{transform:translateX(80%)}100%{transform:translateX(180%)}}
+.novi-boot__card{width:min(100%,440px);padding:40px;box-sizing:border-box;text-align:center}
+.novi-boot__brand{margin-bottom:24px}
+.novi-boot__brand img{display:block;margin:0 auto}
+.novi-boot__status{min-height:1.5em;margin:0 0 20px;color:#b4b5be;font-size:14px;line-height:1.55}
+.novi-boot__progress{height:6px;overflow:hidden;border-radius:99px;background:#24262c;margin-bottom:24px;position:relative}
+.novi-boot__progress-fill{position:absolute;top:0;bottom:0;left:0;width:45%;border-radius:inherit;background:linear-gradient(90deg,transparent 0%,#7a6ee0 30%,#a99fff 50%,#7a6ee0 70%,transparent 100%);animation:novi-boot-sweep 1.5s ease-in-out infinite;will-change:transform}
+@keyframes novi-boot-sweep{0%{transform:translateX(-120%)}100%{transform:translateX(260%)}}
+.novi-boot__error{margin-top:16px;color:#b04a5a;font-size:13px;line-height:1.5}
+.novi-boot__retry{margin-top:12px;padding:10px 20px;border-radius:8px;background:#7a6ee0;color:#fff;font-size:13px;font-weight:600;border:none;cursor:pointer}
+.novi-boot__retry:hover{background:#9b8eff}
+.novi-boot__foot{margin-top:28px;color:#777983;font-size:12px;line-height:1.5}
 
 /* Keep sidebar loading feedback visible, including with reduced motion. */
 .novi-sidebar-spinner {
   transform-origin: center;
   transform-box: fill-box;
-  animation: spin 1s linear infinite;
+  animation: novi-loading-spin 1s linear infinite;
+}
+
+/* Shared async feedback: skeleton rows pulse in sequence, like a soft ripple. */
+.novi-loading-skeleton {
+  background: #292b32;
+  opacity: 0.42;
+  animation: novi-loading-ripple 1.8s ease-in-out infinite;
+  will-change: opacity;
+}
+
+.novi-loading-spinner {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: novi-loading-spin 0.9s linear infinite;
+}
+
+.novi-disclosure-content {
+  animation: novi-disclosure-reveal 140ms ease-out both;
+  transform-origin: top;
+}
+
+@keyframes novi-loading-ripple {
+  0%, 55%, 100% { opacity: 0.42; }
+  22% { opacity: 0.92; }
+}
+
+@keyframes novi-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes novi-disclosure-reveal {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes novi-waiting-pulse {
+  0%, 100% { transform: scale(0.75); opacity: 0.35; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+
+.novi-waiting > span {
+  display: block;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: novi-waiting-pulse 1.2s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .novi-boot__progress-fill {
+    animation-duration: 2.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  /* The chat waiting dots are the one animated affordance that must keep
+     moving under reduced motion: a static indicator is indistinguishable
+     from a hung run. Slower and gentler, but never frozen. */
+  .novi-waiting > span {
+    animation-duration: 2.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  .novi-loading-spinner {
+    animation-duration: 1.8s !important;
+    animation-iteration-count: infinite !important;
+  }
+
   .novi-sidebar-spinner {
     animation-duration: 2s !important;
     animation-iteration-count: infinite !important;
+  }
+
+  .novi-loading-skeleton {
+    animation: none !important;
+    background: #292b32;
+    opacity: 0.62;
   }
 }

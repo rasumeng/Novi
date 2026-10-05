@@ -24,15 +24,35 @@ from novi.skills.catalog import SkillCatalog
 from novi.skills.service import SkillService
 
 
-_SYSTEM_PROMPT = """You are Novi. Use only native tool calls for actions.
-Use report_progress for useful interim updates. Use activate_skill only when its
-catalog description is relevant. A run completes naturally when you provide a
-final response with no further tool calls. Never encode a tool call as JSON in
-assistant prose."""
+_SYSTEM_PROMPT = """You are Novi, a capable assistant working for one person.
+Actions are performed with native tool calls only. Announcing a tool call in
+prose does not run it, and a tool call must never be written out as JSON in
+your reply.
+
+Answer from what you already have. If the information is in the conversation,
+in an attached image, or in the user's own words, reply directly instead of
+gathering it again.
+
+Reach for a tool only when you genuinely cannot answer without it, and prefer
+the source closest to the question: the user's own files and material when they
+point you at it, the web when the answer lives outside that. Treat a search
+that returns nothing useful as an answer to stop searching, not an invitation
+to try a different phrasing of the same query.
+
+Gather what you need, then stop and tell the user what you found, including the
+parts that did not work out. A run is finished when you give a final response
+with no further tool calls."""
+
+
 
 _RECOVERY_LOCK = threading.Lock()
 _RECOVERED_DATABASES: set[str] = set()
 _SOURCE_TOOL_NAMES = {"list_source_files", "search_source_files", "read_source_file"}
+# Retrieval tools that expose local knowledge/memory recall to the model.
+# They honour the canonical ``memory.enabled`` flag: when memory is off they
+# are withheld entirely rather than exposed-and-refusing, so the model does
+# not spend turns calling a tool that can only say "disabled".
+_MEMORY_TOOL_NAMES = {"search_knowledge", "search_memory"}
 
 
 def build_run_service(ctx, *, persist_dir: str | Path | None = None,
@@ -69,6 +89,16 @@ def build_run_service(ctx, *, persist_dir: str | Path | None = None,
         else:
             _, model_name = ctx.model_service.resolve_primary()
         run_registry = dict(registry)
+        if not _memory_enabled(ctx):
+            for name in _MEMORY_TOOL_NAMES:
+                run_registry.pop(name, None)
+        if state.request.images:
+            # Uploaded images are already present in the provider-facing user
+            # message. Advertising the path-based legacy tool here gives the
+            # model a competing route and encourages it to invent a basename
+            # such as ``image.png``, which cannot resolve to Novi's stored
+            # upload. Attached-image runs use the multimodal channel only.
+            run_registry.pop("analyze_image", None)
         source_prompt = ""
         try:
             workspace = ctx.workspace_service
@@ -165,6 +195,19 @@ def primary_model_snapshot(ctx) -> ModelSnapshot:
     except Exception:
         pass
     return ModelSnapshot(provider=provider, model=model, supports_tools=supports, capabilities=caps)
+
+
+def _memory_enabled(ctx) -> bool:
+    """Honour the canonical ``memory.enabled`` flag for model-facing retrieval.
+
+    Mirrors the gate ``novi.runtime.retrieval`` already applies to automatic
+    memory injection, so turning memory off silences both paths at once.
+    Defaults to enabled when unset or malformed.
+    """
+    try:
+        return bool((ctx.config.get("memory", {}) or {}).get("enabled", True))
+    except Exception:
+        return True
 
 
 def _permission_rules(value) -> dict[str, str]:

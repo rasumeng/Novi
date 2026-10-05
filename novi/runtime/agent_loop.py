@@ -109,14 +109,19 @@ class AgentLoop:
             return AgentLoopResult(state=state, events=tuple(events))
 
         if not state.transcript:
+            image_blocks = tuple(ContentBlock.image(image)
+                                 for image in state.request.images)
             append_message(TranscriptMessage(id=state.request.user_message_id,
                 role=MessageRole.USER, source="user", trust="trusted",
-                blocks=(ContentBlock(type=ContentBlockType.TEXT, text=state.request.user_text),)))
+                blocks=(ContentBlock(type=ContentBlockType.TEXT, text=state.request.user_text),)
+                    + image_blocks))
         if starting_status is RunStatus.QUEUED:
             emit(RunEventType.RUN_STARTED, {"status": RunStatus.RUNNING.value})
         else:
             emit(RunEventType.RUN_STATE_CHANGED, {"status": RunStatus.RUNNING.value})
         progress_count = 0
+        knowledge_search_count = 0
+        empty_turn_retries = 0
 
         while state.model_turns < self._limits.max_model_turns:
             if self._cancelled():
@@ -184,7 +189,36 @@ class AgentLoop:
                     output_tokens=_add_usage(state.output_tokens, final_turn.output_tokens))
 
                 if not final_turn.text.strip() and not final_turn.calls:
+                    gathered = _gathered_tool_output(state.transcript)
+                    if gathered and empty_turn_retries == 0:
+                        # Tools already did the work. A silent turn must not throw
+                        # that away: tell the model to answer from the evidence.
+                        empty_turn_retries = 1
+                        emit(RunEventType.STATUS, {
+                            "text": "The model returned an empty response; "
+                                    "asking it to answer with what the tools found…"})
+                        append_message(TranscriptMessage(
+                            id=f"nudge-{uuid4().hex}", role=MessageRole.USER,
+                            visible_to_user=False, source="runtime", trust="untrusted",
+                            blocks=(ContentBlock(type=ContentBlockType.TEXT,
+                                text="Answer the user now using the tool results "
+                                     "already in this conversation. Do not call more "
+                                     "tools."),)))
+                        continue
+                    if gathered:
+                        # Still silent, but we hold real evidence: hand the user
+                        # what was gathered instead of failing the run.
+                        public_message(gathered)
+                        return terminal(RunStatus.COMPLETED,
+                                        "synthesized_from_tool_results",
+                                        RunEventType.RUN_COMPLETED)
+                    if empty_turn_retries == 0:
+                        empty_turn_retries = 1
+                        emit(RunEventType.STATUS, {
+                            "text": "The model returned an empty response; retrying once…"})
+                        continue
                     return terminal(RunStatus.FAILED, "empty_model_turn", RunEventType.RUN_FAILED)
+                empty_turn_retries = 0
                 if not _valid_calls(final_turn.calls):
                     return terminal(RunStatus.FAILED, "malformed_tool_call", RunEventType.RUN_FAILED)
 
@@ -209,7 +243,15 @@ class AgentLoop:
                     # web search failed, model explains failure).
                     return terminal(RunStatus.COMPLETED, "natural_completion", RunEventType.RUN_COMPLETED)
             except Exception as exc:
-                return terminal(RunStatus.FAILED, f"provider_error: {exc}", RunEventType.RUN_FAILED)
+                if _is_timeout(exc):
+                    emit(RunEventType.STATUS, {
+                        "text": "The model stopped responding. It may be busy or "
+                                "loading — check that Ollama is responding, then "
+                                "try again."})
+                    return terminal(RunStatus.FAILED, "provider_timeout",
+                                    RunEventType.RUN_FAILED)
+                return terminal(RunStatus.FAILED, f"provider_error: {exc}",
+                                RunEventType.RUN_FAILED)
 
             has_external = any(call.name not in {"report_progress", "activate_skill"}
                                for call in turn.calls)
@@ -271,7 +313,16 @@ class AgentLoop:
                     continue
                 # External tool calls (file ops, web search, etc.)
                 emit(RunEventType.STATUS, {"text": f"Executing {call.name}…"})
-                if state.tool_calls >= self._limits.max_tool_calls:
+                if call.name == "search_knowledge" and knowledge_search_count >= 3:
+                    result = ToolResult(
+                        call_id=call.id,
+                        status=ToolResultStatus.FAILED,
+                        error=("Local knowledge search limit reached after 3 attempts. "
+                               "Do not call search_knowledge again in this run. Use web_search "
+                               "if external information is needed and web search is configured; "
+                               "otherwise explain that the available knowledge was insufficient."),
+                    )
+                elif state.tool_calls >= self._limits.max_tool_calls:
                     result = ToolResult(call_id=call.id, status=ToolResultStatus.CANCELLED,
                                         error="tool call budget exhausted")
                 else:
@@ -305,6 +356,8 @@ class AgentLoop:
                         continue
                     emit(RunEventType.TOOL_STARTED, {"call_id": call.id, "name": call.name,
                                                      "arguments": call.arguments})
+                    if call.name == "search_knowledge":
+                        knowledge_search_count += 1
                     try:
                         result = (execute_authorized(call) if authorization is not None
                                   else self._dispatcher.dispatch(call))
@@ -386,6 +439,48 @@ class AgentLoop:
         offset = len(events)
         events.extend(replace(event, sequence=event.sequence + offset) for event in continued.events)
         return AgentLoopResult(continued.state, tuple(events))
+
+
+def _is_timeout(exc: BaseException | None) -> bool:
+    """True when a provider failure means 'stalled', not 'broken'.
+
+    Wrapped and re-raised provider errors hide the original class, so the
+    exception chain and the message are both consulted.
+    """
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if type(current).__name__ in {"ReadTimeout", "WriteTimeout",
+                                      "ConnectTimeout", "PoolTimeout",
+                                      "TimeoutException", "TimeoutError"}:
+            return True
+        if "timed out" in str(current).lower():
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _gathered_tool_output(transcript) -> str:
+    """Concatenate real tool output already present in the transcript.
+
+    Only successful, non-empty results count: an empty turn after a failed
+    search has nothing worth answering with.
+    """
+    parts: list[str] = []
+    for message in transcript:
+        if message.role is not MessageRole.TOOL:
+            continue
+        for block in message.blocks:
+            if block.type is not ContentBlockType.TOOL_RESULT:
+                continue
+            result = block.result or {}
+            if result.get("status") != ToolResultStatus.SUCCEEDED.value:
+                continue
+            text = (result.get("output") or result.get("error") or "").strip()
+            if text:
+                parts.append(text)
+    return "\n\n".join(parts)
 
 
 def _valid_calls(calls: tuple[ToolCall, ...]) -> bool:

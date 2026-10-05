@@ -182,7 +182,9 @@ def read_knowledge(path: str) -> str:
 
 @register_tool()
 def search_knowledge(query: str, k: int = 5) -> str:
-    """Semantic search across the knowledge base. Returns ranked results with titles and excerpts.
+    """Search only the user's local Novi knowledge. This does not search the internet.
+
+    Returns ranked results with titles and excerpts.
 
     Args:
         query: Natural language search query.

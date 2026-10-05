@@ -81,6 +81,9 @@ def _no_network(monkeypatch):
 def test_webui_boot_creates_brain(cfg):
     from novi.webui import WebUIBackend
 
+    # The beta default leaves the Brain dormant; these tests cover its wiring,
+    # so they opt in explicitly.
+    cfg = {**cfg, "brain": {"enabled": True}}
     backend = WebUIBackend(cfg)
     built = backend.build_backend()
 
@@ -96,7 +99,16 @@ def test_webui_boot_creates_brain(cfg):
 
 
 def test_context_warmup_registers_brain(cfg):
-    ctx = NoviContext(cfg)
+    ctx = NoviContext({**cfg, "brain": {"enabled": True}})
     ctx.warmup()
     assert get_brain() is not None
     assert get_brain() is ctx.brain
+
+
+def test_beta_default_leaves_the_brain_dormant(cfg):
+    """A fresh install must not build the Brain (and must not embed anything)."""
+    ctx = NoviContext(dict(cfg))
+    ctx.warmup()
+
+    assert ctx.brain is None
+    assert get_brain() is None, "no Brain may be registered when it is disabled"
