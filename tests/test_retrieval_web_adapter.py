@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from novi.runtime.evidence import EvidenceBundle, RetrievalQuality
 from novi.tools.search_pipeline import SearchResult
 from novi.runtime.retrieval import RetrievalExecutor
@@ -79,6 +81,14 @@ class TestWebCollectDelegate:
 
 
 class TestExecuteSearchWebRouting:
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        # These tests exercise routing, not provider availability. Pin the
+        # precondition so they do not inherit ambient config: on a machine
+        # with no ``search.backend`` set, execute_search short-circuits to
+        # not_configured before the adapter is ever called.
+        monkeypatch.setattr(RetrievalExecutor, "_is_search_configured", lambda self: True)
+
     def test_default_source_uses_adapter_owned_collector(self):
         """Default executor web path flows through the adapter's collector:
         patching the class method still reaches the adapter-owned instance and
