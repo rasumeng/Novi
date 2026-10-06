@@ -5,16 +5,20 @@ import pathlib
 
 
 def test_version_consistency():
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore
+    """Version skew, not a pinned literal.
 
-    py_ver = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
-    tauri_ver = json.loads(pathlib.Path("novi/webui/src-tauri/tauri.conf.json").read_text())["version"]
-    pkg_ver = json.loads(pathlib.Path("novi/webui/package.json").read_text())["version"]
-    assert py_ver == tauri_ver == pkg_ver, f"version skew: py={py_ver} tauri={tauri_ver} pkg={pkg_ver}"
-    assert py_ver == "0.2.0"
+    This used to assert `py_ver == "0.2.0"`, which guaranteed the suite would
+    break on the first release and taught nothing about the other manifests.
+    `scripts/release.py check` is the single-source verifier and also covers
+    Cargo.toml and package-lock.json, which this test never looked at.
+    """
+    import sys
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+    import release
+
+    problems = release.check_version()
+    assert problems == [], "version skew: " + "; ".join(problems)
 
 
 def test_ws_rejects_evil_origin():
