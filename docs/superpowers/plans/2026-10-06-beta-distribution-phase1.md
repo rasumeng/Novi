@@ -54,9 +54,11 @@
 **Interfaces:**
 - Consumes: nothing.
 - Produces:
-  - `scripts.release.set_version(version: str) -> None` — writes the version into all 4 manifests.
-  - `scripts.release.check_version() -> list[str]` — returns a list of human-readable skew descriptions; empty means consistent.
-  - `scripts.release.VERSION_FILES` — module-level list of `(label, path)` tuples.
+  - `scripts.release.set_version(version: str) -> None` — writes the version into all 4 manifests plus both lockfiles.
+  - `scripts.release.check_version() -> list[str]` — returns a list of human-readable skew descriptions; empty means consistent. Must cover every file `set_version` writes.
+  - `scripts.release.read_version() -> str` — reads the version from `pyproject.toml`, the reference manifest.
+  - `scripts.release.numeric_prefix() -> str` — the `x.y.z` prefix Tauri uses for bundle comparison.
+  - `scripts.release.VERSION_FILES` — the single registry of version-carrying files, each entry exposing **label, path, and writer together**. Label and writer must not be separable, or adding a manifest without a writer would pass CI.
   - CLI: `python scripts/release.py set 0.3.0-beta.1`, `python scripts/release.py check`.
 
 - [ ] **Step 1: Write the failing test**
