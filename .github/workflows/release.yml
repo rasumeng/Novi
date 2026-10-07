@@ -1,0 +1,126 @@
+name: Release
+
+# Releases are cut by pushing a tag, never by merging. Every merge to main
+# publishing an installer would ship to testers, including the merges made
+# while trying to fix something.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.3.0-beta.1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish installer
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: novi/webui/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Both values arrive through `env:` rather than being substituted into
+      # the script body. A git ref may legally contain `"`, `;`, `$()` and
+      # backticks (only spaces are forbidden), so inlining `${{ github.ref_name }}`
+      # inside a quoted PowerShell string is a script injection: the tag
+      # `v0.3.0";calc` closes the string and runs the rest. Tag pushes already
+      # require write access, but this repo is public and the fix is free.
+      - name: Derive version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if ($env:INPUT_VERSION -ne "") {
+            $version = $env:INPUT_VERSION
+          } else {
+            $version = $env:REF_NAME.TrimStart('v')
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+') {
+            throw "Version '$version' must start with MAJOR.MINOR.PATCH, e.g. 0.3.0-beta.1"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing version $version"
+
+      # `set` writes all six manifests and `check` re-reads all six, so a tag
+      # that is well-formed enough to pass the regex above but still malformed
+      # (e.g. 1.2.3- with an empty pre-release) fails here -- before PyInstaller,
+      # before tauri build, before anything is published.
+      - name: Sync version across manifests
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python scripts/release.py set "$env:VERSION"
+
+      - name: Verify no version skew
+        run: python scripts/release.py check
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip; python -m pip install -e .[desktop-build]
+
+      - name: Install frontend dependencies
+        run: npm --prefix novi/webui ci
+
+      - name: Build the desktop backend sidecar
+        # Must run before tauri build: bundle.resources picks up whatever is in
+        # src-tauri/resources, and a build without this produces an installer
+        # that dies at runtime with "This Novi release is missing its bundled
+        # backend".
+        run: python scripts/build_desktop_backend.py
+
+      - name: Confirm the sidecar is present
+        shell: pwsh
+        run: |
+          $sidecar = "novi/webui/src-tauri/resources/novi-backend.exe"
+          if (-not (Test-Path $sidecar)) {
+            throw "Backend sidecar was not built - refusing to publish a broken installer"
+          }
+          $size = (Get-Item $sidecar).Length
+          Write-Host "sidecar present: $([math]::Round($size / 1MB, 1)) MB"
+          if ($size -lt 1MB) {
+            throw "Backend sidecar is implausibly small ($size bytes) - PyInstaller likely failed"
+          }
+
+      - name: Build and publish the installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # The minisign private key proves an update genuinely came from Novi.
+          # It is NOT an Authenticode certificate and does not remove the
+          # SmartScreen warning - those are separate trust systems.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v${{ steps.version.outputs.version }}
+          releaseName: "Novi ${{ steps.version.outputs.version }}"
+          releaseBody: |
+            Windows x64 beta installer.
+
+            Novi is unsigned. Windows SmartScreen will show "Windows protected
+            your PC" on first run. Choose **More info → Run anyway**.
+
+            Ollama is not bundled. On first launch Novi will ask before
+            downloading it (~1.5 GB).
+          releaseDraft: false
+          # Deliberately NOT a GitHub prerelease. The updater endpoint
+          # (releases/latest/download/latest.json) excludes prereleases, so
+          # marking this as a prerelease would break automatic updates.
+          prerelease: false
+          args: --bundles nsis
