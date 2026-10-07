@@ -38,3 +38,9 @@ jobs:
         run: python scripts/verify_beta.py
       - name: Check desktop shell
         run: cargo check --manifest-path novi/webui/src-tauri/Cargo.toml
+      - name: Test desktop shell
+        # Phases 2 and 3 of the beta distribution plan put most of their new
+        # logic in Rust. Without this step that logic ships untested, which
+        # contradicts the position taken in docs/RISK_AUDIT.md that the test
+        # suite is the part of this codebase that can be trusted.
+        run: cargo test --manifest-path novi/webui/src-tauri/Cargo.toml
