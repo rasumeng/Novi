@@ -58,7 +58,18 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+') {
             throw "Version '$version' must start with MAJOR.MINOR.PATCH, e.g. 0.3.0-beta.1"
           }
-          "version=$version" >> $env:GITHUB_OUTPUT
+          # Heredoc form, not a plain single-line append to GITHUB_OUTPUT.
+          # The guard above is a PREFIX match (`^\d+\.\d+\.\d+`), so a value
+          # like `0.3.0-x` followed by a newline and attacker-chosen text
+          # passes validation; with plain appending that newline starts a
+          # second output line and the step can inject arbitrary step outputs
+          # (including into later `with:` blocks). The delimiter form keeps a
+          # multi-line value inside one output.
+          $delimiter = "EOF_$(New-Guid)"
+          @"
+          version=$version
+          $delimiter
+          "@ >> $env:GITHUB_OUTPUT
           Write-Host "Releasing version $version"
 
       # `set` writes all six manifests and `check` re-reads all six, so a tag
@@ -95,10 +106,22 @@ jobs:
           }
           $size = (Get-Item $sidecar).Length
           Write-Host "sidecar present: $([math]::Round($size / 1MB, 1)) MB"
+          # The Test-Path above is the real guard: build_desktop_backend.py
+          # already exits non-zero on PyInstaller failure and raises if the
+          # artifact is missing, so the job never reaches this step without a
+          # sidecar. The size floor below is a secondary sanity check on a
+          # truncated-but-present artifact - it is not what makes this step
+          # safe, and a legitimately small backend would fail here.
           if ($size -lt 1MB) {
-            throw "Backend sidecar is implausibly small ($size bytes) - PyInstaller likely failed"
+            throw "Backend sidecar is implausibly small ($size bytes) - PyInstaller likely truncated"
           }
 
+      # BLOCKING DEPENDENCY: this step needs Task 3 to have landed first.
+      # `tauri.conf.json` must carry `bundle.createUpdaterArtifacts` (and
+      # `plugins.updater`) before `tauri build` will emit `latest.json` + a
+      # `.sig`. Without them this step still publishes a working installer,
+      # but the release has no updater manifest and every later release can
+      # never auto-update. Do not tag before Task 3 is in place.
       - name: Build and publish the installer
         uses: tauri-apps/tauri-action@v0
         env:
@@ -108,6 +131,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          # The Tauri CLI looks for tauri.conf.json by walking up from the
+          # working directory, which on a runner is the repo root. Root has no
+          # package.json and no src-tauri/, and novi/webui/src-tauri is depth 4 -
+          # past the default max depth of 3 - so without this the CLI aborts
+          # with "Couldn't recognize the current folder as a Tauri project" and
+          # the job fails before anything is published. Every documented local
+          # build runs from novi/webui, which is why this only breaks in CI.
+          projectPath: novi/webui
           tagName: v${{ steps.version.outputs.version }}
           releaseName: "Novi ${{ steps.version.outputs.version }}"
           releaseBody: |
@@ -124,3 +155,20 @@ jobs:
           # marking this as a prerelease would break automatic updates.
           prerelease: false
           args: --bundles nsis
+
+      # The whole point of `prerelease: false` is that latest.json must be
+      # reachable at releases/latest/download/latest.json. Nothing above
+      # asserts that happened, so an absent updater artifact would only
+      # surface later as a silent 404 inside someone's installed app. Verify
+      # it here, loudly, while the run is still visible.
+      - name: Verify the release carries the updater manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ steps.version.outputs.version }}
+        run: |
+          $assets = gh release view $env:RELEASE_TAG --json assets | ConvertFrom-Json | Select-Object -ExpandProperty assets | Select-Object -ExpandProperty name
+          Write-Host "release assets: $($assets -join ', ')"
+          if ($assets -notcontains "latest.json") {
+            throw "Release $($env:RELEASE_TAG) has no latest.json asset, so every updater client will 404 on the next release. Expected bundle.createUpdaterArtifacts (Task 3) and TAURI_SIGNING_PRIVATE_KEY to be in place. Assets found: $($assets -join ', ')"
+          }
