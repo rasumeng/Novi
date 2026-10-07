@@ -94,20 +94,136 @@ def _write_package_json(version: str) -> None:
     _patch_json_version(ROOT / "novi/webui/package.json", version, 1)
 
 
+def _string_end(text: str, start: int) -> int:
+    """Index just past the closing quote of the JSON string starting at `start`."""
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == '"':
+            return index + 1
+        index += 1
+    raise RuntimeError("unterminated JSON string")
+
+
+def _json_value_span(text: str, value_start: int) -> tuple[int, int]:
+    """Span of the JSON value beginning at `value_start`."""
+    char = text[value_start]
+    if char == '"':
+        return value_start, _string_end(text, value_start)
+    depth = 0
+    for index in range(value_start, len(text)):
+        current = text[index]
+        if current in "{[":
+            depth += 1
+        elif current in "}]":
+            depth -= 1
+            if depth == 0:
+                return value_start, index + 1
+    raise RuntimeError("unterminated JSON value")
+
+
+def _key_value_span(text: str, key: str, depth: int) -> tuple[int, int] | None:
+    """Span of the value of `key` inside the object nested `depth` deep.
+
+    Depth 1 is the document's top-level object, 2 its children, and so on.
+    Addressing by key name at a known depth is what lets a writer target one
+    specific field: file order belongs to npm, so "the first `version` in the
+    file" is not a location, it is a coincidence that happens to hold today.
+    """
+    index = 0
+    length = len(text)
+    current = 0
+    while index < length:
+        char = text[index]
+        if char == '"':
+            end = _string_end(text, index)
+            probe = end
+            while probe < length and text[probe] in " \t\r\n":
+                probe += 1
+            if current == depth and probe < length and text[probe] == ":":
+                if json.loads(text[index:end]) == key:
+                    value_start = probe + 1
+                    while value_start < length and text[value_start] in " \t\r\n":
+                        value_start += 1
+                    return _json_value_span(text, value_start)
+            index = end
+            continue
+        if char in "{[":
+            current += 1
+        elif char in "}]":
+            current -= 1
+        index += 1
+    return None
+
+
+def _patch_package_lock_versions(path: pathlib.Path, version: str) -> None:
+    """Write `version` into package-lock.json's root and its `packages[""]`.
+
+    Both targets are addressed by key name at a known nesting depth, never by
+    position in the file. Positional addressing is a latent bug: if npm ever
+    reordered the root keys, the writer would patch a dependency's pin instead
+    of the root's, and a read-back that inspected the first two keys in file
+    order would agree with the damage and pass.
+    """
+    original = path.read_text(encoding="utf-8")
+    text = original
+    targets: list[tuple[int, int]] = []
+
+    root_span = _key_value_span(text, "version", 1)
+    if root_span is None:
+        raise RuntimeError(f"no root version key in {path}")
+    targets.append(root_span)
+
+    # `packages[""]` is the root package's own mirror; a lockfile without it
+    # (older npm layout) simply has one fewer place to write. The nested lookup
+    # runs *inside* that object's span, not at a fixed depth: a dependency entry
+    # sits at the same depth as `""`, so depth alone would not distinguish them.
+    packages = _key_value_span(text, "packages", 1)
+    empty_entry = _key_value_span(text, "", 2) if packages else None
+    if packages is not None and empty_entry is not None:
+        nested = _key_value_span(text[empty_entry[0]:empty_entry[1]], "version", 1)
+        if nested is None:
+            raise RuntimeError(f'no version key under packages[""] in {path}')
+        targets.append((empty_entry[0] + nested[0], empty_entry[0] + nested[1]))
+
+    for start, end in sorted(targets, reverse=True):
+        text = text[:start] + f'"{version}"' + text[end:]
+    if text == original:
+        return
+    path.write_text(text, encoding="utf-8")
+
+    # Verify the write landed, reading the very same keys back by name.
+    written = json.loads(path.read_text(encoding="utf-8"))
+    root_after = written.get("version")
+    nested_after = written.get("packages", {}).get("", {}).get("version")
+    if root_after != version:
+        raise RuntimeError(
+            f"could not write version {version!r} into {path}; "
+            f"root version now reads {root_after!r}"
+        )
+    if len(targets) > 1 and nested_after != version:
+        raise RuntimeError(
+            f"could not write version {version!r} into {path}; "
+            f'packages[""] version now reads {nested_after!r}'
+        )
+
+
 def _write_package_lock(version: str) -> None:
     """Sync package-lock.json, which mirrors package.json's own version.
 
     npm rewrites this file on every install, so leaving it stale is exactly how
-    it drifted to 0.1.0 while every other manifest read 0.2.0. The first two
-    `version` keys are the root entry and `packages[""]`, in that order.
+    it drifted to 0.1.0 while every other manifest read 0.2.0. It carries the
+    version twice -- the root entry and `packages[""]` -- and both are written.
     """
     path = ROOT / "novi/webui/package-lock.json"
     if not path.exists():
         return
-    lock = json.loads(path.read_text(encoding="utf-8"))
-    if [v for v in _json_versions(lock)[:2]] == [version, version]:
+    if _read_package_lock() == {"root": version, "packages['']": version}:
         return
-    _patch_json_version(path, version, 2)
+    _patch_package_lock_versions(path, version)
 
 
 def _write_cargo_lock(version: str) -> None:
@@ -274,10 +390,11 @@ def read_version() -> str:
 def numeric_prefix(version: str | None = None) -> str:
     """Return the x.y.z prefix Tauri uses for bundle version comparison."""
     if version is None:
-        # Validate what we read: `1.2.3.4` would otherwise match the prefix
-        # regex and silently yield a wrong bundle version.
         version = read_version()
-        validate_version(version)
+    # Validate on both paths, not just the defaulted one: an explicit
+    # `1.2.3.4` would otherwise match the prefix regex below and silently
+    # yield a wrong bundle version.
+    validate_version(version)
     match = re.match(r"^(\d+\.\d+\.\d+)", version)
     if not match:
         raise ValueError(f"version {version!r} has no numeric x.y.z prefix")

@@ -186,6 +186,129 @@ def test_numeric_prefix_is_accepted_by_tauri_semver_rules():
         release.set_version(original)
 
 
+def test_numeric_prefix_validates_an_explicit_argument_too():
+    """The prefix must not be derived from a version that is not one.
+
+    `1.2.3.4` matches the x.y.z prefix regex, so without validation both paths
+    would return `1.2.3` -- a bundle version silently derived from a malformed
+    release version. The defaulted path used to validate and the explicit path
+    did not, which is the same bug reachable through a different argument.
+    """
+    assert release.numeric_prefix("0.3.0-beta.1") == "0.3.0"
+    assert release.numeric_prefix("1.2.3") == "1.2.3"
+
+    for bad in ["1.2.3.4", "1.2", "v1.2.3", "one.two.three", "1.2.3-", ""]:
+        with pytest.raises(ValueError):
+            release.numeric_prefix(bad)
+
+
+def test_package_lock_writer_targets_root_and_packages_root_only():
+    """The lockfile writer addresses its targets by name, not by file position.
+
+    package-lock.json carries the version twice: the root entry and the root
+    package mirror under `packages[""]`. Every other `version` key in the file
+    belongs to a dependency and must be left alone. A writer that patched "the
+    first two `version` keys in file order" would rewrite a dependency's pin
+    the moment npm reordered the root keys, and a verification reading the same
+    two positions would pass on the damage.
+    """
+    lock_path = ROOT / "novi/webui/package-lock.json"
+    if not lock_path.exists():
+        pytest.skip("no package-lock.json in this checkout")
+
+    def _dependency_versions() -> dict[str, str]:
+        lock = json.loads(_read(lock_path))
+        return {
+            name: entry["version"]
+            for name, entry in lock["packages"].items()
+            if name and "version" in entry
+        }
+
+    original = release.read_version()
+    before = _dependency_versions()
+    assert before, "package-lock.json has no dependency entries to protect"
+
+    release.set_version("9.9.9-lock.1")
+    try:
+        lock = json.loads(_read(lock_path))
+        assert lock["version"] == "9.9.9-lock.1", "root version was not written"
+        assert lock["packages"][""]["version"] == "9.9.9-lock.1", 'packages[""] was not written'
+        # The proof that addressing is by name: nothing else moved.
+        assert _dependency_versions() == before, (
+            "the lockfile writer touched a dependency version: "
+            f"{sorted(set(_dependency_versions().items()) ^ set(before.items()))}"
+        )
+    finally:
+        release.set_version(original)
+
+    restored = json.loads(_read(lock_path))
+    assert restored["version"] == original
+    assert restored["packages"][""]["version"] == original
+    assert _dependency_versions() == before
+
+
+# A lockfile whose keys are ordered the way npm is free to order them, and in
+# which a dependency's `version` key comes *before* both of the writer's targets.
+# Today's package-lock.json happens to put the root's two versions first, which is
+# exactly why positional addressing looked correct: the test below is what gives
+# the by-name targeting teeth.
+_REORDERED_LOCK = """{
+  "name": "novi-webui",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "node_modules/react": {
+      "version": "18.3.1",
+      "resolved": "https://registry.npmjs.org/react/-/react-18.3.1.tgz"
+    },
+    "": {
+      "name": "novi-webui",
+      "version": "0.2.0",
+      "dependencies": {
+        "react": "^18.3.1"
+      }
+    },
+    "node_modules/clsx": {
+      "version": "2.1.1",
+      "resolved": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz"
+    }
+  },
+  "version": "0.2.0"
+}
+"""
+
+
+def test_lockfile_writer_survives_key_reordering(tmp_path):
+    """Targets are found by name, so npm's key order cannot redirect the writer.
+
+    Positional addressing means "the first N `version` keys in the file". On this
+    layout the first such key belongs to `node_modules/react`, so a positional
+    writer would stamp the release version onto a dependency's pin, leave the
+    root at the old version, and -- because it verified the same two positions it
+    wrote -- report success.
+    """
+    lock_path = tmp_path / "package-lock.json"
+    lock_path.write_text(_REORDERED_LOCK, encoding="utf-8")
+
+    release._patch_package_lock_versions(lock_path, "9.9.9-reorder.1")
+
+    written = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert written["version"] == "9.9.9-reorder.1", "root version was not written"
+    assert written["packages"][""]["version"] == "9.9.9-reorder.1", (
+        'packages[""] version was not written'
+    )
+    # Both dependencies, one before and one after the root entry, are untouched.
+    assert written["packages"]["node_modules/react"]["version"] == "18.3.1", (
+        "a dependency's pinned version was overwritten"
+    )
+    assert written["packages"]["node_modules/clsx"]["version"] == "2.1.1", (
+        "a dependency's pinned version was overwritten"
+    )
+    # The file is still valid JSON with npm's layout intact.
+    assert written["name"] == "novi-webui"
+    assert written["packages"][""]["dependencies"] == {"react": "^18.3.1"}
+
+
 def test_check_version_detects_skew_in_every_registered_file():
     """check() must catch drift in every file set() writes, lockfiles included.
 
