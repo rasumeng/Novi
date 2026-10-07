@@ -67,6 +67,8 @@ fn main() {
         .plugin(global_shortcut_plugin)
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app_handle| {
             let resource_dir = app_handle.path().resource_dir().ok();
             let backend_name = if cfg!(windows) { "novi-backend.exe" } else { "novi-backend" };

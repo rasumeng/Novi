@@ -19,8 +19,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "resources": ["resources"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -28,5 +34,16 @@
       "icons/icon.ico",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZCOTI4RTgwNjY3NDE4OUYKUldTZkdIUm1nSTZTK3dSWWcrWFhIV1pWQ2RHRjc0WXFJR1lHZ2Ixc2RjVzdPMUFLc3ljL2JQSWwK",
+      "endpoints": [
+        "https://github.com/rasumeng/Novi/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
