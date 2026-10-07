@@ -1088,6 +1088,34 @@ Confirm each:
 
 Step 3 will fail today if Ollama is not already installed — that is the known, documented Phase 2 gap, not a packaging defect.
 
+**Step 7a: verify the upgraded Tauri runtime (REQUIRED before tagging).**
+
+Task 3 pulled `tauri` 2.11.5 → 2.12.1 and `wry` 0.55.1 → 0.57.0, transitively forced by
+`tauri-plugin-process` 2.4.0 requiring `tauri ^2.12`. The repo has exactly two Rust tests,
+both process-name matching, so **nothing in CI or the test suite exercises the window,
+tray, global shortcut, single-instance handling, or the WebView2 load of
+`http://127.0.0.1:8765`** under the new versions. `cargo check` only proves it compiles.
+
+Do not push the tag until the built shell has been launched once and all of these are
+confirmed on a real desktop session:
+
+1. The window appears at 1280×860 with the dark background (no white WebView2 flash).
+2. The window loads `http://127.0.0.1:8765` — not a blank frame, not an error page.
+3. The custom titlebar renders, and minimize/close/toggle-maximize all work.
+4. `CmdOrCtrl+Shift+Space` toggles window visibility.
+5. The tray icon appears and its menu works.
+6. Launching Novi a second time focuses the existing window instead of spawning a second
+   backend on the port.
+
+A quick way to sanity-check without an installer, from `novi/webui`:
+
+```bash
+cargo tauri dev
+```
+
+If any of the six fails, the remedy is pinning `tauri-plugin-process` to `=2.3.1` plus
+`cargo update -p tauri --precise 2.11.5`, which keeps `wry` off 0.57.
+
 - [ ] **Step 8: Verify the updater cannot be bypassed**
 
 Confirm the app refuses a tampered update. Build a local test by editing a
