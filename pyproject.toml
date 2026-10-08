@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "novi"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 description = "Local-first AI agent with provider-neutral inference, LanceDB memory, WebUI, and tools"
 readme = "README.md"
 license = {text = "MIT"}
