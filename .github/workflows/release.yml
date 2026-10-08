@@ -11,10 +11,30 @@ on:
     # triggers this job, `release.py` accepts it as a well-formed version, and
     # the result is published as /releases/latest -- which the in-app updater
     # reads, so pushing a stale tag would push unrelated code to every
-    # installed client. This pattern matches only real x.y.z release tags and
-    # does not match `v3-runtime-stabilized`.
+    # installed client.
+    #
+    # These patterns are a coarse first filter, NOT the invariant. They cannot
+    # be: GitHub's filter-pattern language has no notion of "the suffix must be
+    # exactly -beta.N", so a foreign tag that looks version-shaped can match.
+    # The invariants are enforced in the job body: the release-line regex in
+    # "Derive version" and, decisively, the ancestry guard immediately after it
+    # (a tagged commit that is not on origin/main is refused no matter how the
+    # tag is spelled). Do not treat this list as "only real release tags".
+    #
+    # One explicit pattern per release line, no stacked quantifiers. GitHub
+    # defines `*` as "zero or more of the *preceding character*" and `+` as
+    # "one or more of the preceding character", and does not define stacked
+    # quantifiers like `[0-9]+*` -- so those are excluded here. Each `*`/`?`
+    # below applies to exactly one preceding character class.
+    #
+    # The beta line is the one that must match today (`v0.3.0-beta.1`). The
+    # plain `vX.Y.Z` line is here so a stable release needs no workflow edit --
+    # note it also matches nothing historical, but it *is* looser than the beta
+    # line, and that is acceptable precisely because the ancestry guard rejects
+    # any tag not on origin/main regardless of spelling.
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+      - "v[0-9].[0-9].[0-9]-beta.[0-9]*"
+      - "v[0-9].[0-9].[0-9]"
 
 permissions:
   contents: write
@@ -32,7 +52,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
+      # fetch-depth: 0 is required, not cosmetic: the ancestry guard below runs
+      # `git merge-base --is-ancestor <sha> origin/main`, and the default
+      # shallow clone (depth 1) has no ancestry to walk -- the merge base is
+      # unknown and the check would fail, or pass, for the wrong reason.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -60,14 +86,20 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           $version = $env:REF_NAME.TrimStart('v')
-          if ($version -notmatch '^\d+\.\d+\.\d+') {
-            throw "Version '$version' must start with MAJOR.MINOR.PATCH, e.g. 0.3.0-beta.1"
+          # FULL match, not the old prefix match `^\d+\.\d+\.\d+`. Anchored at
+          # both ends with \A...\z so nothing -- including a trailing newline
+          # followed by more text -- can ride along past the check. This is the
+          # project's release line: MAJOR.MINOR.PATCH with an optional
+          # `-beta.N` pre-release. It rejects well-formed-looking foreign tags
+          # such as `v0.4.0-product-foundation` and `v0.2.0-beta`, which the
+          # old prefix match happily accepted.
+          if ($version -notmatch '\A\d+\.\d+\.\d+(-beta\.\d+)?\z') {
+            throw "Tag '$($env:REF_NAME)' is not a Novi release tag. This project publishes only MAJOR.MINOR.PATCH-beta.N (e.g. v0.3.0-beta.1) or a plain MAJOR.MINOR.PATCH (e.g. v0.3.0); historical tags like v0.4.0-product-foundation and v3-runtime-stabilized are NOT releasable. Nothing was published and no irreversible action happened. The tag already exists on the remote, so delete it and push the correct one: git tag -d '$($env:REF_NAME)'; git push origin :refs/tags/$($env:REF_NAME)"
           }
-          # Heredoc form, not a plain single-line append to GITHUB_OUTPUT.
-          # The guard above is a PREFIX match (`^\d+\.\d+\.\d+`), so a value
-          # like `0.3.0-x` followed by a newline and attacker-chosen text
-          # passes validation; with plain appending that newline starts a
-          # second output line and the step can inject arbitrary step outputs
+          # The heredoc form, not a plain single-line append to GITHUB_OUTPUT.
+          # It costs nothing and removes any dependence on the validation above
+          # being airtight: a value carrying a newline would start a second
+          # output line and the step could inject arbitrary step outputs
           # (including into later `with:` blocks). The delimiter form keeps a
           # multi-line value inside one output.
           $delimiter = "EOF_$(New-Guid)"
@@ -76,6 +108,30 @@ jobs:
           $delimiter
           "@ >> $env:GITHUB_OUTPUT
           Write-Host "Releasing version $version"
+
+      # The deterministic guard. Everything above is a spelling check and can
+      # only ever be as good as the patterns someone chose; this one is a fact
+      # about git: is the tagged commit actually on origin/main? If not, the tag
+      # points at foreign history and no amount of tag-shaped syntax makes it
+      # releasable -- it is rejected however it is spelled, which is what
+      # actually closes the hole left by the coarse tag filter above.
+      #
+      # Placed here, before pip install / PyInstaller / tauri build, so a bad
+      # tag fails in seconds instead of after a 30+ minute build. The operator
+      # has already run an irreversible `git push`, so the message must tell
+      # them exactly what to undo.
+      - name: Refuse tags that are not on origin/main
+        shell: pwsh
+        env:
+          SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          git fetch --no-tags --quiet origin main
+          git merge-base --is-ancestor $env:SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tag '$($env:REF_NAME)' points at commit $($env:SHA), which is NOT an ancestor of origin/main. That commit is not part of this project's main line, so publishing it would push unrelated code to every installed client via /releases/latest. Nothing was built or published. The tag is already on the remote: delete it and push a tag on a main-line commit instead -- git tag -d '$($env:REF_NAME)'; git push origin :refs/tags/$($env:REF_NAME); git tag <correct-tag>; git push origin <correct-tag>"
+          }
+          Write-Host "commit $($env:SHA) is on origin/main - ancestry OK"
 
       # `set` writes all six manifests and `check` re-reads all six, so a tag
       # that is well-formed enough to pass the regex above but still malformed
