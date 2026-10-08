@@ -100,13 +100,24 @@ jobs:
           # It costs nothing and removes any dependence on the validation above
           # being airtight: a value carrying a newline would start a second
           # output line and the step could inject arbitrary step outputs
-          # (including into later `with:` blocks). The delimiter form keeps a
-          # multi-line value inside one output.
+          # (including into later `with:` blocks). The heredoc form below is
+          # what prevents OUTPUT INJECTION.
+          #
+          # Two things are easy to get wrong here and both have broken real
+          # release workflows:
+          #
+          # 1. The heredoc opener is `version<<DELIMITER` -- the `<<` is
+          #    required. Writing `version=VALUE` followed by the delimiter
+          #    produces a plain single-line append, which is exactly the
+          #    injectable form the delimiter was added to avoid.
+          # 2. Do NOT use the PowerShell `>>` redirection operator to write it.
+          #    On a Windows `pwsh` runner `>>` appends UTF-16-LE *with a BOM*
+          #    and CRLF endings; GitHub's parser requires UTF-8 and reads the
+          #    BOM and \r as part of the value, failing the job with
+          #    "Invalid format 'EOF_...'".
           $delimiter = "EOF_$(New-Guid)"
-          @"
-          version=$version
-          $delimiter
-          "@ >> $env:GITHUB_OUTPUT
+          $payload = "version<<$delimiter`n$version`n$delimiter`n"
+          [System.IO.File]::WriteAllText($env:GITHUB_OUTPUT, $payload, (New-Object System.Text.UTF8Encoding $false))
           Write-Host "Releasing version $version"
 
       # The deterministic guard. Everything above is a spelling check and can
