@@ -104,7 +104,10 @@ To produce the same installer without publishing:
 ```bash
 # Prerequisites, from the repository root:
 pip install -e .[desktop-build]
-npm --prefix novi/webui ci      # otherwise: tauri: not found
+# Installs the pinned Tauri CLI locally. Required because step 2 invokes the
+# CLI via `npx`; without a local install `npx` would fetch @tauri-apps/cli from
+# the registry instead, giving you an unpinned version rather than an error.
+npm --prefix novi/webui ci
 # plus a Rust toolchain (https://rustup.rs); CI uses dtolnay/rust-toolchain@stable
 
 cd novi/webui
