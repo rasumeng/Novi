@@ -19,6 +19,12 @@ backend is absent, they show a clear reinstall error instead.
 Releases are cut by pushing a tag. Merging to `main` does not publish
 anything, so a broken build never reaches a tester.
 
+Before tagging, the beta gate in [`docs/BETA_CHECKLIST.md`](../BETA_CHECKLIST.md)
+must pass: the automated checks (`pytest`, `tsc --noEmit`, production build,
+targeted gates) and the 14-row manual first-run matrix, with sign-off recorded.
+That checklist is the gate; this document is the procedure for cutting the tag
+once it has passed.
+
 ```bash
 # 1. Sync the version everywhere and confirm there is no skew.
 python scripts/release.py set 0.3.0-beta.1
@@ -31,9 +37,19 @@ git commit -am "release: 0.3.0-beta.1"
 git tag v0.3.0-beta.1
 git push origin main --tags
 
-# 4. Watch the run.
-gh run watch --repo rasumeng/Novi
+# 4. Watch the run. Give it a few seconds to appear after the push, then
+#    take the topmost run id from the list.
+gh run list --workflow release.yml --limit 1
+gh run watch <run-id>
 ```
+
+Step 1 is not optional bookkeeping. The workflow derives the version from the
+tag and runs `release.py set` itself, so a tag pushed without a matching local
+`set` still publishes correctly — but your local tree keeps the *old* version,
+`main` stays at the old version, and the next `release.py check` on `main`
+reports skew. In short: **the tag is authoritative for what ships, the local
+`set` is what keeps `main` honest.** Skipping step 1 is invisible until the next
+release, when `check` fails for a reason nobody remembers.
 
 The workflow (`.github/workflows/release.yml`) triggers on `v*` tag pushes, and
 also on `workflow_dispatch` with an explicit `version` input. It derives the
@@ -62,17 +78,68 @@ breaks later:
   error anywhere. The job lists the release's assets after publishing and fails
   if `latest.json` is not among them.
 
+### After the run succeeds
+
+Confirm the release from the CLI rather than trusting the green checkmark:
+
+```bash
+gh release view v0.3.0-beta.1 \
+  --json assets,name,prerelease,tagName
+```
+
+Expect the installer, its `.sig`, and `latest.json` in `assets`, and
+`"prerelease": false`. A `prerelease` of `true` here is a real bug: GitHub's
+`/releases/latest` excludes prereleases, so the updater endpoint would 404 and
+automatic updates would stop working silently.
+
+If a run fails, the log of the failing step names the cause. The two most likely
+failures are the **missing sidecar** and the **missing `latest.json`**, and the
+workflow asserts both explicitly rather than relying on a later symptom — so
+read those two steps' logs first.
+
 ### Local release build
 
 To produce the same installer without publishing:
 
 ```bash
+# Prerequisites, from the repository root:
 pip install -e .[desktop-build]
-python scripts/build_desktop_backend.py
+npm --prefix novi/webui ci      # otherwise: tauri: not found
+# plus a Rust toolchain (https://rustup.rs); CI uses dtolnay/rust-toolchain@stable
 
 cd novi/webui
-npm run desktop:build
+npm run desktop:build -- --no-sign
 ```
+
+`desktop:build` is `npm run desktop:backend && tauri build`, so the
+`--no-sign` you append lands on the **last** command — `tauri build` — which is
+where the flag is needed.
+
+`--no-sign` is not optional. `novi/webui/src-tauri/tauri.conf.json` sets
+`bundle.createUpdaterArtifacts: true` alongside a `plugins.updater.pubkey`, and
+the CLI requires `TAURI_SIGNING_PRIVATE_KEY` whenever a public key is
+configured. Without the flag, `npm run desktop:build` builds and bundles the
+installer and *then* exits non-zero:
+
+```
+A public key has been found, but no private key. Make sure to set
+`TAURI_SIGNING_PRIVATE_KEY` environment variable.
+```
+
+So the unsigned build is the only local path that works on a machine that does
+not hold the private key — which, per the Signing section below, is almost
+everybody's machine.
+
+**What this build does and does not give you.** It produces a working installer
+to install and smoke-test. It does **not** produce a `.sig` or `latest.json`, so
+it cannot be used to test the updater end to end. The updater path is only ever
+exercised by a real tagged release.
+
+If you do hold the private key, you can instead set `TAURI_SIGNING_PRIVATE_KEY`
+(and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) in your environment and run
+`npm run desktop:build` with no flag, to get a signed local build with
+artifacts. Never commit the key, and never paste it into a file in this
+repository.
 
 Run the Tauri build from `novi/webui`, not from the repository root. The Tauri
 CLI looks for `tauri.conf.json` by walking up from the working directory, and
@@ -82,7 +149,9 @@ build aborts with "Couldn't recognize the current folder as a Tauri project".
 Output lands in `novi/webui/src-tauri/target/release/bundle/nsis/`. The sidecar
 is copied to `novi/webui/src-tauri/resources/` and ignored by Git, because it is
 a platform-specific build artifact; it must be built before the Tauri package
-build.
+build. `desktop:build` already runs `desktop:backend` (which invokes
+`scripts/build_desktop_backend.py`) as its first step, so there is no need to
+run `python scripts/build_desktop_backend.py` separately beforehand.
 
 ### Versions
 
@@ -107,7 +176,8 @@ rather than in the release's prerelease flag.
 The updater signature is a Tauri minisign key. It proves an update genuinely
 came from Novi. It is **not** an Authenticode certificate and does **not**
 remove the Windows SmartScreen warning. The public key is committed in
-`tauri.conf.json`; the private key lives only in the GitHub Actions secrets
+`novi/webui/src-tauri/tauri.conf.json`; the private key lives only in the GitHub
+Actions secrets
 `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
 The private key must never be committed, and it exists nowhere else. Keep an
