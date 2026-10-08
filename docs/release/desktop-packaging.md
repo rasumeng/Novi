@@ -84,11 +84,11 @@ Confirm the release from the CLI rather than trusting the green checkmark:
 
 ```bash
 gh release view v0.3.0-beta.1 \
-  --json assets,name,prerelease,tagName
+  --json assets,name,isPrerelease,tagName
 ```
 
 Expect the installer, its `.sig`, and `latest.json` in `assets`, and
-`"prerelease": false`. A `prerelease` of `true` here is a real bug: GitHub's
+`"isPrerelease": false`. An `isPrerelease` of `true` here is a real bug: GitHub's
 `/releases/latest` excludes prereleases, so the updater endpoint would 404 and
 automatic updates would stop working silently.
 
@@ -108,17 +108,25 @@ npm --prefix novi/webui ci      # otherwise: tauri: not found
 # plus a Rust toolchain (https://rustup.rs); CI uses dtolnay/rust-toolchain@stable
 
 cd novi/webui
-npm run desktop:build -- --no-sign
+npm run desktop:backend
+npx tauri build --no-sign
 ```
 
-`desktop:build` is `npm run desktop:backend && tauri build`, so the
-`--no-sign` you append lands on the **last** command — `tauri build` — which is
-where the flag is needed.
+Run these as two separate commands rather than `npm run desktop:build` with an
+appended flag. `desktop:build` is the compound script
+`npm run desktop:backend && tauri build`, and passing `--no-sign` through `npm
+run` does not survive: PowerShell's native-command argument binding drops it,
+so `npm run desktop:build -- --no-sign` silently runs a **plain**
+`tauri build`. Note that a build can therefore *appear* to accept a flag it
+never received. `desktop:backend` is `python ../../scripts/build_desktop_backend.py`,
+so the sidecar is still built exactly once — step 1 is just that script run
+directly, and step 2 is the Tauri CLI invoked with `npx` so the flag reaches it
+in every shell.
 
 `--no-sign` is not optional. `novi/webui/src-tauri/tauri.conf.json` sets
 `bundle.createUpdaterArtifacts: true` alongside a `plugins.updater.pubkey`, and
 the CLI requires `TAURI_SIGNING_PRIVATE_KEY` whenever a public key is
-configured. Without the flag, `npm run desktop:build` builds and bundles the
+configured. Without the flag, `npx tauri build` builds and bundles the
 installer and *then* exits non-zero:
 
 ```
@@ -137,7 +145,7 @@ exercised by a real tagged release.
 
 If you do hold the private key, you can instead set `TAURI_SIGNING_PRIVATE_KEY`
 (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) in your environment and run
-`npm run desktop:build` with no flag, to get a signed local build with
+`npx tauri build` with no flag, to get a signed local build with
 artifacts. Never commit the key, and never paste it into a file in this
 repository.
 
@@ -149,9 +157,9 @@ build aborts with "Couldn't recognize the current folder as a Tauri project".
 Output lands in `novi/webui/src-tauri/target/release/bundle/nsis/`. The sidecar
 is copied to `novi/webui/src-tauri/resources/` and ignored by Git, because it is
 a platform-specific build artifact; it must be built before the Tauri package
-build. `desktop:build` already runs `desktop:backend` (which invokes
-`scripts/build_desktop_backend.py`) as its first step, so there is no need to
-run `python scripts/build_desktop_backend.py` separately beforehand.
+build. That is why `npm run desktop:backend` is the first of the two steps
+above, and why there is no need to run
+`python scripts/build_desktop_backend.py` separately beforehand.
 
 ### Versions
 
