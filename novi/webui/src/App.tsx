@@ -4,7 +4,9 @@ import { Conversation } from '@/components/chat/Conversation'
 import type { SectionId } from '@/components/settings/SettingsModal'
 import { useNoviChat } from '@/hooks/useNoviChat'
 import { useBoot } from '@/hooks/useBoot'
+import { useUpdateCheck } from '@/hooks/useUpdateCheck'
 import { TitleBar } from '@/components/common/TitleBar'
+import { UpdatePrompt } from '@/components/common/UpdatePrompt'
 import { BootScreen } from '@/components/boot/BootScreen'
 import type { NavItemId } from '@/components/sidebar/workspaceModes'
 
@@ -39,6 +41,7 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SectionId>('general')
   const [searchOpen, setSearchOpen] = useState(false)
   const chat = useNoviChat(boot.phase === 'ready')
+  const updateCheck = useUpdateCheck()
   const workspaceRef = useRef<WorkspaceLocation | null>(null)
 
   const applyWorkspace = useCallback((location: WorkspaceLocation) => {
@@ -265,6 +268,15 @@ return (
         initialSection={settingsSection}
         onSectionChange={(section) => pushWorkspaceHistory({ settingsOpen: true, settingsSection: section })}
       /></Suspense>
+
+      {updateCheck.update && !updateCheck.dismissed && (
+        <UpdatePrompt
+          version={updateCheck.update.version}
+          installing={updateCheck.installing}
+          onInstall={() => void updateCheck.install()}
+          onDismiss={updateCheck.dismiss}
+        />
+      )}
     </div>
   )
 }

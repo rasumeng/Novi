@@ -363,10 +363,13 @@ VERSION_FILES: list[VersionFile] = [
     ),
 ]
 
+# `\Z`, not `$`: in Python `$` also matches immediately before a trailing
+# newline, so "0.3.0\n" would validate and then be written into a TOML basic
+# string, producing an unparseable pyproject.toml.
 VERSION_PATTERN = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z.-]+)?"
-    r"(?:\+[0-9A-Za-z.-]+)?$"
+    r"(?:\+[0-9A-Za-z.-]+)?\Z"
 )
 
 
@@ -384,20 +387,6 @@ def read_version() -> str:
     match = _TOML_VERSION.search(text)
     if not match:
         raise RuntimeError("could not read version from pyproject.toml")
-    return match.group(1)
-
-
-def numeric_prefix(version: str | None = None) -> str:
-    """Return the x.y.z prefix Tauri uses for bundle version comparison."""
-    if version is None:
-        version = read_version()
-    # Validate on both paths, not just the defaulted one: an explicit
-    # `1.2.3.4` would otherwise match the prefix regex below and silently
-    # yield a wrong bundle version.
-    validate_version(version)
-    match = re.match(r"^(\d+\.\d+\.\d+)", version)
-    if not match:
-        raise ValueError(f"version {version!r} has no numeric x.y.z prefix")
     return match.group(1)
 
 

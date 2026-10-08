@@ -14,8 +14,11 @@ jobs:
     runs-on: windows-latest
     # The python suite alone runs ~25-40 min on a cold Windows runner: the
     # TestClient-based tests boot the whole app (models, brain, scheduler) per
-    # test. The previous 20-minute cap killed the job before it could report.
-    timeout-minutes: 60
+    # test. verify_beta.py runs pytest twice, plus tsc, a Vite build and
+    # vitest. Adding `cargo test` (two cold Rust builds with no cache before
+    # rust-cache was added) puts a realistic total at 65-80 min, which the
+    # previous 60-minute cap would have killed. Matches release.yml.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,6 +31,12 @@ jobs:
           cache: npm
           cache-dependency-path: novi/webui/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+      # Without this, `cargo check` and `cargo test` each compile the crate
+      # graph from scratch on every run. Float on a major version on purpose:
+      # Cargo.lock pins the dependency graph and only the compiler moves.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: novi/webui/src-tauri
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip; python -m pip install -e .[test]
       - name: Install frontend dependencies

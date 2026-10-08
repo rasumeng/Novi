@@ -5,16 +5,26 @@ name: Release
 # while trying to fix something.
 on:
   push:
+    # Deliberately narrow: NOT `v*`. This repo already carries unrelated
+    # historical tags (`v3-runtime-stabilized`, and a `0.4.0-product-foundation`
+    # whose semver sorts *above* the beta line). Under `v*` any of them
+    # triggers this job, `release.py` accepts it as a well-formed version, and
+    # the result is published as /releases/latest -- which the in-app updater
+    # reads, so pushing a stale tag would push unrelated code to every
+    # installed client. This pattern matches only real x.y.z release tags and
+    # does not match `v3-runtime-stabilized`.
     tags:
-      - "v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release, e.g. 0.3.0-beta.1"
-        required: true
+      - "v[0-9]+.[0-9]+.[0-9]+*"
 
 permissions:
   contents: write
+
+# Two releases must never race to own /releases/latest. `cancel-in-progress:
+# false` queues the second run instead of killing the first, so an in-flight
+# publish finishes rather than being cancelled halfway through.
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -37,7 +47,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Both values arrive through `env:` rather than being substituted into
+      # The value arrives through `env:` rather than being substituted into
       # the script body. A git ref may legally contain `"`, `;`, `$()` and
       # backticks (only spaces are forbidden), so inlining `${{ github.ref_name }}`
       # inside a quoted PowerShell string is a script injection: the tag
@@ -47,14 +57,9 @@ jobs:
         id: version
         shell: pwsh
         env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          if ($env:INPUT_VERSION -ne "") {
-            $version = $env:INPUT_VERSION
-          } else {
-            $version = $env:REF_NAME.TrimStart('v')
-          }
+          $version = $env:REF_NAME.TrimStart('v')
           if ($version -notmatch '^\d+\.\d+\.\d+') {
             throw "Version '$version' must start with MAJOR.MINOR.PATCH, e.g. 0.3.0-beta.1"
           }
@@ -116,20 +121,23 @@ jobs:
             throw "Backend sidecar is implausibly small ($size bytes) - PyInstaller likely truncated"
           }
 
-      # BLOCKING DEPENDENCY: this step needs Task 3 to have landed first.
-      # `tauri.conf.json` must carry `bundle.createUpdaterArtifacts` (and
-      # `plugins.updater`) before `tauri build` will emit `latest.json` + a
-      # `.sig`. Without them this step still publishes a working installer,
-      # but the release has no updater manifest and every later release can
-      # never auto-update. Do not tag before Task 3 is in place.
-      - name: Build and publish the installer
-        uses: tauri-apps/tauri-action@v0
+      # Pinned to a commit SHA, not a floating tag. This step receives
+      # `contents: write` AND the minisign private key, so a moved tag is a
+      # compromised release pipeline able to sign arbitrary installers. v0.6.2
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           # The minisign private key proves an update genuinely came from Novi.
           # It is NOT an Authenticode certificate and does not remove the
           # SmartScreen warning - those are separate trust systems.
+          #
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD is deliberately absent, not set
+          # to "". The key has no password (`tauri signer sign` prints
+          # "Signing without password."), and Tauri branches on
+          # `env::var(..).ok()` -- `Some("")` and `None` take different paths.
+          # GitHub resolves a missing secret to the empty string, so
+          # referencing one here would set it to "" and diverge from the
+          # locally verified working state.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # The Tauri CLI looks for tauri.conf.json by walking up from the
           # working directory, which on a runner is the repo root. Root has no
@@ -147,8 +155,15 @@ jobs:
             Novi is unsigned. Windows SmartScreen will show "Windows protected
             your PC" on first run. Choose **More info → Run anyway**.
 
-            Ollama is not bundled. On first launch Novi will ask before
-            downloading it (~1.5 GB).
+            **Ollama must be installed separately before Novi will work.**
+            This build does not bundle it and does not offer to download it --
+            install Ollama from https://ollama.com and make sure `ollama serve`
+            is running, then start Novi. Automated first-run provisioning
+            (downloading and configuring Ollama for you) arrives in a later
+            release.
+
+            Novi also downloads an embedding model on first launch if one is
+            not already present, so allow a little time on the very first run.
           releaseDraft: false
           # Deliberately NOT a GitHub prerelease. The updater endpoint
           # (releases/latest/download/latest.json) excludes prereleases, so

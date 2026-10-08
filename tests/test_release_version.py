@@ -176,30 +176,19 @@ def test_set_version_rejects_a_malformed_version():
             release.set_version(bad)
 
 
-def test_numeric_prefix_is_accepted_by_tauri_semver_rules():
-    # Tauri requires x.y.z as the numeric prefix of the bundle version.
-    original = release.read_version()
-    release.set_version("0.3.0-beta.1")
-    try:
-        assert release.numeric_prefix() == "0.3.0"
-    finally:
-        release.set_version(original)
+def test_validate_version_rejects_a_trailing_newline():
+    """A trailing newline must not pass validation.
 
-
-def test_numeric_prefix_validates_an_explicit_argument_too():
-    """The prefix must not be derived from a version that is not one.
-
-    `1.2.3.4` matches the x.y.z prefix regex, so without validation both paths
-    would return `1.2.3` -- a bundle version silently derived from a malformed
-    release version. The defaulted path used to validate and the explicit path
-    did not, which is the same bug reachable through a different argument.
+    In Python `$` matches immediately before a final `\n`, so a `$`-anchored
+    pattern accepts "0.3.0\\n". That value is then written verbatim into the
+    `version = "..."` basic string in pyproject.toml, where a raw newline is a
+    syntax error -- the release fails with an unparseable manifest rather than a
+    clear version error. Hence `\\Z`.
     """
-    assert release.numeric_prefix("0.3.0-beta.1") == "0.3.0"
-    assert release.numeric_prefix("1.2.3") == "1.2.3"
-
-    for bad in ["1.2.3.4", "1.2", "v1.2.3", "one.two.three", "1.2.3-", ""]:
-        with pytest.raises(ValueError):
-            release.numeric_prefix(bad)
+    assert not SEMVER_SHAPED.match("0.3.0\n"), "`$` would accept a trailing newline"
+    assert not SEMVER_SHAPED.match("0.3.0-beta.1\n")
+    with pytest.raises(ValueError):
+        release.set_version("0.3.0\n")
 
 
 def test_package_lock_writer_targets_root_and_packages_root_only():

@@ -32,10 +32,19 @@ python scripts/release.py check
 
 # 2. Update CHANGELOG.md.
 
-# 3. Commit, then tag and push. The tag triggers the release workflow.
+# 3. Commit, then tag and push the tag BY NAME. The tag triggers the release
+#    workflow.
 git commit -am "release: 0.3.0-beta.1"
 git tag v0.3.0-beta.1
-git push origin main --tags
+# Push `main` and the one tag, explicitly. NEVER `git push origin main --tags`:
+# this repo already carries unrelated historical tags (`v0.2.0-beta`,
+# `v0.4.0-product-foundation`, `v3-runtime-stabilized`) that are perfectly
+# valid release versions to `release.py`, and `--tags` pushes every one of them.
+# Each such push would build an installer from unrelated code and publish it as
+# /releases/latest, which is exactly the URL the in-app updater reads -- so
+# installed clients would be offered someone else's checkout as an update.
+git push origin main
+git push origin v0.3.0-beta.1
 
 # 4. Watch the run. Give it a few seconds to appear after the push, then
 #    take the topmost run id from the list.
@@ -51,16 +60,25 @@ reports skew. In short: **the tag is authoritative for what ships, the local
 `set` is what keeps `main` honest.** Skipping step 1 is invisible until the next
 release, when `check` fails for a reason nobody remembers.
 
-The workflow (`.github/workflows/release.yml`) triggers on `v*` tag pushes, and
-also on `workflow_dispatch` with an explicit `version` input. It derives the
-version by trimming the leading `v` from the tag (the manual input is used
-verbatim), rejects anything that does not start with `MAJOR.MINOR.PATCH`, then
-runs `release.py set` followed by `release.py check`. After installing the
-Python and npm dependencies it builds the desktop backend sidecar, builds the
-NSIS installer with `tauri-apps/tauri-action` (`projectPath: novi/webui`,
-`--bundles nsis`), signs it with the minisign key, and publishes a GitHub
-Release titled "Novi <version>" containing the installer, its `.sig`, and
-`latest.json`.
+The workflow (`.github/workflows/release.yml`) triggers on tag pushes only, and
+only on tags matching `v[0-9]+.[0-9]+.[0-9]+*` — real release versions. There is
+no `workflow_dispatch` path: a manual dispatch would build whatever branch it
+was run from and publish it as the newest release, which a tag push cannot do.
+The tag filter is the second line of defence after pushing by name; both exist
+because `release.py` accepts `0.4.0-product-foundation` as a perfectly valid
+version, so any historical tag that is pushed will build and publish.
+
+It derives the version by trimming the leading `v` from the tag, rejects
+anything that does not start with `MAJOR.MINOR.PATCH`, then runs `release.py
+set` followed by `release.py check`. After installing the Python and npm
+dependencies it builds the desktop backend sidecar, builds the NSIS installer
+with `tauri-apps/tauri-action` (`projectPath: novi/webui`, `--bundles nsis`),
+signs it with the minisign key, and publishes a GitHub Release titled
+"Novi <version>" containing the installer, its `.sig`, and `latest.json`.
+
+Runs are serialized by a `concurrency` group with `cancel-in-progress: false`,
+so two releases cannot race to own `/releases/latest` and a queued release
+waits rather than cancelling one mid-publish.
 
 Two checks exist specifically to fail the job rather than ship something that
 breaks later:
@@ -147,10 +165,11 @@ it cannot be used to test the updater end to end. The updater path is only ever
 exercised by a real tagged release.
 
 If you do hold the private key, you can instead set `TAURI_SIGNING_PRIVATE_KEY`
-(and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) in your environment and run
-`npx tauri build` with no flag, to get a signed local build with
-artifacts. Never commit the key, and never paste it into a file in this
-repository.
+in your environment and run `npx tauri build` with no flag, to get a signed
+local build with artifacts. There is no password: `tauri signer sign` reports
+"Signing without password", and the variable is correspondingly absent from
+the release workflow rather than set to an empty string. Never commit the key,
+and never paste it into a file in this repository.
 
 Run the Tauri build from `novi/webui`, not from the repository root. The Tauri
 CLI looks for `tauri.conf.json` by walking up from the working directory, and
@@ -170,7 +189,14 @@ Six files carry the version: `pyproject.toml`,
 `novi/webui/src-tauri/tauri.conf.json`, `novi/webui/src-tauri/Cargo.toml`,
 `novi/webui/package.json`, `novi/webui/package-lock.json`, and
 `novi/webui/src-tauri/Cargo.lock`. `scripts/release.py` is the only supported
-writer; `python scripts/release.py check` runs in CI and fails on skew.
+writer. `python scripts/release.py check` is **not** a step in `beta-gate.yml`,
+so the gate does not fail on skew directly. It is enforced in CI only indirectly:
+`tests/test_release_version.py::test_current_checkout_has_no_version_skew` calls
+it, and that test runs inside the pytest pass that `verify_beta.py` drives. The
+`check` step in `release.yml` adds nothing on a tag push — it runs immediately
+after `release.py set` wrote those same files, so it is green by construction.
+The real skew protection for a release is therefore that test, plus step 1 above
+running `set` and `check` locally before the tag exists.
 
 ### Beta releases are not GitHub prereleases
 
@@ -188,8 +214,12 @@ The updater signature is a Tauri minisign key. It proves an update genuinely
 came from Novi. It is **not** an Authenticode certificate and does **not**
 remove the Windows SmartScreen warning. The public key is committed in
 `novi/webui/src-tauri/tauri.conf.json`; the private key lives only in the GitHub
-Actions secrets
-`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+Actions secret `TAURI_SIGNING_PRIVATE_KEY`. It has **no password**, so there is
+no `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret: Tauri branches on
+`env::var(..).ok()`, and GitHub resolves a reference to a nonexistent secret to
+the empty string, which would make the variable *set but empty* rather than
+unset — a different code path from the locally verified working state. The
+workflow therefore omits the variable entirely.
 
 The private key must never be committed, and it exists nowhere else. Keep an
 encrypted backup outside the repository. If it is lost, no future release can be
