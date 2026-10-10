@@ -8,6 +8,7 @@ not source code.  Tauri bundles it as a resource named ``novi-backend``.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -17,12 +18,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TAURI_RESOURCES = ROOT / "novi" / "webui" / "src-tauri" / "resources"
 DIST = ROOT / "build" / "desktop-backend"
+WEBUI_DIST = ROOT / "novi" / "webui" / "dist"
 
 
 def main() -> int:
     pyinstaller = shutil.which("pyinstaller")
     if not pyinstaller:
         print("PyInstaller is required. Install with: pip install -e .[desktop-build]", file=sys.stderr)
+        return 2
+
+    if not (WEBUI_DIST / "index.html").is_file():
+        print(
+            "The built WebUI is missing. Run 'npm --prefix novi/webui run build' first.",
+            file=sys.stderr,
+        )
         return 2
 
     name = "novi-backend"
@@ -41,6 +50,8 @@ def main() -> int:
         str(ROOT / "build" / "pyinstaller-spec"),
         "--collect-submodules",
         "novi",
+        "--add-data",
+        f"{WEBUI_DIST}{os.pathsep}novi/webui/dist",
         str(ROOT / "novi" / "desktop_backend.py"),
     ]
     result = subprocess.run(command, cwd=ROOT)

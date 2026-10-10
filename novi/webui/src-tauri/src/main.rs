@@ -105,7 +105,8 @@ fn main() {
                 working_dir: working_dir(&app_handle.handle(), dev),
                 host: "127.0.0.1".into(),
                 port,
-                start_timeout: Duration::from_secs(60),
+                // First launch may need to download the default embedding model.
+                start_timeout: Duration::from_secs(600),
                 bundled_backend,
                 development_mode: dev,
             }));
@@ -119,7 +120,8 @@ fn main() {
                 format!("http://127.0.0.1:{}", port)
             };
 
-            let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(initial_url.parse().unwrap()))
+            let app_url: url::Url = initial_url.parse().unwrap();
+            let window = WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::External(app_url.clone()))
                 .title("Novi — AI Agent")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(960.0, 640.0)
@@ -140,13 +142,15 @@ fn main() {
             // starts the backend. The web UI connects via WebSocket and shows real progress.
             if !dev {
                 let launcher = state.launcher.clone();
-                let _window_for_thread = window.clone();
+                let window_for_thread = window.clone();
 
                 std::thread::spawn(move || {
                     if let Err(e) = launcher.wait_until_ready() {
                         eprintln!("[novi-desktop] backend did not become ready: {e}");
                         launcher.stop();
                         // The web UI will handle error display via WebSocket connection failure
+                    } else if let Err(e) = window_for_thread.navigate(app_url) {
+                        eprintln!("[novi-desktop] failed to load the ready backend: {e}");
                     }
                 });
             }

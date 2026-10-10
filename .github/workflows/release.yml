@@ -162,11 +162,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix novi/webui ci
 
+      - name: Build the frontend for the desktop backend
+        run: npm --prefix novi/webui run build
+
       - name: Build the desktop backend sidecar
-        # Must run before tauri build: bundle.resources picks up whatever is in
-        # src-tauri/resources, and a build without this produces an installer
-        # that dies at runtime with "This Novi release is missing its bundled
-        # backend".
+        # The frozen server needs the built frontend bundled inside its one-file
+        # executable; the Tauri bundle's copy is not visible to the sidecar.
         run: python scripts/build_desktop_backend.py
 
       - name: Confirm the sidecar is present
