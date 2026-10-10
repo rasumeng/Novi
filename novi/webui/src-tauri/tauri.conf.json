@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDNjcxNjFCNDJDQTNDQTkKUldTcFBNcENHeFpuckFUc2R6U0cydXFzdEFXblZJeDRWYWxSVUJXN3NmNnIvU3ByRHplU3FPS1IK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3MDUzNzY4OTEzNEJGNkMKUldSc3Z6U1JhRGNGRjQyTFFoNjB5SVRESVpoQk4za0dmNDdaeGRlM3J4UVFtZlVGNHFVckUyVCsK",
       "endpoints": [
         "https://github.com/rasumeng/Novi/releases/latest/download/latest.json"
       ],

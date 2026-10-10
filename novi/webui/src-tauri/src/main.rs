@@ -34,6 +34,34 @@ fn repo_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".."))
 }
 
+fn ensure_workspace(candidates: impl IntoIterator<Item = PathBuf>, fallback: PathBuf) -> PathBuf {
+    for candidate in candidates {
+        if std::fs::create_dir_all(&candidate).is_ok() {
+            return candidate;
+        }
+    }
+    fallback
+}
+
+fn working_dir(app_handle: &tauri::AppHandle, dev: bool) -> PathBuf {
+    if dev {
+        return repo_root();
+    }
+
+    // The compile-time repository path only exists on the build machine. Use
+    // a writable, user-visible workspace for the packaged backend instead.
+    let paths = app_handle.path();
+    let candidates = [
+        paths.document_dir().ok().map(|path| path.join("Novi")),
+        paths.app_data_dir().ok().map(|path| path.join("workspace")),
+        paths.home_dir().ok().map(|path| path.join("Novi")),
+        Some(std::env::temp_dir().join("Novi")),
+        paths.resource_dir().ok(),
+        std::env::current_dir().ok(),
+    ];
+    ensure_workspace(candidates.into_iter().flatten(), PathBuf::from("."))
+}
+
 fn main() {
     let dev = cfg!(debug_assertions);
 
@@ -74,7 +102,7 @@ fn main() {
             let backend_name = if cfg!(windows) { "novi-backend.exe" } else { "novi-backend" };
             let bundled_backend = resource_dir.map(|path| path.join("resources").join(backend_name));
             let launcher = Arc::new(BackendLauncher::new(BackendConfig {
-                working_dir: repo_root(),
+                working_dir: working_dir(&app_handle.handle(), dev),
                 host: "127.0.0.1".into(),
                 port,
                 start_timeout: Duration::from_secs(60),
@@ -134,4 +162,56 @@ fn main() {
             state.launcher.stop();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_workspace;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "novi-workspace-test-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn creates_the_first_available_workspace_candidate() {
+        let root = temp_root();
+        let documents_workspace = root.join("Documents").join("Novi");
+        let app_data_workspace = root.join("AppData").join("workspace");
+
+        let selected = ensure_workspace(
+            [documents_workspace.clone(), app_data_workspace],
+            root.join("fallback"),
+        );
+
+        assert_eq!(selected, documents_workspace);
+        assert!(selected.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn skips_a_workspace_candidate_that_cannot_be_a_directory() {
+        let root = temp_root();
+        std::fs::create_dir_all(&root).unwrap();
+        let blocker = root.join("file");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let app_data_workspace = root.join("AppData").join("workspace");
+
+        let selected = ensure_workspace(
+            [blocker.join("Novi"), app_data_workspace.clone()],
+            root.join("fallback"),
+        );
+
+        assert_eq!(selected, app_data_workspace);
+        assert!(selected.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
