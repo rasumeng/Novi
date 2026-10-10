@@ -197,14 +197,11 @@ jobs:
           # It is NOT an Authenticode certificate and does not remove the
           # SmartScreen warning - those are separate trust systems.
           #
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD is deliberately absent, not set
-          # to "". The key has no password (`tauri signer sign` prints
-          # "Signing without password."), and Tauri branches on
-          # `env::var(..).ok()` -- `Some("")` and `None` take different paths.
-          # GitHub resolves a missing secret to the empty string, so
-          # referencing one here would set it to "" and diverge from the
-          # locally verified working state.
+          # This keypair was generated with a password. Both values must be
+          # present: omitting the password makes Tauri fail only after it has
+          # spent several minutes building the installer.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # The Tauri CLI looks for tauri.conf.json by walking up from the
           # working directory, which on a runner is the repo root. Root has no

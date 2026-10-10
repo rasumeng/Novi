@@ -164,12 +164,11 @@ to install and smoke-test. It does **not** produce a `.sig` or `latest.json`, so
 it cannot be used to test the updater end to end. The updater path is only ever
 exercised by a real tagged release.
 
-If you do hold the private key, you can instead set `TAURI_SIGNING_PRIVATE_KEY`
-in your environment and run `npx tauri build` with no flag, to get a signed
-local build with artifacts. There is no password: `tauri signer sign` reports
-"Signing without password", and the variable is correspondingly absent from
-the release workflow rather than set to an empty string. Never commit the key,
-and never paste it into a file in this repository.
+If you do hold the private key, set both `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in your environment and run
+`npx tauri build` with no flag, to get a signed local build with artifacts.
+Never commit the key or password, and never paste either into a file in this
+repository.
 
 Run the Tauri build from `novi/webui`, not from the repository root. The Tauri
 CLI looks for `tauri.conf.json` by walking up from the working directory, and
@@ -214,12 +213,10 @@ The updater signature is a Tauri minisign key. It proves an update genuinely
 came from Novi. It is **not** an Authenticode certificate and does **not**
 remove the Windows SmartScreen warning. The public key is committed in
 `novi/webui/src-tauri/tauri.conf.json`; the private key lives only in the GitHub
-Actions secret `TAURI_SIGNING_PRIVATE_KEY`. It has **no password**, so there is
-no `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret: Tauri branches on
-`env::var(..).ok()`, and GitHub resolves a reference to a nonexistent secret to
-the empty string, which would make the variable *set but empty* rather than
-unset — a different code path from the locally verified working state. The
-workflow therefore omits the variable entirely.
+Actions secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The password must be passed alongside
+the private key in the release workflow; omitting it causes Tauri to reject
+the key during signing after the installer has already been built.
 
 The private key must never be committed, and it exists nowhere else. Keep an
 encrypted backup outside the repository. If it is lost, no future release can be
