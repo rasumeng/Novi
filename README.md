@@ -87,7 +87,7 @@ Developed a complete AI application stack:
 # Architecture
 
 ```
-  UI (WebUI / CLI / Telegram / background) --> RunService
+  UI (WebUI / CLI / Telegram (untested) / background) --> RunService
   RunService --> SQLite run + event journal (RunStore)
   RunService --> AgentLoop (single owner)
   AgentLoop --> ContextBuilder (actual provider transcript)
