@@ -193,6 +193,7 @@ jobs:
       # compromised release pipeline able to sign arbitrary installers. v0.6.2
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The minisign private key proves an update genuinely came from Novi.
           # It is NOT an Authenticode certificate and does not remove the
           # SmartScreen warning - those are separate trust systems.
